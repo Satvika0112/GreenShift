@@ -1,0 +1,342 @@
+---
+# GreenShift API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greenshift-api
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: greenshift
+      component: api
+  template:
+    metadata:
+      labels:
+        app: greenshift
+        component: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: api
+          image: greenshift/api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: greenshift-config
+            - secretRef:
+                name: greenshift-api-secrets
+          volumeMounts:
+            - name: tariff-data
+              mountPath: /data/tariff
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: tariff-data
+          configMap:
+            name: greenshift-tariff-data
+
+---
+# Ingest Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greenshift-ingest
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: ingest
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: greenshift
+      component: ingest
+  template:
+    metadata:
+      labels:
+        app: greenshift
+        component: ingest
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: ingest
+          image: greenshift/ingest:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: greenshift-config
+            - secretRef:
+                name: greenshift-api-secrets
+          volumeMounts:
+            - name: tariff-data
+              mountPath: /data/tariff
+              readOnly: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+      volumes:
+        - name: tariff-data
+          configMap:
+            name: greenshift-tariff-data
+
+---
+# Scheduler Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greenshift-scheduler
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: greenshift
+      component: scheduler
+  template:
+    metadata:
+      labels:
+        app: greenshift
+        component: scheduler
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: scheduler
+          image: greenshift/scheduler:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: greenshift-config
+            - secretRef:
+                name: greenshift-api-secrets
+          volumeMounts:
+            - name: tariff-data
+              mountPath: /data/tariff
+              readOnly: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+      volumes:
+        - name: tariff-data
+          configMap:
+            name: greenshift-tariff-data
+
+---
+# Dispatcher Deployment — needs the greenshift-dispatcher ServiceAccount
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greenshift-dispatcher
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: dispatcher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: greenshift
+      component: dispatcher
+  template:
+    metadata:
+      labels:
+        app: greenshift
+        component: dispatcher
+    spec:
+      serviceAccountName: greenshift-dispatcher
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: dispatcher
+          image: greenshift/dispatcher:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: greenshift-config
+            - secretRef:
+                name: greenshift-api-secrets
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+
+---
+# Trust Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greenshift-trust
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: trust
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: greenshift
+      component: trust
+  template:
+    metadata:
+      labels:
+        app: greenshift
+        component: trust
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: trust
+          image: greenshift/trust:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: greenshift-config
+            - secretRef:
+                name: greenshift-api-secrets
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+
+---
+# Dashboard Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greenshift-dashboard
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: greenshift
+      component: dashboard
+  template:
+    metadata:
+      labels:
+        app: greenshift
+        component: dashboard
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: dashboard
+          image: greenshift/dashboard:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8501
+          envFrom:
+            - configMapRef:
+                name: greenshift-config
+          env:
+            - name: GREENSHIFT_API_URL
+              value: "http://greenshift-api:8000"
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+---
+# PostgreSQL Deployment (for production Kubernetes)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: greenshift
+      component: postgres
+  template:
+    metadata:
+      labels:
+        app: greenshift
+        component: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: greenshift
+            - name: POSTGRES_USER
+              value: greenshift
+            - name: POSTGRES_PASSWORD
+              value: greenshift
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

@@ -1,0 +1,60 @@
+---
+# GreenShift RBAC — Dispatcher ServiceAccount, Role, RoleBinding
+# Follows least-privilege: only the permissions required to manage Jobs and Pods.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: greenshift-dispatcher
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: dispatcher
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: greenshift-dispatcher-role
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: dispatcher
+rules:
+  # Jobs — create, read, list, watch
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs:     ["create", "get", "list", "watch", "delete"]
+
+  # Pods — read, list (for status tracking)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs:     ["get", "list", "watch"]
+
+  # Pod logs — read
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs:     ["get"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: greenshift-dispatcher-rolebinding
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: dispatcher
+subjects:
+  - kind: ServiceAccount
+    name: greenshift-dispatcher
+    namespace: greenshift
+  - kind: ServiceAccount
+    name: default
+    namespace: greenshift
+roleRef:
+  kind: Role
+  name: greenshift-dispatcher-role
+  apiGroup: rbac.authorization.k8s.io

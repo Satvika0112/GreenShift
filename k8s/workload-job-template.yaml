@@ -1,0 +1,53 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GreenShift Workload Job Template
+#
+# This YAML is a REFERENCE TEMPLATE only.
+# The DISPATCH agent generates actual Job objects dynamically via the
+# Kubernetes Python client (not by applying this file directly).
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: greenshift-job-JOBID          # dynamically set by dispatcher
+  namespace: greenshift
+  labels:
+    app: greenshift
+    greenshift-job-id: "JOB-001"      # dynamically set
+    greenshift-team-id: "AI-TEAM"     # dynamically set
+  annotations:
+    greenshift/scheduled-start: ""    # ISO8601 UTC
+    greenshift/selected-carbon: ""    # gCO2/kWh
+    greenshift/selected-cost: ""      # $/kWh
+spec:
+  backoffLimit: 0        # no retries — GreenShift handles retry policy
+  ttlSecondsAfterFinished: 3600      # clean up after 1 hour
+  template:
+    metadata:
+      labels:
+        app: greenshift
+        greenshift-job-id: "JOB-001"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: workload
+          image: greenshift/sample-workload:latest   # dynamically set by dispatcher
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: JOB_ID
+              value: "JOB-001"           # dynamically set
+            - name: TEAM_ID
+              value: "AI-TEAM"           # dynamically set
+            - name: DURATION_SECONDS
+              value: "60"                # dynamically set from runtime_minutes
+          resources:
+            requests:
+              cpu: "500m"                # dynamically set from job.cpu_request
+              memory: "512Mi"            # dynamically set from job.memory_request
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"

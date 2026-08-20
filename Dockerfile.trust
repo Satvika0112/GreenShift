@@ -1,0 +1,20 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dockerfile.trust — GreenShift Trust / Audit service
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM python:3.11-slim AS base
+
+RUN groupadd -r greenshift && useradd -r -g greenshift greenshift
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app/ ./app/
+
+USER greenshift
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "-m", "app.trust.service"]

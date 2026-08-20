@@ -1,0 +1,69 @@
+version: "3.9"
+
+# GreenShift — Local Development Docker Compose
+# Uses SQLite locally; switch DATABASE_URL for PostgreSQL.
+
+services:
+  # ─── FastAPI API ──────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: greenshift-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:////data/greenshift.db
+      - LOG_LEVEL=INFO
+      - ENVIRONMENT=development
+      - K8S_IN_CLUSTER=false
+    env_file:
+      - .env
+    volumes:
+      - greenshift-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # ─── Streamlit Dashboard ──────────────────────────────────────
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: greenshift-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      - GREENSHIFT_API_URL=http://api:8000
+      - LOG_LEVEL=INFO
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Dispatcher service ───────────────────────────────────────
+  dispatcher:
+    build:
+      context: .
+      dockerfile: Dockerfile.dispatcher
+    container_name: greenshift-dispatcher
+    environment:
+      - DATABASE_URL=sqlite:////data/greenshift.db
+      - LOG_LEVEL=INFO
+      - K8S_IN_CLUSTER=false
+      # Mount kubeconfig for local K8s access
+    env_file:
+      - .env
+    volumes:
+      - greenshift-data:/data
+      - ${USERPROFILE}/.kube:/home/greenshift/.kube:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  greenshift-data:

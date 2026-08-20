@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: greenshift-config
+  namespace: greenshift
+  labels:
+    app: greenshift
+data:
+  # Carbon API
+  CARBON_API_BASE_URL: "https://api.electricitymap.org/v3"
+  # Tariff API
+  TARIFF_API_BASE_URL: "https://api.example-tariff.com/v1"
+  # Application
+  LOG_LEVEL: "INFO"
+  ENVIRONMENT: "production"
+  K8S_NAMESPACE: "greenshift"
+  K8S_IN_CLUSTER: "true"
+  CACHE_TTL_SECONDS: "300"
+  DISPATCHER_POLL_INTERVAL_SECONDS: "30"
+  # Database (point to the postgres service)
+  DATABASE_URL: "postgresql://greenshift:greenshift@postgres:5432/greenshift"
+  # Tariff CSV (mounted from greenshift-tariff-data ConfigMap)
+  TARIFF_CSV_PATH: "/data/tariff/electri.csv"
+  TARIFF_INR_TO_USD: "0.012"

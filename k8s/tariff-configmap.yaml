@@ -1,0 +1,34 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: greenshift-tariff-data
+  namespace: greenshift
+  labels:
+    app: greenshift
+data:
+  electri.csv: |
+    Hour,Category,Actual price,Adjusted price,Final price
+    0,Night/Normal,7.65,0,7.65
+    1,Night/Normal,7.65,0,7.65
+    2,Night/Normal,7.65,0,7.65
+    3,Night/Normal,7.65,0,7.65
+    4,Night/Normal,7.65,0,7.65
+    5,Night/Normal,7.65,0,7.65
+    6,Morning Peak,7.65,1.5,9.15
+    7,Morning Peak,7.65,1.5,9.15
+    8,Morning Peak,7.65,1.5,9.15
+    9,Morning Peak,7.65,1.5,9.15
+    10,Solar Hours,7.65,-0.5,7.15
+    11,Solar Hours,7.65,-0.5,7.15
+    12,Solar Hours,7.65,-0.5,7.15
+    13,Solar Hours,7.65,-0.5,7.15
+    14,Solar Hours,7.65,-0.5,7.15
+    15,Solar Hours,7.65,-0.5,7.15
+    16,Solar Hours,7.65,-0.5,7.15
+    17,Solar Hours,7.65,-0.5,7.15
+    18,Evening Peak,7.65,1.5,9.15
+    19,Evening Peak,7.65,1.5,9.15
+    20,Evening Peak,7.65,1.5,9.15
+    21,Evening Peak,7.65,1.5,9.15
+    22,Night/Normal,7.65,0,7.65
+    23,Night/Normal,7.65,0,7.65

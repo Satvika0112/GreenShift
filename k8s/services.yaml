@@ -1,0 +1,60 @@
+---
+# GreenShift Services
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: greenshift-api
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: api
+spec:
+  selector:
+    app: greenshift
+    component: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: greenshift-dashboard
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: dashboard
+spec:
+  selector:
+    app: greenshift
+    component: dashboard
+  ports:
+    - name: http
+      port: 8501
+      targetPort: 8501
+  # Use NodePort for local Kubernetes dev access
+  type: NodePort
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: postgres
+spec:
+  selector:
+    app: greenshift
+    component: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP
