@@ -41,13 +41,12 @@ TARIFF_INR_TO_USD=0.012
 
 | Code | Description |
 |---|---|
-| `IN-WE` | India Western Grid |
-| `IN-SO` | India Southern Grid |
-| `IN-EA` | India Eastern Grid |
-| `IN-NO` | India Northern Grid |
+| `IN-WE` | India Western Grid (Gujarat, Maharashtra) |
+| `IN-SO` | India Southern Grid (Telangana, Karnataka, AP, TN) |
+| `IN-EA` | India Eastern Grid (West Bengal, Bihar, Odisha) |
+| `IN-NO` | India Northern Grid (Himachal Pradesh, Punjab, Delhi) |
 | `IN-NE` | India North-Eastern Grid |
-| `DE` | Germany |
-| `US-CAL-CISO` | California (CAISO) |
+| `DE` | Germany (Test Fixture) |
 
 > Any custom region code is accepted — the scheduler will match jobs to regions by code.
 

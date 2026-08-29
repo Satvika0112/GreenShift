@@ -24,7 +24,7 @@ from app.shared.utils import utcnow
 logger = logging.getLogger(__name__)
 
 
-def schedule_and_store(db: Session, job: JobORM, record_audit: bool = True) -> ScheduleDecision:
+def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> ScheduleDecision:
     """
     Run the scheduler for a job and persist the ScheduleDecision.
 
@@ -41,41 +41,88 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = True) -> S
     if deadline.tzinfo is None:
         deadline = deadline.replace(tzinfo=timezone.utc)
 
-    # Fetch carbon + tariff data (CSV -> API -> Mock priority)
+    # Fetch carbon + tariff data (API/CSV -> Mock priority)
     carbon_curve = get_carbon_data(job.region, now, deadline)
-    tariff_curve = get_tariff_data(job.region, now, deadline)
+    tariff_curve = get_tariff_data(job.region, now, deadline, job_type=job.job_type)
 
-    # Run scheduler
+    # Run scheduler with full dataset parameters
     decision = schedule_job(
-        job_id=job.job_id,
-        team_id=job.team_id,
-        deadline=deadline,
-        runtime_minutes=job.runtime_minutes,
-        power_kw=job.power_kw,
-        region=job.region,
-        carbon_curve=carbon_curve,
-        tariff_curve=tariff_curve,
-        carbon_budget_kg=job.carbon_budget_kg,
+        job_id              = job.job_id,
+        team_id             = job.team_id,
+        deadline            = deadline,
+        runtime_minutes     = job.runtime_minutes,
+        power_kw            = job.power_kw,
+        region              = job.region,
+        carbon_curve        = carbon_curve,
+        tariff_curve        = tariff_curve,
+        carbon_budget_kg    = job.carbon_budget_kg,
+        energy_kwh          = job.energy_kwh,
+        earliest_start_time = job.earliest_start_time,
+        deferrable          = job.deferrable,
+        job_type            = job.job_type,
+        tariff_plan         = getattr(job, "tariff_plan", None),
+        cpu_request         = getattr(job, "cpu_request", "500m"),
+        memory_request      = getattr(job, "memory_request", "512Mi"),
     )
 
-    # Persist decision
-    orm = ScheduleDecisionORM(
-        job_id=decision.job_id,
-        selected_start=decision.selected_start,
-        selected_end=decision.selected_end,
-        carbon_intensity=decision.carbon_intensity,
-        electricity_cost=decision.electricity_cost,
-        carbon_emission=decision.carbon_emission,
-        reason=decision.reason,
-        budget_remaining=decision.budget_remaining,
-        created_at=now,
-        baseline_start=decision.baseline_start,
-        baseline_carbon_emission=decision.baseline_carbon_emission,
-        baseline_cost=decision.baseline_cost,
-        carbon_avoided=decision.carbon_avoided,
-        cost_difference=decision.cost_difference,
-    )
-    db.add(orm)
+    # Persist decision with regional & impact details (update if already exists)
+    existing_sd = db.query(ScheduleDecisionORM).filter(ScheduleDecisionORM.job_id == decision.job_id).first()
+    if existing_sd:
+        existing_sd.selected_start           = decision.selected_start
+        existing_sd.selected_end             = decision.selected_end
+        existing_sd.carbon_intensity         = decision.carbon_intensity
+        existing_sd.electricity_cost         = decision.electricity_cost
+        existing_sd.carbon_emission          = decision.carbon_emission
+        existing_sd.region_id                = decision.region_id
+        existing_sd.tariff_plan              = decision.tariff_plan
+        existing_sd.currency                 = decision.currency
+        existing_sd.native_cost              = decision.native_cost
+        existing_sd.baseline_native_cost     = decision.baseline_native_cost
+        existing_sd.tariff_inr_per_kwh       = decision.tariff_inr_per_kwh
+        existing_sd.tariff_category          = decision.tariff_category
+        existing_sd.reason                   = decision.reason
+        existing_sd.budget_remaining         = decision.budget_remaining
+        existing_sd.created_at               = now
+        existing_sd.baseline_start           = decision.baseline_start
+        existing_sd.baseline_end             = decision.baseline_end
+        existing_sd.baseline_carbon_emission = decision.baseline_carbon_emission
+        existing_sd.baseline_cost            = decision.baseline_cost
+        existing_sd.carbon_avoided           = decision.carbon_avoided
+        existing_sd.cost_difference          = decision.cost_difference
+        existing_sd.carbon_reduction_pct     = decision.carbon_reduction_pct
+        existing_sd.cost_reduction_pct       = decision.cost_reduction_pct
+        existing_sd.scheduling_delay_hours   = decision.scheduling_delay_hours
+        existing_sd.sla_met                  = decision.sla_met
+    else:
+        orm = ScheduleDecisionORM(
+            job_id                   = decision.job_id,
+            selected_start           = decision.selected_start,
+            selected_end             = decision.selected_end,
+            carbon_intensity         = decision.carbon_intensity,
+            electricity_cost         = decision.electricity_cost,
+            carbon_emission          = decision.carbon_emission,
+            region_id                = decision.region_id,
+            tariff_plan              = decision.tariff_plan,
+            currency                 = decision.currency,
+            native_cost              = decision.native_cost,
+            baseline_native_cost     = decision.baseline_native_cost,
+            tariff_inr_per_kwh       = decision.tariff_inr_per_kwh,
+            tariff_category          = decision.tariff_category,
+            reason                   = decision.reason,
+            budget_remaining         = decision.budget_remaining,
+            created_at               = now,
+            baseline_start           = decision.baseline_start,
+            baseline_end             = decision.baseline_end,
+            baseline_carbon_emission = decision.baseline_carbon_emission,
+            baseline_cost            = decision.baseline_cost,
+            carbon_avoided           = decision.carbon_avoided,
+            cost_difference          = decision.cost_difference,
+            carbon_reduction_pct     = decision.carbon_reduction_pct,
+            cost_reduction_pct       = decision.cost_reduction_pct,
+            scheduling_delay_hours   = decision.scheduling_delay_hours,
+            sla_met                  = decision.sla_met,
+        )
+        db.add(orm)
 
     # Update job status
     job.status = JobStatus.SCHEDULED
@@ -97,10 +144,11 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = True) -> S
             logger.warning("Audit record failed for job %s scheduling: %s", decision.job_id, exc)
 
     logger.info(
-        "Scheduled job %s → start=%s | carbon=%.4fkg | avoided=%.4fkg",
+        "Scheduled job %s → start=%s | carbon=%.4fkg | cost=$%.4f | avoided=%.4fkg",
         decision.job_id,
         decision.selected_start.isoformat(),
         decision.carbon_emission,
+        decision.electricity_cost,
         decision.carbon_avoided or 0.0,
     )
 

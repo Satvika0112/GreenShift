@@ -19,6 +19,10 @@ def submit_job(db: Session, request: JobSubmitRequest) -> JobORM:
     """
     Register a new job in the job registry.
 
+    If request.job_id is set (e.g. from a CSV bulk load), the provided ID is
+    used directly. This preserves original IDs from the workloads dataset.
+    Otherwise a new GreenShift job ID is generated.
+
     Args:
         db:      SQLAlchemy session
         request: Validated job submission request
@@ -26,28 +30,45 @@ def submit_job(db: Session, request: JobSubmitRequest) -> JobORM:
     Returns:
         Newly created JobORM instance (status=SUBMITTED)
     """
-    job_id = generate_job_id()
+    # Use provided job_id (CSV dataset) or generate a new one
+    job_id = request.job_id if request.job_id else generate_job_id()
     now = utcnow()
 
+    # Calculate energy_kwh if not provided:
+    # Formula: energy_kwh = power_kw × (runtime_minutes / 60)
+    energy_kwh = request.energy_kwh
+    if energy_kwh is None or energy_kwh <= 0:
+        energy_kwh = request.power_kw * (request.runtime_minutes / 60.0)
+
     job = JobORM(
-        job_id=job_id,
-        team_id=request.team_id,
-        submitted_at=now,
-        deadline=request.deadline,
-        runtime_minutes=request.runtime_minutes,
-        power_kw=request.power_kw,
-        region=request.region,
-        status=JobStatus.SUBMITTED,
-        container_image=request.container_image,
-        cpu_request=request.cpu_request,
-        memory_request=request.memory_request,
-        carbon_budget_kg=request.carbon_budget_kg,
+        job_id               = job_id,
+        team_id              = request.team_id,
+        submitted_at         = now,
+        deadline             = request.deadline,
+        runtime_minutes      = request.runtime_minutes,
+        power_kw             = request.power_kw,
+        region               = request.region,
+        status               = JobStatus.SUBMITTED,
+        container_image      = request.container_image,
+        cpu_request          = request.cpu_request,
+        memory_request       = request.memory_request,
+        carbon_budget_kg     = request.carbon_budget_kg,
+        # Real-dataset fields
+        job_type             = request.job_type,
+        priority             = request.priority,
+        earliest_start_time  = request.earliest_start_time,
+        energy_kwh           = round(energy_kwh, 6),
+        deferrable           = request.deferrable,
     )
-    db.add(job)
+    job = db.merge(job)
     db.commit()
     db.refresh(job)
 
-    logger.info("Job registered: %s (team=%s, region=%s)", job_id, request.team_id, request.region)
+    logger.info(
+        "Job registered: %s (team=%s, type=%s, region=%s, priority=%s, deferrable=%s)",
+        job_id, request.team_id, request.job_type or "n/a",
+        request.region, request.priority or "n/a", request.deferrable,
+    )
     return job
 
 

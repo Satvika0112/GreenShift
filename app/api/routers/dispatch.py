@@ -79,3 +79,43 @@ def kubernetes_health():
         "kubernetes_available": available,
         "namespace": "greenshift",
     }
+
+
+@router.get("/kubernetes/state", response_model=dict)
+def get_cluster_state():
+    """Return real-time Kubernetes cluster resources and node telemetry."""
+    from app.dispatch.k8s_state_collector import collect_cluster_state
+    snapshot = collect_cluster_state()
+    return {
+        "connected": snapshot.connected,
+        "cluster_health": snapshot.cluster_health,
+        "total_nodes": snapshot.total_nodes,
+        "ready_nodes": snapshot.ready_nodes,
+        "total_cpu_cores": snapshot.total_cpu_cores,
+        "allocatable_cpu_cores": snapshot.allocatable_cpu_cores,
+        "used_cpu_cores": snapshot.used_cpu_cores,
+        "free_cpu_cores": snapshot.free_cpu_cores,
+        "total_memory_mib": snapshot.total_memory_mib,
+        "allocatable_memory_mib": snapshot.allocatable_memory_mib,
+        "used_memory_mib": snapshot.used_memory_mib,
+        "free_memory_mib": snapshot.free_memory_mib,
+        "total_gpus": snapshot.total_gpus,
+        "allocatable_gpus": snapshot.allocatable_gpus,
+        "used_gpus": snapshot.used_gpus,
+        "free_gpus": snapshot.free_gpus,
+        "timestamp": snapshot.timestamp.isoformat(),
+        "nodes": [
+            {
+                "name": n.name,
+                "status": n.status,
+                "cpu_capacity_cores": n.cpu_capacity_cores,
+                "cpu_allocatable_cores": n.cpu_allocatable_cores,
+                "memory_capacity_mib": n.memory_capacity_mib,
+                "memory_allocatable_mib": n.memory_allocatable_mib,
+                "gpu_capacity": n.gpu_capacity,
+                "gpu_allocatable": n.gpu_allocatable,
+                "roles": n.roles,
+            }
+            for n in snapshot.nodes
+        ],
+    }

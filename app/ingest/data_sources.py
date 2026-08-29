@@ -1,171 +1,268 @@
 """
 Agent 1 — INGEST
-Data source priority resolver.
+Data source priority & resilience resolver.
 
-Determines which data source to use for carbon and tariff data:
+Determines which data source to use for carbon, tariff, and job data.
 
-  Priority order (highest → lowest):
-  1. CSV file (CARBON_CSV_PATH / TARIFF_CSV_PATH env var set + file exists)
-     - Timestamp-based CSV: loaded by csv_carbon_loader / csv_tariff_loader
-     - Hour-based ToU CSV (electri.csv): loaded by tou_tariff_adapter
-  2. Live API (ELECTRICITY_MAPS_API_KEY set)
-  3. Mock data (diurnal synthetic fallback)
+Hierarchy:
+  CARBON:
+    1. Electricity Maps Live API (if ELECTRICITY_MAPS_API_KEY set & live) ← PRIMARY
+    2. Persistent Database Cache (fresh within TTL)
+    3. Regional Carbon CSV dataset (CARBON_CSV_PATH)
+    4. Stale Database Cache (Emergency fallback)
+    5. Controlled Deterministic Fallback (CARBON_FALLBACK_GCO2_PER_KWH)
 
-This module wraps the individual data source modules and provides
-a unified interface. All callers should use get_carbon_data() and
-get_tariff_data() from this module instead of calling the individual
-source modules directly.
+  TARIFF:
+    1. Regional Data Layer (Canonical ToD/Flat CSVs for Telangana, Gujarat, HP, West Bengal) ← PRIMARY
+    2. Legacy timestamp-based CSV (TARIFF_CSV_PATH)
+    3. Synthetic mock data
+
+  JOBS:
+    1. Database job records
+    2. Workload CSV dataset (JOB_DATA_PATH)
 """
 
 import logging
 import os
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from app.shared.models import CarbonDataPoint, TariffDataPoint
+from sqlalchemy.orm import Session
+
+from app.ingest.carbon_api import (
+    get_resilient_carbon_curve,
+    get_carbon_from_db_cache,
+    is_carbon_api_down_simulated,
+    map_region_to_zone,
+)
 from app.ingest.csv_carbon_loader import get_carbon_from_csv, csv_carbon_available
 from app.ingest.csv_tariff_loader import get_tariff_from_csv, csv_tariff_available
-from app.ingest.tou_tariff_adapter import get_tou_tariff_curve, is_tou_csv
-from app.ingest.carbon_api import get_carbon_curve as _api_carbon_curve
+from app.ingest.regional_registry import resolve_region_id, get_region_config
+from app.ingest.regional_tariff_loader import (
+    get_tariff_data_points,
+    get_regional_tariff_curve,
+    get_regional_tariff_inventory,
+)
 from app.ingest.tariff_api import get_tariff_curve as _api_tariff_curve
+from app.ingest.telangana_tariff_adapter import (
+    get_telangana_tariff_curve,
+    is_telangana_tariff_csv,
+    select_tariff_category,
+    tariff_categories_loaded,
+)
+from app.shared.config import settings
+from app.shared.database import SessionLocal
+from app.shared.models import CarbonDataPoint, TariffDataPoint
+from app.shared.utils import utcnow
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("greenshift.data_sources")
 
 
 def get_carbon_data(
     region: str,
     start_time: datetime,
     end_time: datetime,
+    db: Optional[Session] = None,
 ) -> List[CarbonDataPoint]:
     """
-    Return carbon intensity data with CSV → API → Mock priority.
-
-    1. If CARBON_CSV_PATH is set and file exists → use CSV data.
-    2. Fall through to Electricity Maps API (if key set) or mock.
+    Return carbon intensity data using the resilient 5-tier hierarchy:
+      1. Live Electricity Maps API
+      2. Fresh Database Cache
+      3. Regional Carbon CSV
+      4. Stale Database Cache
+      5. Controlled Fallback
     """
     if start_time.tzinfo is None:
         start_time = start_time.replace(tzinfo=timezone.utc)
     if end_time.tzinfo is None:
         end_time = end_time.replace(tzinfo=timezone.utc)
 
-    # 1. Timestamp-based CSV (highest priority)
-    if csv_carbon_available():
-        csv_data = get_carbon_from_csv(region, start_time, end_time)
-        if csv_data:
-            logger.info("Carbon data: CSV source (%d points) for region=%s", len(csv_data), region)
-            return csv_data
-        logger.info("Carbon CSV available but no data for region=%s — falling to API/mock", region)
-
-    # 2. Live Electricity Maps API or mock fallback (handled internally)
-    data = _api_carbon_curve(region, start_time, end_time)
-    source = "ElectricityMaps API" if os.environ.get("ELECTRICITY_MAPS_API_KEY") else "mock"
-    logger.info("Carbon data: %s (%d points) for region=%s", source, len(data), region)
-    return data
+    return get_resilient_carbon_curve(region, start_time, end_time, db=db)
 
 
 def get_tariff_data(
     region: str,
     start_time: datetime,
     end_time: datetime,
+    job_type: Optional[str] = None,
+    tariff_plan: Optional[str] = None,
 ) -> List[TariffDataPoint]:
     """
-    Return electricity tariff data with CSV → API → Mock priority.
+    Return electricity tariff data with Regional Data Layer → Legacy CSV → Mock priority.
 
-    1a. If TARIFF_CSV_PATH points to an hour-based ToU CSV (electri.csv) → expand template.
-    1b. If TARIFF_CSV_PATH points to a timestamp-based CSV → load directly.
-    2.  Fall through to tariff API or mock.
+    1. Regional Data Layer (Canonical ToD/Flat CSVs for Telangana, Gujarat, Himachal Pradesh, West Bengal) — PRIMARY.
+    2. Generic timestamp-based CSV (TARIFF_CSV_PATH).
+    3. Tariff API (TARIFF_API_KEY).
+    4. Synthetic mock data.
     """
     if start_time.tzinfo is None:
         start_time = start_time.replace(tzinfo=timezone.utc)
     if end_time.tzinfo is None:
         end_time = end_time.replace(tzinfo=timezone.utc)
 
+    # 1. Regional Data Layer (Primary)
+    try:
+        regional_points = get_tariff_data_points(
+            region=region,
+            start_time=start_time,
+            end_time=end_time,
+            tariff_plan=tariff_plan,
+            job_type=job_type,
+        )
+        if regional_points:
+            logger.info(
+                "Tariff data: Regional Data Layer (%d points, %.4f–%.4f USD/kWh) for region=%s",
+                len(regional_points),
+                min(p.price_per_kwh for p in regional_points),
+                max(p.price_per_kwh for p in regional_points),
+                region,
+            )
+            return regional_points
+    except Exception as exc:
+        logger.warning("Regional tariff loader exception for region %s: %s", region, exc)
+
+    # 2. Legacy timestamp-based CSV
     tariff_path = os.environ.get("TARIFF_CSV_PATH", "")
+    if tariff_path and csv_tariff_available(tariff_path):
+        csv_data = get_tariff_from_csv(region, start_time, end_time, csv_path=tariff_path)
+        if csv_data:
+            logger.info(
+                "Tariff data: timestamp CSV (%d points) for region=%s", len(csv_data), region
+            )
+            return csv_data
 
-    if tariff_path:
-        # 1a. Hour-based ToU format (electri.csv — has 'Hour' column)
-        if is_tou_csv(tariff_path):
-            data = get_tou_tariff_curve(region, start_time, end_time, csv_path=tariff_path)
-            if data:
-                logger.info(
-                    "Tariff data: ToU CSV (electri.csv) (%d points, %.4f–%.4f USD/kWh) for region=%s",
-                    len(data),
-                    min(p.price_per_kwh for p in data),
-                    max(p.price_per_kwh for p in data),
-                    region,
-                )
-                return data
-
-        # 1b. Timestamp-based CSV
-        elif csv_tariff_available(tariff_path):
-            csv_data = get_tariff_from_csv(region, start_time, end_time, csv_path=tariff_path)
-            if csv_data:
-                logger.info("Tariff data: timestamp CSV (%d points) for region=%s", len(csv_data), region)
-                return csv_data
-
-    # 2. Tariff API or mock
+    # 3/4. API or mock
     data = _api_tariff_curve(region, start_time, end_time)
-    source = "tariff API" if os.environ.get("TARIFF_API_KEY") else "mock"
+    tariff_key = os.environ.get("TARIFF_API_KEY", settings.tariff_api_key)
+    source = "tariff API" if tariff_key else "synthetic mock"
     logger.info("Tariff data: %s (%d points) for region=%s", source, len(data), region)
     return data
 
 
-def get_data_source_status() -> dict:
+def get_data_source_status(db: Optional[Session] = None) -> Dict[str, Any]:
     """
-    Return a dict describing which data sources are currently active.
-    Useful for the /data-sources/status health endpoint and dashboard.
-    """
-    carbon_csv = os.environ.get("CARBON_CSV_PATH", "")
-    tariff_csv = os.environ.get("TARIFF_CSV_PATH", "")
-    em_key = os.environ.get("ELECTRICITY_MAPS_API_KEY", "")
-    tariff_key = os.environ.get("TARIFF_API_KEY", "")
+    Return a comprehensive dict describing which data sources are currently active
+    and their resilience / fallback status.
+    Used by /api/v1/data-sources/status endpoint and dashboard.
 
-    # Carbon source
-    if csv_carbon_available(carbon_csv if carbon_csv else None):
+    SECURITY: Never exposes actual secret values — only whether they are set.
+    """
+    from app.ingest.job_csv_loader import get_job_csv_count
+
+    carbon_csv   = os.environ.get("CARBON_CSV_PATH", getattr(settings, "carbon_csv_path", None) or "")
+    tariff_path  = os.environ.get("TARIFF_CSV_PATH", "")
+    ht1_path     = os.environ.get("TARIFF_HT1_PATH", "")
+    ht2_path     = os.environ.get("TARIFF_HT2_PATH", "")
+    em_key       = os.environ.get("ELECTRICITY_MAPS_API_KEY", settings.electricity_maps_api_key)
+    tariff_key   = os.environ.get("TARIFF_API_KEY", settings.tariff_api_key)
+    job_csv_path = os.environ.get("JOB_DATA_PATH", settings.job_data_path)
+
+    api_sim_down = is_carbon_api_down_simulated()
+    api_available = bool(em_key and em_key.strip() not in ("", "mock", "placeholder") and not api_sim_down)
+
+    # Inspect persistent carbon cache status (only if db session provided)
+    now = utcnow()
+    if db is not None:
+        sample_points, is_fresh, cache_age = get_carbon_from_db_cache(
+            "IN-TG", now, now + timedelta(hours=1), db=db, allow_stale=True
+        )
+        cache_available = len(sample_points) > 0
+    else:
+        sample_points, is_fresh, cache_age = [], False, None
+        cache_available = False
+
+    # Determine current carbon source status
+    if carbon_csv and csv_carbon_available(carbon_csv):
         carbon_source = "csv"
-    elif em_key:
-        carbon_source = "api"
+        carbon_desc   = f"Historical Carbon CSV Dataset ({os.path.basename(carbon_csv)})"
+        is_fallback   = True
+        fallback_reason = "Electricity Maps API unavailable; using historical carbon CSV"
+    elif api_available:
+        carbon_source = "electricity_maps"
+        carbon_desc   = "Electricity Maps live API (real-time carbon telemetry)"
+        is_fallback   = False
+        fallback_reason = None
+    elif cache_available and is_fresh:
+        carbon_source = "cache"
+        carbon_desc   = f"Persistent DB Cache (Fresh, age: {cache_age:.1f}s)" if cache_age else "Persistent DB Cache"
+        is_fallback   = False
+        fallback_reason = None
+    elif cache_available:
+        carbon_source = "cache_stale"
+        carbon_desc   = f"Persistent DB Cache (Stale, age: {cache_age:.1f}s)" if cache_age else "Persistent DB Cache (Stale)"
+        is_fallback   = True
+        fallback_reason = f"Electricity Maps API unavailable; cache stale by {int(cache_age - getattr(settings, 'carbon_cache_ttl_seconds', 900))}s" if cache_age else "Cache stale"
     else:
         carbon_source = "mock"
+        carbon_desc   = f"Controlled Deterministic Fallback ({getattr(settings, 'carbon_fallback_gco2_per_kwh', 400.0):.1f} gCO2/kWh)"
+        is_fallback   = True
+        fallback_reason = "Electricity Maps API unavailable, no valid cache, no carbon CSV"
 
-    # Tariff source
-    if tariff_csv and is_tou_csv(tariff_csv):
-        tariff_source = "tou_csv"
-        tariff_format = "hour-based (electri.csv)"
-    elif csv_tariff_available(tariff_csv if tariff_csv else None):
+    # ── Tariff source ──────────────────────────────────────────────
+    categories = tariff_categories_loaded()
+    if tariff_path and csv_tariff_available(tariff_path):
         tariff_source = "csv"
-        tariff_format = "timestamp-based"
+        tariff_desc   = "User-provided timestamp tariff CSV"
+    elif (ht1_path and Path(ht1_path).exists()) or (ht2_path and Path(ht2_path).exists()):
+        tariff_source = "telangana_tod_csv"
+        tariff_desc   = "Authoritative Indian Regional ToD & Flat Tariff CSVs (Telangana, Gujarat, Himachal Pradesh, West Bengal)"
     elif tariff_key:
         tariff_source = "api"
-        tariff_format = None
+        tariff_desc   = "Tariff live API"
     else:
         tariff_source = "mock"
-        tariff_format = None
+        tariff_desc   = "Synthetic ToU mock data (no real tariff configured)"
 
-    status = {
+    # ── Job source ─────────────────────────────────────────────────
+    jobs_loaded = 0
+    if job_csv_path and os.path.exists(job_csv_path):
+        filename = Path(job_csv_path).name
+        job_source = filename if filename else "greenshift_workloads_final.csv"
+        job_desc   = f"Real workloads CSV dataset ({job_csv_path})"
+        jobs_loaded = get_job_csv_count(job_csv_path)
+    else:
+        job_source = "api_only"
+        job_desc   = "Jobs submitted via API only (no CSV configured)"
+
+    regional_inventory = get_regional_tariff_inventory()
+
+    return {
         "carbon": {
-            "source": carbon_source,
-            "csv_path": carbon_csv or None,
-            "api_key_set": bool(em_key),
-            "description": {
-                "csv": "User-provided CSV file (highest priority)",
-                "api": "Electricity Maps live API",
-                "mock": "Synthetic diurnal mock data",
-            }.get(carbon_source, carbon_source),
+            "source":                 carbon_source,
+            "description":            carbon_desc,
+            "api_available":          api_available,
+            "api_key_configured":     bool(em_key),
+            "api_simulated_down":     api_sim_down,
+            "cache_available":        cache_available,
+            "cache_fresh":            is_fresh,
+            "cache_age_seconds":      cache_age,
+            "cache_ttl_seconds":      getattr(settings, "carbon_cache_ttl_seconds", 900),
+            "is_fallback":            is_fallback,
+            "fallback_reason":        fallback_reason,
+            "fallback_default_gco2":  getattr(settings, "carbon_fallback_gco2_per_kwh", 400.0),
+            "csv_path":               carbon_csv or None,
         },
         "tariff": {
-            "source": tariff_source,
-            "csv_path": tariff_csv or None,
-            "api_key_set": bool(tariff_key),
-            "description": {
-                "tou_csv": "Indian ToU tariff from electri.csv (INR->USD)",
-                "csv": "User-provided timestamp CSV file",
-                "api": "Tariff live API",
-                "mock": "Synthetic time-of-use mock data",
-            }.get(tariff_source, tariff_source),
+            "source":              tariff_source,
+            "description":         tariff_desc,
+            "ht1_path":            ht1_path or None,
+            "ht2_path":            ht2_path or None,
+            "api_key_configured":  bool(tariff_key),
+            "categories_loaded":   categories,
+            "inr_to_usd_rate":     float(os.environ.get(
+                "TARIFF_INR_TO_USD", str(settings.tariff_inr_to_usd)
+            )),
+        },
+        "jobs": {
+            "source":       job_source,
+            "description":  job_desc,
+            "csv_path":     job_csv_path or None,
+            "jobs_loaded":  jobs_loaded,
+        },
+        "regional": {
+            "supported_regions": ["IN-TG", "IN-GJ", "IN-HP", "IN-WB"],
+            "plans_count": len(regional_inventory),
+            "inventory": regional_inventory,
         },
     }
-    if tariff_format:
-        status["tariff"]["csv_format"] = tariff_format
-
-    return status

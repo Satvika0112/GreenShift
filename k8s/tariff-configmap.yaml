@@ -6,29 +6,133 @@ metadata:
   labels:
     app: greenshift
 data:
-  electri.csv: |
-    Hour,Category,Actual price,Adjusted price,Final price
-    0,Night/Normal,7.65,0,7.65
-    1,Night/Normal,7.65,0,7.65
-    2,Night/Normal,7.65,0,7.65
-    3,Night/Normal,7.65,0,7.65
-    4,Night/Normal,7.65,0,7.65
-    5,Night/Normal,7.65,0,7.65
-    6,Morning Peak,7.65,1.5,9.15
-    7,Morning Peak,7.65,1.5,9.15
-    8,Morning Peak,7.65,1.5,9.15
-    9,Morning Peak,7.65,1.5,9.15
-    10,Solar Hours,7.65,-0.5,7.15
-    11,Solar Hours,7.65,-0.5,7.15
-    12,Solar Hours,7.65,-0.5,7.15
-    13,Solar Hours,7.65,-0.5,7.15
-    14,Solar Hours,7.65,-0.5,7.15
-    15,Solar Hours,7.65,-0.5,7.15
-    16,Solar Hours,7.65,-0.5,7.15
-    17,Solar Hours,7.65,-0.5,7.15
-    18,Evening Peak,7.65,1.5,9.15
-    19,Evening Peak,7.65,1.5,9.15
-    20,Evening Peak,7.65,1.5,9.15
-    21,Evening Peak,7.65,1.5,9.15
-    22,Night/Normal,7.65,0,7.65
-    23,Night/Normal,7.65,0,7.65
+  telangana_tod_tariff_ht1a.csv: |
+    hour_start,hour_label,tod_block,base_energy_charge_inr_per_kwh,tod_adder_inr_per_kwh,effective_rate_inr_per_kwh,is_peak_hour,is_solar_hour,is_night_hour,category,voltage,tariff_year,effective_from
+    0,00:00-01:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    1,01:00-02:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    2,02:00-03:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    3,03:00-04:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    4,04:00-05:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    5,05:00-06:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    6,06:00-07:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    7,07:00-08:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    8,08:00-09:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    9,09:00-10:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    10,10:00-11:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    11,11:00-12:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    12,12:00-13:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    13,13:00-14:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    14,14:00-15:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    15,15:00-16:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    16,16:00-17:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    17,17:00-18:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    18,18:00-19:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    19,19:00-20:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    20,20:00-21:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    21,21:00-22:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    22,22:00-23:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+    23,23:00-00:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
+  telangana_tod_tariff_ht2a.csv: |
+    hour_start,hour_label,tod_block,base_energy_charge_inr_per_kwh,tod_adder_inr_per_kwh,effective_rate_inr_per_kwh,is_peak_hour,is_solar_hour,is_night_hour,category,voltage,tariff_year,effective_from
+    0,00:00-01:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    1,01:00-02:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    2,02:00-03:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    3,03:00-04:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    4,04:00-05:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    5,05:00-06:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    6,06:00-07:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    7,07:00-08:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    8,08:00-09:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    9,09:00-10:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    10,10:00-11:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    11,11:00-12:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    12,12:00-13:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    13,13:00-14:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    14,14:00-15:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    15,15:00-16:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    16,16:00-17:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    17,17:00-18:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    18,18:00-19:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    19,19:00-20:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    20,20:00-21:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    21,21:00-22:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    22,22:00-23:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+    23,23:00-00:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
+  gujarat_tod_tariff_hourly_FY2026-27.csv: |
+    hour_start,hour_label,tod_block,base_energy_charge_inr_per_kwh,tod_adder_inr_per_kwh,effective_rate_inr_per_kwh,is_peak_hour,is_solar_hour,is_night_hour,category,voltage,tariff_year,effective_from
+    0,00:00-01:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    1,01:00-02:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    2,02:00-03:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    3,03:00-04:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    4,04:00-05:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    5,05:00-06:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    6,06:00-07:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    7,07:00-08:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    8,08:00-09:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    9,09:00-10:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    10,10:00-11:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    11,11:00-12:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    12,12:00-13:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    13,13:00-14:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    14,14:00-15:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    15,15:00-16:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    16,16:00-17:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    17,17:00-18:00,Normal,4.00,0.00,4.00,False,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    18,18:00-19:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    19,19:00-20:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    20,20:00-21:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    21,21:00-22:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    22,22:00-23:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+    23,23:00-00:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
+  himachal_pradesh_flat_tariff_hourly_FY2026-27.csv: |
+    hour_start,hour_label,tod_block,base_energy_charge_inr_per_kwh,tod_adder_inr_per_kwh,effective_rate_inr_per_kwh,is_peak_hour,is_solar_hour,is_night_hour,category,voltage,tariff_year,effective_from
+    0,00:00-01:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    1,01:00-02:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    2,02:00-03:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    3,03:00-04:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    4,04:00-05:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    5,05:00-06:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    6,06:00-07:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    7,07:00-08:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    8,08:00-09:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    9,09:00-10:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    10,10:00-11:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    11,11:00-12:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    12,12:00-13:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    13,13:00-14:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    14,14:00-15:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    15,15:00-16:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    16,16:00-17:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    17,17:00-18:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    18,18:00-19:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    19,19:00-20:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    20,20:00-21:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    21,21:00-22:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    22,22:00-23:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+    23,23:00-00:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
+  west_bengal_tod_tariff_hourly_FY2026-27.csv: |
+    hour_start,hour_label,tod_block,base_energy_charge_inr_per_kwh,tod_adder_inr_per_kwh,effective_rate_inr_per_kwh,is_peak_hour,is_solar_hour,is_night_hour,category,voltage,tariff_year,effective_from
+    0,00:00-01:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    1,01:00-02:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    2,02:00-03:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    3,03:00-04:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    4,04:00-05:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    5,05:00-06:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    6,06:00-07:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    7,07:00-08:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    8,08:00-09:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    9,09:00-10:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    10,10:00-11:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    11,11:00-12:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    12,12:00-13:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    13,13:00-14:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    14,14:00-15:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    15,15:00-16:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    16,16:00-17:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    17,17:00-18:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    18,18:00-19:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    19,19:00-20:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    20,20:00-21:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    21,21:00-22:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    22,22:00-23:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+    23,23:00-00:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01

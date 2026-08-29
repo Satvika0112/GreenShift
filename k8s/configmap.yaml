@@ -6,9 +6,10 @@ metadata:
   labels:
     app: greenshift
 data:
-  # Carbon API
-  CARBON_API_BASE_URL: "https://api.electricitymap.org/v3"
-  # Tariff API
+  # Carbon API Base URL & Default Region
+  CARBON_API_BASE_URL: "https://api.electricitymaps.com/v4"
+  CARBON_REGION: "IN-SO"
+  # Tariff API Base URL
   TARIFF_API_BASE_URL: "https://api.example-tariff.com/v1"
   # Application
   LOG_LEVEL: "INFO"
@@ -19,6 +20,12 @@ data:
   DISPATCHER_POLL_INTERVAL_SECONDS: "30"
   # Database (point to the postgres service)
   DATABASE_URL: "postgresql://greenshift:greenshift@postgres:5432/greenshift"
-  # Tariff CSV (mounted from greenshift-tariff-data ConfigMap)
-  TARIFF_CSV_PATH: "/data/tariff/electri.csv"
+  # Real Indian Data Sources Paths
+  JOB_DATA_PATH: "/data/jobs/greenshift_workloads_final.csv"
+  TARIFF_HT1_PATH: "/data/tariff/telangana_tod_tariff_ht1a.csv"
+  TARIFF_HT2_PATH: "/data/tariff/telangana_tod_tariff_ht2a.csv"
+  TARIFF_GJ_PATH: "/data/tariff/gujarat_tod_tariff_hourly_FY2026-27.csv"
+  TARIFF_HP_PATH: "/data/tariff/himachal_pradesh_flat_tariff_hourly_FY2026-27.csv"
+  TARIFF_WB_PATH: "/data/tariff/west_bengal_tod_tariff_hourly_FY2026-27.csv"
   TARIFF_INR_TO_USD: "0.012"
+  TARIFF_INDUSTRIAL_TYPES: "DATA_PROCESSING,ETL,HPC,BATCH,SIMULATION"

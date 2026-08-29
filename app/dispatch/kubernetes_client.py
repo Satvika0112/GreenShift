@@ -34,7 +34,9 @@ def _load_kube_config() -> None:
         logger.info("Loading local kubeconfig")
         config.load_kube_config()
 
-    _api_client = ApiClient()
+    configuration = client.Configuration.get_default_copy()
+    configuration.retries = 1
+    _api_client = ApiClient(configuration=configuration)
 
 
 def get_batch_v1() -> BatchV1Api:
@@ -53,7 +55,7 @@ def check_kubernetes_available() -> bool:
     """Return True if Kubernetes API is reachable."""
     try:
         core = get_core_v1()
-        core.list_namespace(limit=1, _request_timeout=5)
+        core.list_namespace(limit=1, _request_timeout=3)
         return True
     except Exception as exc:
         logger.warning("Kubernetes API unavailable: %s", exc)

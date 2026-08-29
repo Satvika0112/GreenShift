@@ -30,16 +30,33 @@ def record_job_scheduled(
     job_id: str,
     selected_start: str,
     carbon_emission: float,
-    carbon_avoided: Optional[float],
-    budget_remaining: Optional[float],
+    carbon_avoided: Optional[float] = None,
+    budget_remaining: Optional[float] = None,
+    region_id: Optional[str] = None,
+    tariff_plan: Optional[str] = None,
+    electricity_cost: Optional[float] = None,
+    currency: Optional[str] = None,
+    reason: Optional[str] = None,
 ) -> None:
-    """Record a JOB_SCHEDULED audit event."""
-    append_event(db, EventType.JOB_SCHEDULED, job_id=job_id, payload={
+    """Record a JOB_SCHEDULED audit event with full regional and optimization context."""
+    payload = {
         "selected_start": selected_start,
         "carbon_emission": carbon_emission,
         "carbon_avoided": carbon_avoided,
         "budget_remaining": budget_remaining,
-    })
+    }
+    if region_id:
+        payload["region_id"] = region_id
+    if tariff_plan:
+        payload["tariff_plan"] = tariff_plan
+    if electricity_cost is not None:
+        payload["electricity_cost_usd"] = electricity_cost
+    if currency:
+        payload["currency"] = currency
+    if reason:
+        payload["reason"] = reason
+
+    append_event(db, EventType.JOB_SCHEDULED, job_id=job_id, payload=payload)
 
 
 def record_k8s_job_created(
@@ -104,6 +121,45 @@ def record_export_generated(db: Session, export_format: str, record_count: int) 
         "export_format": export_format,
         "record_count": record_count,
     })
+
+
+def record_carbon_provenance(
+    db: Session,
+    region: str,
+    carbon_intensity: float,
+    source: str,
+    cache_age_seconds: Optional[float] = None,
+    is_fallback: bool = False,
+    fallback_reason: Optional[str] = None,
+    job_id: Optional[str] = None,
+) -> None:
+    """
+    Record carbon data source provenance in the SHA-256 audit ledger.
+    SECURITY: Never records API keys or authentication headers.
+    """
+    event_type_map = {
+        "electricity_maps": EventType.CARBON_API_SUCCESS,
+        "cache": EventType.CARBON_CACHE_USED,
+        "cache_stale": EventType.CARBON_CACHE_STALE,
+        "csv": EventType.CARBON_CSV_USED,
+        "fallback": EventType.CARBON_FALLBACK_USED,
+    }
+    etype = event_type_map.get(
+        source,
+        EventType.CARBON_FALLBACK_USED if is_fallback else EventType.CARBON_CACHE_USED,
+    )
+    payload = {
+        "region": region,
+        "carbon_intensity_gco2_kwh": carbon_intensity,
+        "source": source,
+        "is_fallback": is_fallback,
+    }
+    if cache_age_seconds is not None:
+        payload["cache_age_seconds"] = cache_age_seconds
+    if fallback_reason:
+        payload["fallback_reason"] = fallback_reason
+
+    append_event(db, etype, job_id=job_id, payload=payload)
 
 
 def run_trust_loop() -> None:

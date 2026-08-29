@@ -19,7 +19,7 @@ GREENSHIFT END-TO-END SYSTEM DEMONSTRATION
 
 [DATA SOURCES ACTIVE]
   Carbon Intensity : LIVE API (Electricity Maps live API)
-  Electricity Tariff: TOU_CSV (Indian ToU tariff from electri.csv)
+  Electricity Tariff: TOU_CSV (Indian Regional ToD Tariff CSVs)
 
 [AGENT 1: INGEST] Submitting and validating job...
   Registered Job ID : JOB-44BB6EC3

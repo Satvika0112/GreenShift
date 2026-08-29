@@ -16,6 +16,8 @@ env/
 
 # Environment / secrets
 .env
+.env.*
+!.env.example
 k8s/secrets.yaml
 
 # Database

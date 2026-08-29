@@ -1,7 +1,7 @@
 version: "3.9"
 
-# GreenShift — Local Development Docker Compose
-# Uses SQLite locally; switch DATABASE_URL for PostgreSQL.
+# GreenShift — Local Development / Demonstration Docker Compose
+# Runs all 5 GreenShift Agents + Dashboard
 
 services:
   # ─── FastAPI API ──────────────────────────────────────────────
@@ -9,6 +9,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+    image: greenshift/api:latest
     container_name: greenshift-api
     ports:
       - "8000:8000"
@@ -17,6 +18,10 @@ services:
       - LOG_LEVEL=INFO
       - ENVIRONMENT=development
       - K8S_IN_CLUSTER=false
+      - JOB_DATA_PATH=/app/data/greenshift_workloads_final.csv
+      - TARIFF_HT1_PATH=/app/data/telangana_tod_tariff_ht1a.csv
+      - TARIFF_HT2_PATH=/app/data/telangana_tod_tariff_ht2a.csv
+      - TARIFF_INR_TO_USD=0.012
     env_file:
       - .env
     volumes:
@@ -33,33 +38,107 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dashboard
+    image: greenshift/dashboard:latest
     container_name: greenshift-dashboard
     ports:
       - "8501:8501"
     environment:
       - GREENSHIFT_API_URL=http://api:8000
+      - DATABASE_URL=sqlite:////data/greenshift.db
       - LOG_LEVEL=INFO
+      - JOB_DATA_PATH=/app/data/greenshift_workloads_final.csv
+      - TARIFF_HT1_PATH=/app/data/telangana_tod_tariff_ht1a.csv
+      - TARIFF_HT2_PATH=/app/data/telangana_tod_tariff_ht2a.csv
+      - TARIFF_INR_TO_USD=0.012
+    env_file:
+      - .env
+    volumes:
+      - greenshift-data:/data
     depends_on:
       api:
         condition: service_healthy
     restart: unless-stopped
 
-  # ─── Dispatcher service ───────────────────────────────────────
+  # ─── Ingest Service ───────────────────────────────────────────
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    image: greenshift/ingest:latest
+    container_name: greenshift-ingest
+    environment:
+      - DATABASE_URL=sqlite:////data/greenshift.db
+      - LOG_LEVEL=INFO
+      - JOB_DATA_PATH=/app/data/greenshift_workloads_final.csv
+      - TARIFF_HT1_PATH=/app/data/telangana_tod_tariff_ht1a.csv
+      - TARIFF_HT2_PATH=/app/data/telangana_tod_tariff_ht2a.csv
+      - TARIFF_INR_TO_USD=0.012
+    env_file:
+      - .env
+    volumes:
+      - greenshift-data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Scheduler Service ────────────────────────────────────────
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.scheduler
+    image: greenshift/scheduler:latest
+    container_name: greenshift-scheduler
+    environment:
+      - DATABASE_URL=sqlite:////data/greenshift.db
+      - LOG_LEVEL=INFO
+      - JOB_DATA_PATH=/app/data/greenshift_workloads_final.csv
+      - TARIFF_HT1_PATH=/app/data/telangana_tod_tariff_ht1a.csv
+      - TARIFF_HT2_PATH=/app/data/telangana_tod_tariff_ht2a.csv
+      - TARIFF_INR_TO_USD=0.012
+    env_file:
+      - .env
+    volumes:
+      - greenshift-data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Dispatcher Service ───────────────────────────────────────
   dispatcher:
     build:
       context: .
       dockerfile: Dockerfile.dispatcher
+    image: greenshift/dispatcher:latest
     container_name: greenshift-dispatcher
     environment:
       - DATABASE_URL=sqlite:////data/greenshift.db
       - LOG_LEVEL=INFO
       - K8S_IN_CLUSTER=false
-      # Mount kubeconfig for local K8s access
     env_file:
       - .env
     volumes:
       - greenshift-data:/data
-      - ${USERPROFILE}/.kube:/home/greenshift/.kube:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Trust / Audit Service ────────────────────────────────────
+  trust:
+    build:
+      context: .
+      dockerfile: Dockerfile.trust
+    image: greenshift/trust:latest
+    container_name: greenshift-trust
+    environment:
+      - DATABASE_URL=sqlite:////data/greenshift.db
+      - LOG_LEVEL=INFO
+    env_file:
+      - .env
+    volumes:
+      - greenshift-data:/data
     depends_on:
       api:
         condition: service_healthy

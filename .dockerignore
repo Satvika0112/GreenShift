@@ -1,21 +1,41 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Dockerfile.ingest — GreenShift Ingest service
+# GreenShift .dockerignore — Prevent secrets and temporary files in images
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM python:3.11-slim AS base
+# Environment & Secrets (NEVER bake into images)
+.env
+.env.*
+!.env.example
+k8s/secrets.yaml
 
-RUN groupadd -r greenshift && useradd -r -g greenshift greenshift
+# Git & IDE
+.git
+.gitignore
+.idea
+.vscode
 
-WORKDIR /app
+# Python cache & virtual environments
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Database files & logs
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
 
-COPY app/ ./app/
-COPY data/ ./data/
-
-USER greenshift
-
-ENV PYTHONUNBUFFERED=1
-
-CMD ["python", "-m", "app.ingest.service"]
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/

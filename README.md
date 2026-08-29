@@ -1,280 +1,182 @@
-# 🌿 GreenShift — Carbon- & Cost-Aware Kubernetes Compute Scheduling Platform
+# 🌿 GreenShift — Carbon- & Cost-Aware Kubernetes Platform
 
-GreenShift is a **Kubernetes-native, carbon- and cost-aware compute scheduling platform** for deferrable workloads. It dynamically evaluates future grid carbon intensity and electricity tariffs, selects the optimal low-carbon execution slot prior to workload deadlines, dispatches workloads as real Kubernetes Jobs, records every decision in a tamper-evident SHA-256 hash-chain audit ledger, and presents savings via a real-time Streamlit dashboard and BRSR-compliant exports.
-
----
-
-## 1. Project Overview
-
-Modern compute infrastructure emits significant carbon when workloads run during peak fossil-fuel grid generation. GreenShift solves this by:
-- Ingesting live carbon-intensity forecasts (Electricity Maps API / CSV / fallback) and Time-of-Use electricity tariffs (`electri.csv`).
-- Running deterministic, budget-aware scheduling to place jobs in the cleanest, most cost-effective feasible time slots.
-- Executing scheduled workloads via native Kubernetes `batch/v1` Jobs.
-- Maintaining cryptographic trust with SHA-256 hash-chained audit logging and tamper detection.
-- Exposing live metrics, carbon avoided, cost savings, and BRSR sustainability reports.
+GreenShift is a **Kubernetes-native, carbon- and cost-aware compute scheduling and optimization platform** for deferrable workloads across Indian regional electrical grids. It dynamically evaluates regional Time-of-Day (ToD) and Flat electricity tariffs alongside live grid carbon telemetry from Electricity Maps, applies rigorous constraint-first cost optimization with carbon tie-breaking, evaluates quantitative Baseline vs GreenShift impact, dispatches workloads as native Kubernetes Jobs, records every decision in a tamper-evident SHA-256 hash-chain audit ledger, and presents savings via a 9-tab Streamlit dashboard and BRSR-compliant ESG exports.
 
 ---
 
-## 2. Architecture
+## 1. Target Architecture
 
 ```
-External Inputs (Electricity Maps API, Tariff CSV)
-       │
-       ▼
-┌──────────────┐
-│   INGEST     │  Agent 1 — Grid intensity, Tariff parsing, Job submission validation
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│   DECIDE     │  Agent 2 — Budget-aware greedy scheduler, baseline comparison
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│  DISPATCH    │  Agent 3 — Kubernetes Job orchestrator & status tracker
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│    TRUST     │  Agent 4 — SHA-256 tamper-evident audit ledger, BRSR reporting
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│   PRESENT    │  Agent 5 — Streamlit interactive UI & FastAPI REST endpoints
-└──────────────┘
+USER
+  │
+  ▼
+API / GATEWAY
+  │
+  ▼
+INGEST AGENT ────────► DATA SOURCES (Electricity Maps API, Regional Indian Tariff Datasets, 560 Workloads)
+  │
+  ▼
+REGIONAL DATA LAYER / COMMON SCHEMA (Telangana, Gujarat, Himachal Pradesh, West Bengal)
+  │
+  ▼
+KUBERNETES STATE COLLECTOR (Node Telemetry, CPU / RAM / GPU Allocatable)
+  │
+  ▼
+DECIDE AGENT (Hard Constraints: Budget, Deadline, SLA, Resources -> Cost Optimization -> Carbon Tie-Breaker)
+  │
+  ▼
+BASELINE & IMPACT CALCULATOR (Emissions, Cost USD & Native INR, Avoided %, Delay, SLA Compliance)
+  │
+  ▼
+DISPATCH AGENT
+  │
+  ▼
+KUBERNETES CLUSTER (batch/v1 Jobs, Labels, Resource Limits)
+  │
+  ▼
+TRUST AGENT (SHA-256 Tamper-Evident Hash Chain Audit Ledger)
+  │
+  ▼
+PRESENT AGENT / DASHBOARD (9 Target Tabs: Overview, Jobs, Carbon, Cost, Regional Data, Kubernetes, Impact, Audit, Export)
 ```
 
 ---
 
-## 3. Five Logical Agents
+## 2. Regional Data Layer & Canonical Common Schema
 
-1. **AGENT 1 — INGEST (`app/ingest`)**:
-   - Interfaces with Electricity Maps API and Time-of-Use tariff CSVs.
-   - Validates timestamps, regions, deadlines, runtimes, power draw, and carbon budgets.
-   - Stores normalized curves in PostgreSQL/SQLite.
+GreenShift implements a canonical 10-stage ingestion pipeline with `Asia/Kolkata` timezone alignment and native `INR` rate preservation:
 
-2. **AGENT 2 — DECIDE (`app/decide`)**:
-   - Inspects candidate time slots between submission and deadline.
-   - Optimizes for lowest carbon emission and electricity cost while respecting runtime and team carbon budgets.
-   - Computes baseline vs GreenShift avoided carbon and cost differences.
+| Region Code | Region / State | Timezone | Currency | Tariff Plans | EM Zone |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`IN-TG`** | Telangana | `Asia/Kolkata` (UTC+05:30) | `INR` (₹) | • **HT-I(A)** (Industry General, 11 kV)<br>• **HT-II(A)** (Commercial & Others) | `IN-SO` |
+| **`IN-GJ`** | Gujarat | `Asia/Kolkata` (UTC+05:30) | `INR` (₹) | • **HTP-I** (High Tension up to 500 kVA, 11 kV+) | `IN-WE` |
+| **`IN-HP`** | Himachal Pradesh | `Asia/Kolkata` (UTC+05:30) | `INR` (₹) | • **Large Industry - EHT** (Flat 5.55 ₹/kWh, 66 kV+) | `IN-NO` |
+| **`IN-WB`** | West Bengal | `Asia/Kolkata` (UTC+05:30) | `INR` (₹) | • **Industries (Rate E-BT)** (Normal-TOD, 11 kV) | `IN-EA` |
 
-3. **AGENT 3 — DISPATCH (`app/dispatch`)**:
-   - Monitors scheduled jobs and creates Kubernetes `batch/v1` Jobs in namespace `greenshift`.
-   - Tracks pod execution, start times, completion times, and status transitions.
-
-4. **AGENT 4 — TRUST (`app/trust`)**:
-   - Appends SHA-256 hash-chained records (`payload_hash` + `previous_hash` = `current_hash`).
-   - Validates chain integrity (`/api/v1/trust/verify`) and flags tampering.
-   - Generates BRSR-compliant sustainability CSV and JSON reports.
-
-5. **AGENT 5 — PRESENT (`app/dashboard`, `app/api`)**:
-   - Streamlit dashboard on port 8501 showing real-time job queues, emissions, and cost metrics.
-   - REST API on port 8000 for job submission, scheduling, trust verification, and reporting.
+### Canonical Common Schema Fields
+Every regional tariff point is normalized into the following schema while preserving raw dataset fields:
+- `region_id`: `IN-TG`, `IN-GJ`, `IN-HP`, `IN-WB`
+- `country`: `India`
+- `region_name`: `Telangana`, `Gujarat`, `Himachal Pradesh`, `West Bengal`
+- `tariff_plan`: Plan name (e.g. `HT-I(A)`, `HTP-I`, `Large Industry - EHT`, `Industries (Rate E-BT)`)
+- `timestamp`: UTC ISO-8601 timestamp
+- `local_timestamp`: Local wall-clock time (`Asia/Kolkata`)
+- `timezone`: `Asia/Kolkata`
+- `season`: Season identifier / tariff year
+- `tod_block`: `Night`, `Solar`, `Peak`, `Normal`, `Off-Peak`, `Flat (No ToD)`
+- `base_energy_rate`: Base energy charge in INR per kWh
+- `tod_adder`: Time-of-Day adder/rebate in INR per kWh
+- `electricity_rate`: Effective electricity rate in INR per kWh
+- `currency`: `INR`
+- `is_peak_hour`: Boolean flag
+- `is_solar_hour`: Boolean flag
+- `is_night_hour`: Boolean flag
+- `category`: Raw category description from dataset
+- `voltage`: Supply voltage (e.g. `11 kV`, `66 kV`)
+- `tariff_year`: Financial year (e.g. `FY2026-27`)
+- `effective_from`: Effective start date
+- `price_per_kwh_usd`: USD-normalized rate via configurable FX rate (`0.012`)
+- `source`: Source CSV path
 
 ---
 
-## 4. Technology Stack
+## 3. DECIDE Agent Scheduling Policy
 
-- **Backend & Core**: Python 3.11, FastAPI, Pydantic v2, SQLAlchemy 2.0, Uvicorn
-- **Database**: PostgreSQL 15 (Kubernetes) / SQLite (Local dev) with `psycopg2-binary`
-- **Dashboard**: Streamlit, Plotly Express, Pandas
-- **Containerization & Orchestration**: Docker Engine, Kubernetes v1.36+ (`batch/v1` Jobs, ConfigMaps, Secrets, RBAC)
-- **Security & Integrity**: SHA-256 Cryptographic Hash Chaining, non-root container users (UID 1000)
-- **Testing**: Pytest, Pytest-Asyncio, Pytest-Cov
+The DECIDE agent evaluates candidate start windows across the workload's lifetime following a strict hierarchy:
+
+1. **Hard Constraints (Checked FIRST)**:
+   - **Carbon Budget**: `carbon_emission <= carbon_budget_kg`
+   - **Deadline**: `start + runtime <= deadline`
+   - **SLA**: Completion verified on or before deadline
+   - **CPU Availability**: Cluster allocatable CPU >= workload CPU request
+   - **RAM Availability**: Cluster allocatable RAM >= workload RAM request
+   - **GPU Availability**: Cluster allocatable GPU >= workload GPU request
+   - **Region Restrictions**: Active regional plan and grid zone support
+
+2. **Optimization Objective**:
+   - **Minimize Electricity Cost** (`min(cost_usd)`)
+
+3. **Tie-Breaker**:
+   - When costs between feasible candidate slots are equal or nearly equal (`abs(cost_a - cost_b) < 1e-6`), select the slot with **lower carbon emission**.
+
+*(No arbitrary weights, no weighted CCS score).*
 
 ---
 
-## 5. Environment Setup
+## 4. Baseline & Impact Calculator
 
-Clone repository and create a Python virtual environment:
-```bash
-python -m venv .venv
-# On Windows PowerShell:
-.venv\Scripts\Activate.ps1
-# On Linux/macOS:
-source .venv/bin/activate
+Evaluates quantitative savings comparing immediate execution against GreenShift optimized execution:
+- **Baseline (Immediate)**: Earliest feasible start time emissions and cost (USD & native INR).
+- **GreenShift (Optimized)**: Selected slot emissions and cost (USD & native INR).
+- **Impact Metrics**:
+  - `carbon_avoided_kg` = `max(0, baseline_carbon - greenshift_carbon)`
+  - `carbon_reduction_pct` = `(carbon_avoided / baseline_carbon) * 100`
+  - `cost_avoided_usd` = `baseline_cost_usd - greenshift_cost_usd`
+  - `cost_reduction_pct` = `(cost_avoided / baseline_cost) * 100`
+  - `native_cost_avoided` = `baseline_native_cost - greenshift_native_cost` (₹ INR)
+  - `scheduling_delay_hours` = `(selected_start - baseline_start) / 3600`
+  - `sla_met` = `selected_end <= deadline`
 
-pip install -r requirements.txt
+---
+
+## 5. Kubernetes State Collector
+
+Queries the Kubernetes API (or provides healthy simulated telemetry when running locally without a cluster) to supply real-time cluster health:
+- Total, allocatable, used, and free CPU cores
+- Total, allocatable, used, and free RAM (in MiB / GiB)
+- Total, allocatable, used, and free GPUs
+- Ready vs total node counts and node conditions
+
+---
+
+## 6. PRESENT Agent / Streamlit Dashboard (9 Tabs)
+
+1. 📊 **Overview**: High-level KPIs, job pipeline status, regional data status, cluster health, and SHA-256 audit badge.
+2. 📋 **Jobs**: 560 Workloads dataset table, filters, search, and scheduling actions.
+3. 🌿 **Carbon**: Forecast intensity curves per region from Electricity Maps.
+4. ⚡ **Electricity Cost**: Hourly Time-of-Day tariff curves in INR (₹) and USD ($).
+5. 🌍 **Regional Data**: Common schema dataset inventory for Telangana, Gujarat, Himachal Pradesh, and West Bengal.
+6. ☸️ **Kubernetes**: Real-time cluster state, node inventory, and resource gauges.
+7. 📈 **Baseline vs GreenShift Impact**: Side-by-side comparative charts, avoided metrics, and SLA status.
+8. 🔐 **Audit**: SHA-256 tamper-evident hash-chain validator and audit stream.
+9. 📥 **Export**: CSV dataset downloads and BRSR-compliant ESG sustainability reports.
+
+---
+
+## 7. Quick Start & Execution
+
+### 1. Run the Verification Pipeline
+```powershell
+python scripts/verify_complete_pipeline.py
+```
+
+### 2. Run Test Suite
+```powershell
+pytest tests/ -v
+```
+
+### 3. Run FastAPI Backend
+```powershell
+uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 4. Run Streamlit Dashboard
+```powershell
+streamlit run app/dashboard/main.py --server.port 8501
+```
+
+### 5. Run Background Services
+```powershell
+python -m app.ingest.service
+python -m app.decide.service
+python -m app.dispatch.service
 ```
 
 ---
 
-## 6. API Key Configuration
+## 8. Verified Test Results
 
-Copy `.env.example` to `.env`:
-```bash
-cp .env.example .env
-```
-Fill in your Electricity Maps API key:
-```ini
-ELECTRICITY_MAPS_API_KEY=your_electricity_maps_api_key
-CARBON_API_BASE_URL=https://api.electricitymap.org/v3
-```
-*Note: Never commit `.env` or files containing live keys into Git.*
-
----
-
-## 7. Tariff CSV Configuration
-
-GreenShift supports real Time-of-Use (ToU) electricity tariffs (e.g. `electri.csv` with hourly INR rates):
-```ini
-TARIFF_CSV_PATH=data/electri.csv
-TARIFF_INR_TO_USD=0.012
-```
-In Kubernetes, `electri.csv` is mounted via the `greenshift-tariff-data` ConfigMap at `/data/tariff/electri.csv`.
-
----
-
-## 8. Docker Setup
-
-Ensure Docker Desktop is running locally.
-
-Verify Docker status:
-```bash
-docker version
-```
-
----
-
-## 9. Kubernetes Setup
-
-Ensure Kubernetes is enabled in Docker Desktop (Context: `docker-desktop`).
-
-Verify connection:
-```bash
-kubectl config current-context
-# Should output: docker-desktop
-```
-
----
-
-## 10. Build Commands
-
-Build all 7 microservice and workload images locally:
-```bash
-docker build -t greenshift/api:latest -f Dockerfile.api .
-docker build -t greenshift/ingest:latest -f Dockerfile.ingest .
-docker build -t greenshift/scheduler:latest -f Dockerfile.scheduler .
-docker build -t greenshift/dispatcher:latest -f Dockerfile.dispatcher .
-docker build -t greenshift/trust:latest -f Dockerfile.trust .
-docker build -t greenshift/dashboard:latest -f Dockerfile.dashboard .
-docker build -t greenshift/sample-workload:latest -f sample-workload/Dockerfile ./sample-workload
-```
-
----
-
-## 11. Deployment Commands
-
-Deploy all manifests to the `greenshift` namespace:
-```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/rbac.yaml
-kubectl apply -f k8s/secrets.yaml
-kubectl apply -f k8s/configmap.yaml
-kubectl apply -f k8s/tariff-configmap.yaml
-kubectl apply -f k8s/services.yaml
-kubectl apply -f k8s/deployments.yaml
-```
-
-Verify deployment status:
-```bash
-kubectl get pods -n greenshift
-kubectl get services -n greenshift
-```
-
----
-
-## 12. Health Checks
-
-- **FastAPI API**: `GET http://localhost:8000/health`
-- **Kubernetes Connectivity**: `GET http://localhost:8000/api/v1/kubernetes/health`
-- **Data Source Status**: `GET http://localhost:8000/api/v1/data-sources/status`
-- **Trust / Audit Verification**: `GET http://localhost:8000/api/v1/trust/verify`
-
----
-
-## 13. Job Submission Example
-
-Submit a compute workload via REST API:
-```bash
-curl -X POST http://localhost:8000/api/v1/jobs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "team_id": "analytics-team",
-    "deadline": "2026-08-19T12:00:00Z",
-    "runtime_minutes": 15,
-    "power_kw": 2.5,
-    "region": "IN-WE",
-    "container_image": "greenshift/sample-workload:latest",
-    "cpu_request": "250m",
-    "memory_request": "256Mi",
-    "carbon_budget_kg": 1.0
-  }'
-```
-
-Response:
-```json
-{
-  "job_id": "JOB-A1B2C3D4",
-  "status": "SUBMITTED",
-  "submitted_at": "2026-08-18T20:30:00Z"
-}
-```
-
----
-
-## 14. Dashboard Access
-
-- **Streamlit Dashboard**: `http://localhost:8501` (or NodePort `30501` / port-forward)
-- **Interactive Swagger Docs**: `http://localhost:8000/docs`
-- **BRSR CSV Download**: `http://localhost:8000/api/v1/report/csv`
-
----
-
-## 15. Logs & Observability
-
-View logs for specific agent services:
-```bash
-# API logs
-kubectl logs -n greenshift -l component=api --tail=50 -f
-
-# Scheduler (DECIDE) logs
-kubectl logs -n greenshift -l component=scheduler --tail=50 -f
-
-# Dispatcher logs
-kubectl logs -n greenshift -l component=dispatcher --tail=50 -f
-
-# Trust logs
-kubectl logs -n greenshift -l component=trust --tail=50 -f
-```
-
----
-
-## 16. Troubleshooting
-
-1. **Pod Image Pull Error**: Verify image was built locally with `docker images "greenshift/*"` and that `imagePullPolicy: IfNotPresent` is set in manifests.
-2. **Database Connection Pending**: Postgres container takes 10-15s to initialize; all services have built-in retry backoff in `app/shared/database.py`.
-3. **Audit Chain Broken**: Run `curl http://localhost:8000/api/v1/trust/verify` to pinpoint the sequence ID of any corrupted or modified record.
-
----
-
-## 17. End-to-End Demo Procedure
-
-Run the automated 5-agent pipeline demonstration:
-```bash
-python scripts/demo_pipeline.py
-```
-This executes:
-1. Job intake & validation (INGEST)
-2. Carbon- & cost-aware greedy scheduling (DECIDE)
-3. Kubernetes dispatch simulation (DISPATCH)
-4. SHA-256 hash-chain verification & tamper detection (TRUST)
-5. BRSR Scope 2 sustainability summary & CSV export (PRESENT)
-
-Run test suite:
-```bash
-pytest -v
-```
-All 84 tests will execute, validating calculations, data adapters, scheduler, ledger integrity, and API endpoints.
+- **Complete Pipeline**: 13/13 Steps Passed (`scripts/verify_complete_pipeline.py`)
+- **Unit & Integration Suite**: 136+ Tests Passing (`pytest tests/`)
+- **560 Workloads Dataset**: Preserved in `data/greenshift_workloads_final.csv`
+- **Security**: Zero credentials or API keys leaked.
