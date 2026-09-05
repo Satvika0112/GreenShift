@@ -15,6 +15,7 @@ from app.trust.ledger import (
     _compute_current_hash,
 )
 from app.shared.models import EventType, AuditEventORM
+from app.shared.utils import utcnow
 
 
 class TestAuditLedgerAppend:
@@ -94,6 +95,61 @@ class TestAuditChainVerification:
         result = verify_chain(db)
         assert result.valid is False
 
+    def test_sequence_gap_detected(self, db):
+        """A missing sequence number in the chain must be detected."""
+        append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-G01")
+        e2 = append_event(db, EventType.JOB_SCHEDULED, job_id="JOB-G01")
+        # Artificially jump sequence to create a gap
+        e2.sequence = 5
+        db.commit()
+
+        result = verify_chain(db)
+        assert result.valid is False
+        assert "gap" in result.message.lower()
+
+    def test_invalid_json_payload_detected(self, db):
+        """Corrupt non-JSON payload string must be detected."""
+        e = append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-J01")
+        e.payload_json = "NOT_JSON_DATA"
+        db.commit()
+
+        result = verify_chain(db)
+        assert result.valid is False
+        assert "not valid json" in result.message.lower()
+
+    def test_database_level_unique_constraint_enforced(self, db):
+        """Database constraint must prevent duplicate sequences directly."""
+        append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-U01")
+        # Attempting to insert another record with sequence=1 must fail at DB level
+        duplicate = AuditEventORM(
+            event_id="EVT-DUP-01",
+            timestamp=utcnow(),
+            event_type=EventType.JOB_SCHEDULED,
+            job_id="JOB-U01",
+            payload_hash="0" * 64,
+            previous_hash="0" * 64,
+            current_hash="0" * 64,
+            payload_json="{}",
+            sequence=1,
+        )
+        db.add(duplicate)
+        with pytest.raises(Exception) as exc_info:
+            db.commit()
+        db.rollback()
+        assert "unique" in str(exc_info.value).lower()
+
+    def test_duplicate_sequence_detected_by_verifier(self, monkeypatch, db):
+        """If duplicate sequence records exist, verify_chain must detect them."""
+        from unittest.mock import MagicMock
+        e1 = MagicMock(sequence=1, payload_json="{}", payload_hash=_compute_payload_hash({}), previous_hash=GENESIS_HASH, current_hash=_compute_current_hash(_compute_payload_hash({}), GENESIS_HASH))
+        e2 = MagicMock(sequence=1, payload_json="{}", payload_hash=_compute_payload_hash({}), previous_hash=GENESIS_HASH, current_hash=_compute_current_hash(_compute_payload_hash({}), GENESIS_HASH))
+        mock_db = MagicMock()
+        mock_db.query.return_value.order_by.return_value.all.return_value = [e1, e2]
+
+        result = verify_chain(mock_db)
+        assert result.valid is False
+        assert "duplicate" in result.message.lower()
+
     def test_full_event_lifecycle_chain_valid(self, db):
         """A complete job lifecycle should produce a valid chain."""
         events_to_append = [
@@ -136,3 +192,61 @@ class TestAuditQueries:
             append_event(db, EventType.JOB_SUBMITTED, job_id=f"JOB-L{i:02d}")
         events = get_events(db, limit=5)
         assert len(events) <= 5
+
+
+class TestAuditLedgerConcurrency:
+    def test_concurrent_multi_threaded_appends(self, tmp_path):
+        """
+        Simulate concurrent writes from multiple worker services/containers
+        writing to a shared SQLite file database simultaneously.
+        """
+        import concurrent.futures
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from app.shared.models import Base
+
+        db_file = tmp_path / "concurrent_audit_test.db"
+        engine = create_engine(
+            f"sqlite:///{db_file}",
+            connect_args={"check_same_thread": False, "timeout": 30.0},
+        )
+        Base.metadata.create_all(engine)
+        SessionFactory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+        num_threads = 8
+        events_per_thread = 5
+        total_events = num_threads * events_per_thread
+
+        def worker(thread_idx: int):
+            worker_db = SessionFactory()
+            try:
+                for j in range(events_per_thread):
+                    job_id = f"JOB-T{thread_idx}-{j}"
+                    append_event(
+                        worker_db,
+                        EventType.JOB_SUBMITTED,
+                        job_id=job_id,
+                        payload={"worker": thread_idx, "index": j},
+                    )
+            finally:
+                worker_db.close()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(worker, i) for i in range(num_threads)]
+            for f in concurrent.futures.as_completed(futures):
+                f.result()
+
+        # Verify final ledger
+        verify_db = SessionFactory()
+        try:
+            result = verify_chain(verify_db)
+            assert result.valid is True, f"Audit chain broken: {result.message}"
+            assert result.event_count == total_events
+
+            # Verify strictly monotonic sequences without duplicates or gaps
+            events = verify_db.query(AuditEventORM).order_by(AuditEventORM.sequence.asc()).all()
+            sequences = [e.sequence for e in events]
+            assert sequences == list(range(1, total_events + 1))
+        finally:
+            verify_db.close()
+            engine.dispose()

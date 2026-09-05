@@ -26,11 +26,13 @@ import plotly.graph_objects as go
 import streamlit as st
 import httpx
 
+from app.shared.timezone import resolve_region_timezone, format_regional_time
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-API_URL = os.environ.get("GREENSHIFT_API_URL", "http://localhost:8000")
+API_URL = os.environ.get("API_BASE_URL", os.environ.get("GREENSHIFT_API_URL", "http://localhost:8000"))
 REFRESH_INTERVAL = 30  # seconds
 
 st.set_page_config(
@@ -170,6 +172,16 @@ def fetch_regional_tariffs(region: str, tariff_plan: Optional[str] = None) -> li
         r = httpx.get(f"{API_URL}/api/v1/regional/tariffs", params=params, timeout=10)
         r.raise_for_status()
         return r.json().get("data", [])
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=REFRESH_INTERVAL)
+def fetch_regions() -> list:
+    try:
+        r = httpx.get(f"{API_URL}/api/v1/regions", timeout=10)
+        r.raise_for_status()
+        return r.json()
     except Exception:
         return []
 
@@ -352,12 +364,45 @@ with tabs[0]:
 
 # ── 2. JOBS ──────────────────────────────────────────────────────────────────
 with tabs[1]:
-    st.markdown("### 📋 Workload Inventory (560 Real Workloads)")
+    st.markdown("### 📋 Workload Inventory — Canonical Workload Dataset")
     if not all_jobs:
-        st.info("No workloads loaded. Use **Load 560 Workloads (CSV)** in the sidebar.")
+        st.info("No workloads loaded. Use **Load Workloads (CSV)** in the sidebar.")
     else:
         df = pd.DataFrame(all_jobs)
-        cols_to_show = [c for c in ["job_id", "job_type", "priority", "status", "region", "runtime_minutes", "power_kw", "energy_kwh", "deferrable", "deadline"] if c in df.columns]
+        
+        # Summary KPI Cards
+        j_col1, j_col2, j_col3, j_col4 = st.columns(4)
+        j_col1.metric("Total Jobs", len(df))
+        j_col2.metric("Deferrable Workloads", int(df["deferrable"].sum()) if "deferrable" in df.columns else 0)
+        j_col3.metric("Total Power Draw", f"{df['power_kw'].sum():.1f} kW" if "power_kw" in df.columns else "N/A")
+        j_col4.metric("Avg Runtime", f"{df['runtime_minutes'].mean():.1f} mins" if "runtime_minutes" in df.columns else "N/A")
+
+        # Distribution Breakdowns
+        b_c1, b_c2, b_c3 = st.columns(3)
+        with b_c1:
+            if "region" in df.columns:
+                st.caption("**Jobs by Region**")
+                st.dataframe(df["region"].value_counts().reset_index(), use_container_width=True, hide_index=True)
+        with b_c2:
+            if "job_type" in df.columns:
+                st.caption("**Jobs by Workload Type**")
+                st.dataframe(df["job_type"].value_counts().reset_index(), use_container_width=True, hide_index=True)
+        with b_c3:
+            if "priority" in df.columns:
+                st.caption("**Jobs by Priority**")
+                st.dataframe(df["priority"].value_counts().reset_index(), use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # Detailed Table
+        cols_to_show = [
+            c for c in [
+                "job_id", "team_id", "job_type", "priority", "status", "region",
+                "submitted_at", "earliest_start_time", "deadline", "runtime_minutes",
+                "power_kw", "energy_kwh", "deferrable", "carbon_budget_kg",
+                "cpu_request", "memory_request", "container_image"
+            ] if c in df.columns
+        ]
         st.dataframe(df[cols_to_show], use_container_width=True, hide_index=True)
 
 
@@ -420,100 +465,88 @@ with tabs[2]:
 # ── 4. ELECTRICITY COST ──────────────────────────────────────────────────────
 with tabs[3]:
     st.markdown("### ⚡ Electricity Cost & Time-of-Day Tariffs")
-    c_r, c_p = st.columns(2)
-    with c_r:
+    st.info("📊 **Tariff Data Source**: Master ToD Regional Tariff Dataset (`master_tod_tariff_all_regions.csv`)")
+
+    from app.shared.tariff_service import get_available_regions, get_currency_for_region
+    avail_regions = get_available_regions()
+
+    col_r1, col_r2 = st.columns([1, 1])
+    with col_r1:
         cost_region = st.selectbox(
-            "Region",
-            ["IN-TG", "IN-GJ", "IN-HP", "IN-WB"],
+            "Select Region",
+            avail_regions,
             format_func=lambda x: {
-                "IN-TG": "Telangana (IN-TG)",
-                "IN-GJ": "Gujarat (IN-GJ)",
-                "IN-HP": "Himachal Pradesh (IN-HP)",
-                "IN-WB": "West Bengal (IN-WB)",
+                "IN-TG": "🇮🇳 Telangana (IN-TG)",
+                "IN-GJ": "🇮🇳 Gujarat (IN-GJ)",
+                "IN-WB": "🇮🇳 West Bengal (IN-WB)",
+                "IN-PB": "🇮🇳 Punjab (IN-PB)",
+                "US-CA": "🇺🇸 California (US-CA)",
+                "US-NY": "🇺🇸 New York (US-NY)",
+                "US-TX": "🇺🇸 Texas (US-TX)",
+                "SE": "🇸🇪 Sweden (SE)",
+                "AU-SA-Large": "🇦🇺 South Australia Large (AU-SA-Large)",
+                "AU-SA-Small": "🇦🇺 South Australia Small (AU-SA-Small)",
             }.get(x, x),
             key="cost_reg_select",
         )
-    with c_p:
-        plan_options = {
-            "IN-TG": ["HT-I(A)", "HT-II(A)"],
-            "IN-GJ": ["HTP-I"],
-            "IN-HP": ["Large Industry - EHT"],
-            "IN-WB": ["Industries (Rate E-BT)"],
-        }.get(cost_region, [])
-        cost_plan = st.selectbox("Tariff Plan", plan_options, key="cost_plan_select")
+    with col_r2:
+        reg_tz = resolve_region_timezone(cost_region)
+        reg_curr = get_currency_for_region(cost_region)
+        st.markdown(f"**Timezone**: `{reg_tz}` | **Currency**: `{reg_curr}`")
+        curr_sym = {"INR": "₹", "USD": "$", "SEK": "kr ", "AUD": "A$"}.get(reg_curr, "")
 
-    tariffs = fetch_regional_tariffs(cost_region, tariff_plan=cost_plan)
+    tariffs = fetch_regional_tariffs(cost_region)
     if tariffs:
         df_t = pd.DataFrame(tariffs)
         df_t["timestamp"] = pd.to_datetime(df_t["timestamp"])
+
+        cur_row = df_t.iloc[0] if not df_t.empty else {}
+        cur_rate = cur_row.get("electricity_rate", 0.0)
+        cur_tod = cur_row.get("tod_block", "Normal")
+        cur_base = cur_row.get("base_energy_rate", cur_rate)
+        cur_adder = cur_row.get("tod_adder", 0.0)
+        cur_type = cur_row.get("category", "ToD")
+        cur_season = cur_row.get("season", "All-Year")
+
+        m_c1, m_c2, m_c3, m_c4 = st.columns(4)
+        m_c1.metric("Current Rate", f"{curr_sym}{cur_rate:.4f} / kWh")
+        m_c2.metric("Base Charge", f"{curr_sym}{cur_base:.4f}")
+        m_c3.metric("Adder Charge", f"{curr_sym}{cur_adder:+.4f}")
+        m_c4.metric("ToD Block", cur_tod)
+
         fig_t = px.bar(
             df_t,
             x="local_timestamp",
             y="electricity_rate",
             color="tod_block",
-            title=f"Hourly Tariff Curve — {cost_plan} (₹ INR / kWh)",
-            labels={"electricity_rate": "Effective Rate (₹/kWh)", "local_timestamp": "Local Time (IST)", "tod_block": "ToD Block"},
+            title=f"Hourly Tariff Curve — {cost_region} ({reg_curr}) | Tariff Type: {cur_type} | Season: {cur_season}",
+            labels={"electricity_rate": f"Effective Rate ({reg_curr}/kWh)", "local_timestamp": f"Local Time ({reg_tz})", "tod_block": "ToD Block"},
         )
         fig_t.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#f0f6fc")
         st.plotly_chart(fig_t, use_container_width=True)
     else:
-        st.info("No tariff data found for selected plan.")
+        st.info("No tariff data found for selected region.")
 
 
 # ── 5. REGIONAL DATA ─────────────────────────────────────────────────────────
 with tabs[4]:
-    st.markdown("### 🌍 Regional Data Layer & Canonical Common Schema")
+    st.markdown("### 🌍 Regional Data Layer — Master ToD Tariff Dataset")
+    st.markdown("**Single Source of Truth**: `data/master_tod_tariff_all_regions.csv` across all 10 supported regional grids.")
     reg_inv = fetch_regional_inventory()
     inv_list = reg_inv.get("inventory", [])
 
     if inv_list:
         df_inv = pd.DataFrame(inv_list)
+        show_cols = [c for c in ["region_id", "country", "region_name", "tariff_plan", "category", "currency", "timezone", "season", "rate_min", "rate_max", "source_file", "carbon_source"] if c in df_inv.columns]
         st.dataframe(
-            df_inv[["region_id", "region_name", "tariff_plan", "category", "voltage", "currency", "rate_min", "rate_max", "is_flat", "source_file", "carbon_source"]],
+            df_inv[show_cols],
             use_container_width=True,
             hide_index=True,
         )
 
         st.divider()
-        st.markdown("#### 📖 Supported Regional Characteristics")
-        col_tg, col_gj, col_hp, col_wb = st.columns(4)
-        with col_tg:
-            st.markdown("""
-            **🇮🇳 Telangana (`IN-TG`)**
-            - **Timezone**: `Asia/Kolkata`
-            - **Currency**: `INR` (₹)
-            - **Plans**:
-              - *HT-I(A)*: Industry General (11 kV)
-              - *HT-II(A)*: Commercial & Others
-            - **Grid Zone**: `IN-SO` (Southern Grid)
-            """)
-        with col_gj:
-            st.markdown("""
-            **🇮🇳 Gujarat (`IN-GJ`)**
-            - **Timezone**: `Asia/Kolkata`
-            - **Currency**: `INR` (₹)
-            - **Plans**:
-              - *HTP-I*: High Tension (up to 500 kVA)
-            - **Grid Zone**: `IN-WE` (Western Grid)
-            """)
-        with col_hp:
-            st.markdown("""
-            **🇮🇳 Himachal Pradesh (`IN-HP`)**
-            - **Timezone**: `Asia/Kolkata`
-            - **Currency**: `INR` (₹)
-            - **Plans**:
-              - *Large Industry - EHT*: Flat energy tariff (66 kV)
-            - **Grid Zone**: `IN-NO` (Northern Grid)
-            """)
-        with col_wb:
-            st.markdown("""
-            **🇮🇳 West Bengal (`IN-WB`)**
-            - **Timezone**: `Asia/Kolkata`
-            - **Currency**: `INR` (₹)
-            - **Plans**:
-              - *Industries (Rate E-BT)*: Normal-TOD (11 kV)
-            - **Grid Zone**: `IN-EA` (Eastern Grid)
-            """)
+        st.markdown("#### 📖 Supported Regional Grid Profiles")
+        st.caption("All tariffs load from `data/master_tod_tariff_all_regions.csv` with automatic UTC-to-local timezone conversion across India, US, Sweden, and Australia.")
 
 
 # ── 6. KUBERNETES ────────────────────────────────────────────────────────────
@@ -532,6 +565,46 @@ with tabs[5]:
         st.markdown("#### Node Inventory")
         df_nodes = pd.DataFrame(nodes)
         st.dataframe(df_nodes[["name", "status", "cpu_allocatable_cores", "memory_allocatable_mib", "gpu_allocatable", "roles"]], use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.markdown("#### 🚀 Dynamic Kubernetes Workload Executions")
+    if all_jobs:
+        k8s_job_rows = []
+        for j in all_jobs:
+            reg = j.get("region", "IN-TG")
+            tz_str = resolve_region_timezone(reg)
+            sel_utc = j.get("selected_start")
+            sel_local = "Pending"
+            if sel_utc:
+                try:
+                    dt_val = datetime.fromisoformat(sel_utc)
+                    sel_local = format_regional_time(dt_val, region=reg)
+                except Exception:
+                    sel_local = sel_utc
+
+            carb_val = f"{j.get('carbon_emission', 0):.4f} kg" if j.get("carbon_emission") is not None else "N/A"
+            cost_val = f"${j.get('electricity_cost', 0):.4f}" if j.get("electricity_cost") is not None else "N/A"
+
+            k8s_job_rows.append({
+                "Job ID": j.get("job_id"),
+                "Region": reg,
+                "IANA Timezone": tz_str,
+                "Schedule Time (UTC)": sel_utc or "Pending",
+                "Schedule Time (Local)": sel_local,
+                "GreenShift Status": j.get("status"),
+                "Kubernetes Job Name": j.get("kubernetes_job_name") or "None",
+                "Kubernetes Status": j.get("k8s_status") or "None",
+                "Pod Name": j.get("pod_name") or "None",
+                "Actual Start": j.get("actual_start") or "N/A",
+                "Actual End": j.get("actual_end") or "N/A",
+                "Carbon Value": carb_val,
+                "Cost Value": cost_val,
+            })
+
+        df_k8s_jobs = pd.DataFrame(k8s_job_rows)
+        st.dataframe(df_k8s_jobs, use_container_width=True, hide_index=True)
+    else:
+        st.info("No workloads found.")
 
 
 # ── 7. BASELINE VS GREENSHIFT IMPACT ─────────────────────────────────────────

@@ -44,6 +44,8 @@ PRESENT AGENT / DASHBOARD (9 Target Tabs: Overview, Jobs, Carbon, Cost, Regional
 
 ## 2. Regional Data Layer & Canonical Common Schema
 
+GreenShift uses a single master regional tariff dataset (`data/master_tod_tariff_all_regions.csv`) containing Time-of-Day, Demand, and Flat tariff profiles across all supported regions (India, US, Europe, Australia).
+
 GreenShift implements a canonical 10-stage ingestion pipeline with `Asia/Kolkata` timezone alignment and native `INR` rate preservation:
 
 | Region Code | Region / State | Timezone | Currency | Tariff Plans | EM Zone |
@@ -143,40 +145,79 @@ Queries the Kubernetes API (or provides healthy simulated telemetry when running
 
 ---
 
-## 7. Quick Start & Execution
+## 7. Local Run Instructions
 
-### 1. Run the Verification Pipeline
-```powershell
-python scripts/verify_complete_pipeline.py
-```
+Follow these exact steps to run and verify the entire GreenShift platform with Docker Compose and your local Kubernetes cluster:
 
-### 2. Run Test Suite
-```powershell
-pytest tests/ -v
-```
-
-### 3. Run FastAPI Backend
-```powershell
-uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### 4. Run Streamlit Dashboard
-```powershell
-streamlit run app/dashboard/main.py --server.port 8501
-```
-
-### 5. Run Background Services
-```powershell
-python -m app.ingest.service
-python -m app.decide.service
-python -m app.dispatch.service
-```
+1. **Start Docker Desktop** and ensure the Kubernetes feature or local cluster (`desktop-control-plane` / Kind / k3s) is running.
+2. **Verify Kubernetes cluster nodes**:
+   ```powershell
+   kubectl get nodes
+   ```
+3. **Verify Kubernetes namespace**:
+   ```powershell
+   kubectl get namespace greenshift
+   ```
+   *(If not present, create via `kubectl apply -f k8s/namespace.yaml` and apply RBAC via `kubectl apply -f k8s/rbac.yaml`)*.
+4. **Build GreenShift Docker services**:
+   ```powershell
+   docker compose build
+   ```
+5. **Build and import the sample workload image**:
+   ```powershell
+   docker build -t greenshift/sample-workload:latest sample-workload
+   # Import image into local cluster node containerd runtime
+   docker save -o workload.tar greenshift/sample-workload:latest
+   docker cp workload.tar desktop-control-plane:/workload.tar
+   docker exec desktop-control-plane ctr --namespace=k8s.io images import /workload.tar
+   docker exec desktop-control-plane rm /workload.tar
+   Remove-Item -Force workload.tar
+   ```
+6. **Start Docker Compose**:
+   ```powershell
+   docker compose up -d
+   ```
+7. **Verify running containers**:
+   ```powershell
+   docker compose ps
+   ```
+8. **Verify Kubernetes connectivity from Dispatcher logs**:
+   ```powershell
+   docker logs greenshift-dispatcher
+   # Or verify directly:
+   docker exec greenshift-dispatcher python -c "from app.dispatch.kubernetes_client import check_kubernetes_available; print('K8S Available:', check_kubernetes_available())"
+   ```
+9. **Submit or load a test job**:
+   ```powershell
+   $env:PYTHONPATH="."
+   python scripts/verify_k8s_e2e.py
+   # Or load workloads from CSV via API:
+   curl -X POST http://localhost:8000/api/v1/jobs/bulk-load
+   ```
+10. **Verify Scheduler decision**:
+    ```powershell
+    curl http://localhost:8000/api/v1/dashboard/summary
+    ```
+11. **Verify Dispatcher creates a Kubernetes Job**:
+    ```powershell
+    kubectl get jobs -n greenshift
+    ```
+12. **Watch Pods executing**:
+    ```powershell
+    kubectl get pods -n greenshift -w
+    ```
+13. **Verify completed workload & Pod logs**:
+    ```powershell
+    kubectl logs -l app=greenshift -n greenshift --tail=20
+    ```
+14. **Open Dashboard**:
+    Open browser to `http://localhost:8501` to view all 9 tabs with real-time Kubernetes execution telemetry.
 
 ---
 
 ## 8. Verified Test Results
 
 - **Complete Pipeline**: 13/13 Steps Passed (`scripts/verify_complete_pipeline.py`)
-- **Unit & Integration Suite**: 136+ Tests Passing (`pytest tests/`)
+- **Unit & Integration Suite**: 213+ Tests Passing (`pytest tests/`)
 - **560 Workloads Dataset**: Preserved in `data/greenshift_workloads_final.csv`
 - **Security**: Zero credentials or API keys leaked.

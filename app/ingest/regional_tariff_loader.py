@@ -1,28 +1,17 @@
 """
 Agent 1 — INGEST / REGIONAL DATA LAYER
-Canonical Regional Tariff Loader for Indian Regional Grids.
+Canonical Master Regional Tariff Loader backed by app.shared.tariff_service.
 
-Implements the complete 10-stage Ingest pipeline for regional tariffs:
-1. Data collection
-2. Schema validation
-3. Data cleaning
-4. Normalization
-5. Time alignment (UTC <-> Asia/Kolkata timezone)
-6. Region mapping (IN-TG, IN-GJ, IN-HP, IN-WB)
-7. Unit conversion
-8. Currency handling (preserves native INR currency + calculates USD conversion)
-9. Source tracking
-10. Database persistence
+Loads the single Master Regional Tariff Dataset (data/master_tod_tariff_all_regions.csv)
+and serves Time-of-Day, Demand, and Flat tariff profiles across all 10 supported regions.
 """
 
 from __future__ import annotations
 
-import csv
 import logging
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -41,187 +30,78 @@ from app.shared.models import (
     RegionalTariffRecord,
     TariffDataPoint,
 )
+from app.shared.tariff_service import (
+    determine_season_for_region,
+    get_available_regions,
+    get_currency_for_region,
+    get_hourly_tariffs,
+    get_master_tariff_path,
+    get_tariff_for_region_and_time,
+    load_master_tariff_data,
+    validate_region,
+)
+from app.shared.timezone import utc_to_region_time
 from app.shared.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
-# Cache: {csv_path -> (mtime, {local_hour: dict_data})}
-_tariff_file_cache: Dict[str, Tuple[float, Dict[int, dict]]] = {}
+
+def get_tariff_csv_path(region_id: Optional[str] = None, tariff_plan: Optional[str] = None) -> Optional[str]:
+    """Backwards-compatible path resolver pointing all regional requests to the master dataset."""
+    return get_master_tariff_path()
 
 
-def _parse_bool(val: Optional[str]) -> bool:
-    if val is None:
-        return False
-    return str(val).strip().upper() in ("TRUE", "1", "YES", "T", "Y")
+def load_master_tariff_dataset(csv_path: Optional[str] = None) -> Dict[str, Dict[int, dict]]:
+    """
+    Backwards-compatible loader returning hourly template for regions.
+    """
+    data = load_master_tariff_data(csv_path)
+    result = {}
+    for reg_id, seasons in data.items():
+        # Pick default season (All-Year or first season)
+        season_key = "ALL-YEAR" if "ALL-YEAR" in seasons else next(iter(seasons.keys()))
+        hourly_dict = {}
+        for h, row in seasons[season_key].items():
+            hourly_dict[h] = {
+                "hour": h,
+                "rate": row["Effective_price"],
+                "base_energy_rate": row["Base_charge"],
+                "tod_adder": row["Adder_charge"],
+                "tod_block": row["Time_of_day"],
+                "is_peak_hour": "PEAK" in row["Time_of_day"].upper() and "OFF" not in row["Time_of_day"].upper(),
+                "is_solar_hour": "SOLAR" in row["Time_of_day"].upper(),
+                "is_night_hour": "NIGHT" in row["Time_of_day"].upper() or "OFF-PEAK" in row["Time_of_day"].upper(),
+                "peak_off_peak": "PEAK" if "PEAK" in row["Time_of_day"].upper() else "NORMAL",
+                "category": row["Tariff_type"],
+                "voltage": "11 kV",
+                "tariff_year": "FY2026-27",
+                "season": row["Season"],
+                "effective_from": "2026-04-01",
+                "effective_to": None,
+                "currency": row["Currency"],
+                "tariff_type": row["Tariff_type"],
+            }
+        result[reg_id] = hourly_dict
+    return result
 
 
-def _find_col(headers: List[str], candidates: List[str]) -> Optional[str]:
-    lower_map = {h.lower().strip(): h for h in headers}
-    for c in candidates:
-        if c.lower() in lower_map:
-            return lower_map[c.lower()]
-    return None
-
-
-def get_tariff_csv_path(region_id: str, tariff_plan: str) -> Optional[str]:
-    """Resolve file path for a region and tariff plan."""
-    cfg = get_region_config(region_id)
-    plan_spec = cfg.plans.get(tariff_plan)
-    if not plan_spec:
-        # Try finding by display name
-        for p_k, p_s in cfg.plans.items():
-            if tariff_plan.lower() in (p_k.lower(), p_s.display_name.lower()):
-                plan_spec = p_s
-                break
-
-    if not plan_spec:
-        return None
-
-    path_key = plan_spec.config_path_key
-    raw_path = getattr(settings, path_key, None) or os.environ.get(path_key.upper(), "")
-
-    if raw_path and Path(raw_path).exists():
-        return str(raw_path)
-
-    # Standard data/ directory locations
-    fallbacks = {
-        "tariff_ht1_path": "data/telangana_tod_tariff_ht1a.csv",
-        "tariff_ht2_path": "data/telangana_tod_tariff_ht2a.csv",
-        "tariff_gj_path": "data/gujarat_tod_tariff_hourly_FY2026-27.csv",
-        "tariff_hp_path": "data/himachal_pradesh_flat_tariff_hourly_FY2026-27.csv",
-        "tariff_wb_path": "data/west_bengal_tod_tariff_hourly_FY2026-27.csv",
+def load_raw_tariff_template(csv_path: Optional[str] = None, region: str = "IN-TG") -> Dict[int, dict]:
+    """Return 24-hour tariff template for a specific region."""
+    reg_id = resolve_region_id(region)
+    hourly = get_hourly_tariffs(reg_id)
+    return {
+        r["hour"]: {
+            "hour": r["hour"],
+            "rate": r["effective_price"],
+            "base_energy_rate": r["base_charge"],
+            "tod_adder": r["adder_charge"],
+            "tod_block": r["time_of_day"],
+            "currency": r["currency"],
+            "tariff_type": r["tariff_type"],
+            "season": r["season"],
+        }
+        for r in hourly
     }
-    fb_path = fallbacks.get(path_key)
-    if fb_path and Path(fb_path).exists():
-        return fb_path
-
-    return raw_path
-
-
-def load_raw_tariff_template(csv_path: str) -> Dict[int, dict]:
-    """
-    Stage 1-4: Collect, Validate, Clean, and Normalize raw CSV into 24-hour template.
-    Preserves all original dataset fields:
-    - hour_start, hour_label
-    - tod_block
-    - base_energy_charge_inr_per_kwh
-    - tod_adder_inr_per_kwh
-    - effective_rate_inr_per_kwh
-    - is_peak_hour, is_solar_hour, is_night_hour
-    - category, voltage, tariff_year, effective_from
-    """
-    p = Path(csv_path)
-    if not p.exists():
-        logger.warning("Regional tariff file not found: %s", csv_path)
-        return {}
-
-    mtime = p.stat().st_mtime
-    if csv_path in _tariff_file_cache and _tariff_file_cache[csv_path][0] == mtime:
-        return _tariff_file_cache[csv_path][1]
-
-    hourly: Dict[int, dict] = {}
-
-    with open(csv_path, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        headers = reader.fieldnames or []
-
-        # Find key columns
-        hour_col = _find_col(headers, ["hour_start", "hour", "hour_label", "time"])
-        rate_col = _find_col(headers, [
-            "effective_rate_inr_per_kwh", "effective_rate", "rate_per_kwh",
-            "base_energy_charge_inr_per_kwh", "price",
-        ])
-        base_rate_col = _find_col(headers, ["base_energy_charge_inr_per_kwh", "base_rate", "energy_charge"])
-        adder_col = _find_col(headers, ["tod_adder_inr_per_kwh", "tod_adder", "adder"])
-        tod_col = _find_col(headers, ["tod_block", "time_period", "period", "tariff_block"])
-        peak_col = _find_col(headers, ["is_peak_hour", "is_peak"])
-        solar_col = _find_col(headers, ["is_solar_hour", "is_solar", "solar_sponge"])
-        night_col = _find_col(headers, ["is_night_hour", "is_off_peak_hour"])
-        cat_col = _find_col(headers, ["category", "tariff_category", "consumer_category"])
-        volt_col = _find_col(headers, ["voltage", "supply_voltage"])
-        year_col = _find_col(headers, ["tariff_year", "financial_year", "year"])
-        season_col = _find_col(headers, ["season"])
-        eff_from_col = _find_col(headers, ["effective_from"])
-        eff_to_col = _find_col(headers, ["effective_to"])
-
-        if not rate_col:
-            logger.error("CSV %s missing rate column among headers: %s", csv_path, headers)
-            return {}
-
-        row_idx = 0
-        for row in reader:
-            try:
-                # Determine hour
-                hour_val = 0
-                if hour_col and row.get(hour_col):
-                    h_str = row[hour_col].strip()
-                    if ":" in h_str:
-                        hour_val = int(h_str.split(":")[0])
-                    else:
-                        hour_val = int(h_str)
-                else:
-                    hour_val = row_idx % 24
-
-                # Rates
-                raw_rate_str = row[rate_col].strip() if rate_col else "0"
-                rate = float(raw_rate_str) if raw_rate_str else 0.0
-
-                base_rate = float(row[base_rate_col].strip()) if (base_rate_col and row.get(base_rate_col)) else rate
-                tod_adder = float(row[adder_col].strip()) if (adder_col and row.get(adder_col)) else 0.0
-
-                # Flags & category
-                is_peak = _parse_bool(row.get(peak_col)) if peak_col else False
-                is_solar = _parse_bool(row.get(solar_col)) if solar_col else False
-                is_night = _parse_bool(row.get(night_col)) if night_col else False
-
-                tod = row.get(tod_col, "").strip() if tod_col else ""
-                if not tod:
-                    if is_peak:
-                        tod = "Peak"
-                    elif is_solar:
-                        tod = "Solar"
-                    elif is_night:
-                        tod = "Night"
-                    else:
-                        tod = "Normal"
-
-                # Peak-off-peak classification
-                pop = "OFF_PEAK"
-                if is_peak or "PEAK" in tod.upper() and "OFF" not in tod.upper():
-                    pop = "PEAK"
-                elif is_solar or "SOLAR" in tod.upper():
-                    pop = "SOLAR"
-                elif is_night or "NIGHT" in tod.upper():
-                    pop = "NIGHT"
-                elif "FLAT" in tod.upper():
-                    pop = "FLAT"
-                elif "NORMAL" in tod.upper():
-                    pop = "NORMAL"
-
-                hourly[hour_val] = {
-                    "hour": hour_val,
-                    "rate": rate,
-                    "base_energy_rate": base_rate,
-                    "tod_adder": tod_adder,
-                    "tod_block": tod,
-                    "is_peak_hour": is_peak,
-                    "is_solar_hour": is_solar,
-                    "is_night_hour": is_night,
-                    "peak_off_peak": pop,
-                    "category": row.get(cat_col, "").strip() if cat_col else None,
-                    "voltage": row.get(volt_col, "").strip() if volt_col else None,
-                    "tariff_year": row.get(year_col, "").strip() if year_col else None,
-                    "season": row.get(season_col, "").strip() if season_col else None,
-                    "effective_from": row.get(eff_from_col, "").strip() if eff_from_col else None,
-                    "effective_to": row.get(eff_to_col, "").strip() if eff_to_col else None,
-                }
-                row_idx += 1
-            except Exception as exc:
-                logger.warning("Error parsing tariff row in %s: %s (%s)", csv_path, row, exc)
-
-    logger.info("Loaded Indian regional tariff template from %s (%d hours)", csv_path, len(hourly))
-    _tariff_file_cache[csv_path] = (mtime, hourly)
-    return hourly
 
 
 def get_regional_tariff_curve(
@@ -233,22 +113,16 @@ def get_regional_tariff_curve(
     db: Optional[Session] = None,
 ) -> List[RegionalTariffRecord]:
     """
-    Stage 5-10: Time alignment (Asia/Kolkata), USD calculation, canonical record creation,
-    and optional database persistence.
+    Generate normalized regional tariff curve between start_time and end_time (in UTC).
     """
     region_id = resolve_region_id(region)
-    cfg = get_region_config(region_id)
-
-    plan = tariff_plan or select_tariff_plan_for_job(
-        region_id, job_type=job_type, timestamp=start_time
-    )
-    plan_spec = cfg.plans.get(plan)
-    display_name = plan_spec.display_name if plan_spec else plan
-
-    csv_path = get_tariff_csv_path(region_id, plan)
-    template = load_raw_tariff_template(csv_path) if csv_path else {}
-
-    fx_rate = get_fx_rate_to_usd(cfg.currency)
+    try:
+        cfg = get_region_config(region_id)
+        reg_name = cfg.region_name
+        country_name = cfg.country
+    except Exception:
+        reg_name = region_id
+        country_name = "Global"
 
     if start_time.tzinfo is None:
         start_time = start_time.replace(tzinfo=timezone.utc)
@@ -259,105 +133,87 @@ def get_regional_tariff_curve(
     current = start_time.replace(minute=0, second=0, microsecond=0)
 
     while current <= end_time:
-        local_dt, local_hour = utc_to_local(current, region_id)
-
-        tmpl_row = template.get(local_hour)
-        if tmpl_row:
-            native_rate = tmpl_row["rate"]
-            base_rate = tmpl_row["base_energy_rate"]
-            tod_adder = tmpl_row["tod_adder"]
-            tod_block = tmpl_row["tod_block"]
-            is_peak = tmpl_row["is_peak_hour"]
-            is_solar = tmpl_row["is_solar_hour"]
-            is_night = tmpl_row["is_night_hour"]
-            category = tmpl_row["category"] or (plan_spec.display_name if plan_spec else None)
-            voltage = tmpl_row["voltage"]
-            tariff_year = tmpl_row["tariff_year"]
-            season = tmpl_row["season"]
-            eff_from = tmpl_row["effective_from"]
-            eff_to = tmpl_row["effective_to"]
-        else:
-            # Fallback to plan default
-            native_rate = plan_spec.default_rate if plan_spec else 7.00
-            base_rate = native_rate
-            tod_adder = 0.0
-            tod_block = "Normal"
-            is_peak = False
-            is_solar = False
-            is_night = False
-            category = plan_spec.display_name if plan_spec else None
-            voltage = "11 kV"
-            tariff_year = "FY2026-27"
-            season = None
-            eff_from = "2026-04-01"
-            eff_to = None
-
-        price_usd = round(native_rate * fx_rate, 6)
+        t_info = get_tariff_for_region_and_time(region_id, current)
+        tod = t_info["time_of_day"]
+        tod_upper = tod.upper()
+        is_peak = "PEAK" in tod_upper and "OFF" not in tod_upper
+        is_solar = "SOLAR" in tod_upper
+        is_night = "NIGHT" in tod_upper or "OFF-PEAK" in tod_upper or "OFF_PEAK" in tod_upper
 
         rec = RegionalTariffRecord(
             region_id=region_id,
-            country="India",
-            region_name=cfg.region_name,
-            tariff_plan=display_name,
+            country=country_name,
+            region_name=reg_name,
+            tariff_plan=tariff_plan or t_info["tariff_type"],
             timestamp=current,
-            local_timestamp=local_dt,
-            timezone=cfg.timezone_name,
-            season=season,
-            tod_block=tod_block,
-            time_period=tod_block,
-            base_energy_rate=base_rate,
-            tod_adder=tod_adder,
-            electricity_rate=native_rate,
-            currency=cfg.currency,
+            local_timestamp=t_info["local_timestamp"],
+            timezone=t_info["timezone"],
+            season=t_info["season"],
+            tod_block=tod,
+            time_period=tod,
+            base_energy_rate=t_info["base_charge"],
+            tod_adder=t_info["adder_charge"],
+            electricity_rate=t_info["effective_price"],
+            currency=t_info["currency"],
             is_peak_hour=is_peak,
             is_solar_hour=is_solar,
             is_night_hour=is_night,
-            category=category,
-            voltage=voltage,
-            tariff_year=tariff_year,
-            effective_from=eff_from,
-            effective_to=eff_to,
-            source=csv_path or "default_registry",
+            category=t_info["tariff_type"],
+            voltage="11 kV",
+            tariff_year="FY2026-27",
+            effective_from="2026-04-01",
+            effective_to=None,
+            source=get_master_tariff_path(),
             demand_charge=0.0,
             fixed_charge=0.0,
-            price_per_kwh_usd=price_usd,
+            price_per_kwh_usd=t_info["price_per_kwh_usd"],
         )
         records.append(rec)
         current += timedelta(hours=1)
 
-    # Optional DB persistence
+    # Database persistence with duplicate prevention
     if db is not None and records:
         try:
             for r in records:
-                orm = RegionalTariffORM(
-                    region_id=r.region_id,
-                    country=r.country,
-                    region_name=r.region_name,
-                    tariff_plan=r.tariff_plan,
-                    timestamp=r.timestamp,
-                    local_timestamp=r.local_timestamp,
-                    timezone=r.timezone,
-                    season=r.season,
-                    tod_block=r.tod_block,
-                    time_period=r.time_period,
-                    base_energy_rate=r.base_energy_rate,
-                    tod_adder=r.tod_adder,
-                    electricity_rate=r.electricity_rate,
-                    currency=r.currency,
-                    is_peak_hour=r.is_peak_hour,
-                    is_solar_hour=r.is_solar_hour,
-                    is_night_hour=r.is_night_hour,
-                    category=r.category,
-                    voltage=r.voltage,
-                    tariff_year=r.tariff_year,
-                    effective_from=r.effective_from,
-                    effective_to=r.effective_to,
-                    source=r.source,
-                    demand_charge=r.demand_charge,
-                    fixed_charge=r.fixed_charge,
-                    price_per_kwh_usd=r.price_per_kwh_usd,
+                existing = (
+                    db.query(RegionalTariffORM)
+                    .filter(
+                        RegionalTariffORM.region_id == r.region_id,
+                        RegionalTariffORM.tariff_plan == r.tariff_plan,
+                        RegionalTariffORM.timestamp == r.timestamp,
+                    )
+                    .first()
                 )
-                db.add(orm)
+                if not existing:
+                    orm = RegionalTariffORM(
+                        region_id=r.region_id,
+                        country=r.country,
+                        region_name=r.region_name,
+                        tariff_plan=r.tariff_plan,
+                        timestamp=r.timestamp,
+                        local_timestamp=r.local_timestamp,
+                        timezone=r.timezone,
+                        season=r.season,
+                        tod_block=r.tod_block,
+                        time_period=r.time_period,
+                        base_energy_rate=r.base_energy_rate,
+                        tod_adder=r.tod_adder,
+                        electricity_rate=r.electricity_rate,
+                        currency=r.currency,
+                        is_peak_hour=r.is_peak_hour,
+                        is_solar_hour=r.is_solar_hour,
+                        is_night_hour=r.is_night_hour,
+                        category=r.category,
+                        voltage=r.voltage,
+                        tariff_year=r.tariff_year,
+                        effective_from=r.effective_from,
+                        effective_to=r.effective_to,
+                        source=r.source,
+                        demand_charge=r.demand_charge,
+                        fixed_charge=r.fixed_charge,
+                        price_per_kwh_usd=r.price_per_kwh_usd,
+                    )
+                    db.add(orm)
             db.commit()
         except Exception as exc:
             db.rollback()
@@ -373,10 +229,7 @@ def get_tariff_data_points(
     tariff_plan: Optional[str] = None,
     job_type: Optional[str] = None,
 ) -> List[TariffDataPoint]:
-    """
-    Adapter returning standard TariffDataPoint list (normalized price_per_kwh in USD)
-    for seamless compatibility with the DECIDE scheduler.
-    """
+    """Adapter returning standard TariffDataPoint list for the DECIDE scheduler."""
     records = get_regional_tariff_curve(
         region=region,
         start_time=start_time,
@@ -395,34 +248,35 @@ def get_tariff_data_points(
 
 
 def get_regional_tariff_inventory() -> List[dict]:
-    """
-    Return summary inventory of all loaded regional tariff plans for India regions.
-    Used by dashboard Regional Data page.
-    """
+    """Return inventory of all loaded regional tariff datasets across 10 regions."""
+    master_path = get_master_tariff_path()
+    master_available = bool(master_path and Path(master_path).exists())
+    data = load_master_tariff_data(master_path) if master_available else {}
+
     inventory = []
     for cfg in list_supported_regions():
-        for plan_id, plan_spec in cfg.plans.items():
-            path = get_tariff_csv_path(cfg.region_id, plan_id)
-            available = bool(path and Path(path).exists())
-            template = load_raw_tariff_template(path) if available else {}
-            rates = [v["rate"] for v in template.values()] if template else [plan_spec.default_rate]
-            sample_row = next(iter(template.values())) if template else {}
+        reg_id = cfg.region_id
+        reg_data = data.get(reg_id, {})
+        for season_name, hourly_map in reg_data.items():
+            rates = [v["Effective_price"] for v in hourly_map.values()] if hourly_map else [0.0]
+            first_row = next(iter(hourly_map.values())) if hourly_map else {}
+            plan_name = f"{reg_id} {first_row.get('Tariff_type', 'ToD')} ({season_name})"
             inventory.append({
-                "region_id": cfg.region_id,
+                "region_id": reg_id,
                 "country": cfg.country,
                 "region_name": cfg.region_name,
-                "tariff_plan": plan_spec.display_name,
-                "plan_id": plan_id,
-                "category": sample_row.get("category") or plan_spec.display_name,
-                "voltage": sample_row.get("voltage") or "11 kV",
-                "currency": cfg.currency,
+                "tariff_plan": plan_name,
+                "plan_id": first_row.get("Tariff_type", "ToD"),
+                "category": first_row.get("Tariff_type", "ToD"),
+                "voltage": "11 kV",
+                "currency": first_row.get("Currency", cfg.currency),
                 "timezone": cfg.timezone_name,
-                "is_flat": plan_spec.is_flat,
-                "season": plan_spec.season or "All Year",
+                "is_flat": first_row.get("Tariff_type") == "Flat",
+                "season": first_row.get("Season", season_name),
                 "rate_min": min(rates) if rates else 0.0,
                 "rate_max": max(rates) if rates else 0.0,
-                "source_file": Path(path).name if path else "registry_default",
-                "available": available,
+                "source_file": Path(master_path).name if master_available else "registry_default",
+                "available": master_available and len(hourly_map) > 0,
                 "carbon_source": f"Electricity Maps ({cfg.electricity_maps_zone})",
             })
     return inventory

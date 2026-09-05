@@ -22,10 +22,8 @@ data:
   DATABASE_URL: "postgresql://greenshift:greenshift@postgres:5432/greenshift"
   # Real Indian Data Sources Paths
   JOB_DATA_PATH: "/data/jobs/greenshift_workloads_final.csv"
-  TARIFF_HT1_PATH: "/data/tariff/telangana_tod_tariff_ht1a.csv"
-  TARIFF_HT2_PATH: "/data/tariff/telangana_tod_tariff_ht2a.csv"
-  TARIFF_GJ_PATH: "/data/tariff/gujarat_tod_tariff_hourly_FY2026-27.csv"
-  TARIFF_HP_PATH: "/data/tariff/himachal_pradesh_flat_tariff_hourly_FY2026-27.csv"
-  TARIFF_WB_PATH: "/data/tariff/west_bengal_tod_tariff_hourly_FY2026-27.csv"
+  MASTER_TARIFF_DATASET: "/data/tariff/master_tod_tariff_all_regions.csv"
   TARIFF_INR_TO_USD: "0.012"
+  TARIFF_SEK_TO_USD: "0.095"
+  TARIFF_AUD_TO_USD: "0.65"
   TARIFF_INDUSTRIAL_TYPES: "DATA_PROCESSING,ETL,HPC,BATCH,SIMULATION"

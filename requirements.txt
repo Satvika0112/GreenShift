@@ -48,3 +48,4 @@ python-dateutil==2.9.0
 pytz==2024.1
 tenacity==8.3.0      # retry logic for API calls
 cachetools==5.3.3    # in-memory caching for API responses
+redis>=5.0.0         # Redis distributed cache client for Carbon API

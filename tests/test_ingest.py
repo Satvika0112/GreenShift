@@ -39,14 +39,16 @@ class TestCarbonAPI:
         end = now + timedelta(hours=6)
         d1 = get_carbon_curve("IN-SO", now, end)
         d2 = get_carbon_curve("IN-SO", now, end)
-        # Second call should be from cache
-        assert d1 == d2
+        # Second call should return identical curve data from cache
+        assert len(d1) == len(d2)
+        assert [p.carbon_gco2_kwh for p in d1] == [p.carbon_gco2_kwh for p in d2]
+        assert [p.timestamp for p in d1] == [p.timestamp for p in d2]
 
     def test_different_regions_differ(self):
         now = datetime.now(timezone.utc)
         end = now + timedelta(hours=6)
         d1 = _mock_carbon_curve("IN-WE", now, end)
-        d2 = _mock_carbon_curve("DE", now, end)
+        d2 = _mock_carbon_curve("IN-NO", now, end)
         # Different regions produce different intensities (at least sometimes)
         vals1 = {p.carbon_gco2_kwh for p in d1}
         vals2 = {p.carbon_gco2_kwh for p in d2}

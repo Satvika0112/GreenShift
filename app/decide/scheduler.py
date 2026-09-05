@@ -43,6 +43,7 @@ from app.ingest.regional_tariff_loader import (
     get_tariff_csv_path,
     load_raw_tariff_template,
 )
+from app.shared.tariff_service import get_tariff_for_region_and_time
 from app.shared.config import settings
 from app.shared.models import (
     CarbonDataPoint,
@@ -109,15 +110,20 @@ def _get_native_rate_at_slot(
     fallback_usd_price: float,
 ) -> float:
     """Look up native currency tariff rate at given timestamp."""
+    try:
+        tariff_entry = get_tariff_for_region_and_time(region_id, timestamp)
+        if tariff_entry and "effective_price" in tariff_entry:
+            return float(tariff_entry["effective_price"])
+    except Exception as exc:
+        logger.debug("Failed to get tariff from tariff_service for region=%s: %s", region_id, exc)
+
     cfg = get_region_config(region_id)
-    csv_path = get_tariff_csv_path(region_id, tariff_plan)
-    if csv_path:
-        template = load_raw_tariff_template(csv_path)
-        if template:
-            _, local_hour = utc_to_local(timestamp, region_id)
-            row = template.get(local_hour)
-            if row:
-                return float(row["rate"])
+    template = load_raw_tariff_template(region=region_id)
+    if template:
+        _, local_hour = utc_to_local(timestamp, region_id)
+        row = template.get(local_hour)
+        if row and "rate" in row:
+            return float(row["rate"])
 
     # Fallback via inverse FX rate
     fx = get_fx_rate_to_usd(cfg.currency)

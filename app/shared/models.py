@@ -22,6 +22,7 @@ from sqlalchemy import (
     String,
     Text,
     Boolean,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -187,6 +188,9 @@ class AuditEventORM(Base):
     """Tamper-evident audit ledger — owned by TRUST agent."""
 
     __tablename__ = "audit_events"
+    __table_args__ = (
+        UniqueConstraint("sequence", name="uq_audit_events_sequence"),
+    )
 
     event_id      = Column(String, primary_key=True)
     timestamp     = Column(DateTime, nullable=False)
@@ -196,7 +200,7 @@ class AuditEventORM(Base):
     previous_hash = Column(String(64), nullable=False)   # SHA-256 hex (genesis = 0*64)
     current_hash  = Column(String(64), nullable=False)   # SHA-256 hex
     payload_json  = Column(Text, nullable=False)         # serialised event payload
-    sequence      = Column(Integer, nullable=False)      # monotonically increasing
+    sequence      = Column(Integer, nullable=False, unique=True, index=True)  # monotonically increasing and globally unique
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -329,7 +333,7 @@ class JobSubmitRequest(BaseModel):
     cpu_request:      str   = Field(default="500m", description="Kubernetes CPU request")
     memory_request:   str   = Field(default="512Mi", description="Kubernetes memory request")
     carbon_budget_kg: Optional[float] = Field(None, description="Max carbon budget in kg CO2")
-    # Extended fields (from real workloads dataset — all optional)
+    submit_time:         Optional[datetime] = Field(None, description="Original submit timestamp from workload dataset")
     job_id:              Optional[str]      = Field(None, description="Preserve original job ID from CSV")
     job_type:            Optional[str]      = Field(None, description="Workload type, e.g. DATA_PROCESSING")
     priority:            Optional[str]      = Field(None, description="CRITICAL/HIGH/MEDIUM/LOW")
@@ -337,6 +341,7 @@ class JobSubmitRequest(BaseModel):
     energy_kwh:          Optional[float]    = Field(None, description="Pre-computed energy consumption (kWh)")
     deferrable:          Optional[bool]     = Field(None, description="True = can be shifted for carbon savings")
     tariff_plan:         Optional[str]      = Field(None, description="Explicit tariff plan override")
+    timezone:            Optional[str]      = Field(None, description="Optional IANA timezone name, e.g. Asia/Kolkata, America/New_York")
 
 
 class JobSubmitResponse(BaseModel):

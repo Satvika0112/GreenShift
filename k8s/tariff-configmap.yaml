@@ -6,133 +6,269 @@ metadata:
   labels:
     app: greenshift
 data:
-  telangana_tod_tariff_ht1a.csv: |
-    hour_start,hour_label,tod_block,base_energy_charge_inr_per_kwh,tod_adder_inr_per_kwh,effective_rate_inr_per_kwh,is_peak_hour,is_solar_hour,is_night_hour,category,voltage,tariff_year,effective_from
-    0,00:00-01:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    1,01:00-02:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    2,02:00-03:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    3,03:00-04:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    4,04:00-05:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    5,05:00-06:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    6,06:00-07:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    7,07:00-08:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    8,08:00-09:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    9,09:00-10:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    10,10:00-11:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    11,11:00-12:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    12,12:00-13:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    13,13:00-14:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    14,14:00-15:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    15,15:00-16:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    16,16:00-17:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    17,17:00-18:00,Solar,7.65,-0.5,7.15,False,True,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    18,18:00-19:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    19,19:00-20:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    20,20:00-21:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    21,21:00-22:00,Peak,7.65,1.5,9.15,True,False,False,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    22,22:00-23:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-    23,23:00-00:00,Night,7.65,0.0,7.65,False,False,True,HT-I(A) Industry General,11 kV,FY2026-27,2026-04-01
-  telangana_tod_tariff_ht2a.csv: |
-    hour_start,hour_label,tod_block,base_energy_charge_inr_per_kwh,tod_adder_inr_per_kwh,effective_rate_inr_per_kwh,is_peak_hour,is_solar_hour,is_night_hour,category,voltage,tariff_year,effective_from
-    0,00:00-01:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    1,01:00-02:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    2,02:00-03:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    3,03:00-04:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    4,04:00-05:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    5,05:00-06:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    6,06:00-07:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    7,07:00-08:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    8,08:00-09:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    9,09:00-10:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    10,10:00-11:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    11,11:00-12:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    12,12:00-13:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    13,13:00-14:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    14,14:00-15:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    15,15:00-16:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    16,16:00-17:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    17,17:00-18:00,Solar,8.8,-0.5,8.3,False,True,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    18,18:00-19:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    19,19:00-20:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    20,20:00-21:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    21,21:00-22:00,Peak,8.8,1.5,10.3,True,False,False,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    22,22:00-23:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-    23,23:00-00:00,Night,8.8,0.0,8.8,False,False,True,HT-II(A) Others,11 kV,FY2026-27,2026-04-01
-  gujarat_tod_tariff_hourly_FY2026-27.csv: |
-    hour_start,hour_label,tod_block,base_energy_charge_inr_per_kwh,tod_adder_inr_per_kwh,effective_rate_inr_per_kwh,is_peak_hour,is_solar_hour,is_night_hour,category,voltage,tariff_year,effective_from
-    0,00:00-01:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    1,01:00-02:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    2,02:00-03:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    3,03:00-04:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    4,04:00-05:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    5,05:00-06:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    6,06:00-07:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    7,07:00-08:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    8,08:00-09:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    9,09:00-10:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    10,10:00-11:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    11,11:00-12:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    12,12:00-13:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    13,13:00-14:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    14,14:00-15:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    15,15:00-16:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    16,16:00-17:00,Off-Peak Discount,4.00,-0.60,3.40,False,True,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    17,17:00-18:00,Normal,4.00,0.00,4.00,False,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    18,18:00-19:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    19,19:00-20:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    20,20:00-21:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    21,21:00-22:00,Peak,4.00,0.45,4.45,True,False,False,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    22,22:00-23:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-    23,23:00-00:00,Normal,4.00,0.00,4.00,False,False,True,HTP-I High Tension (up to 500 kVA billing demand),11 kV and above,FY2026-27,2026-04-01
-  himachal_pradesh_flat_tariff_hourly_FY2026-27.csv: |
-    hour_start,hour_label,tod_block,base_energy_charge_inr_per_kwh,tod_adder_inr_per_kwh,effective_rate_inr_per_kwh,is_peak_hour,is_solar_hour,is_night_hour,category,voltage,tariff_year,effective_from
-    0,00:00-01:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    1,01:00-02:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    2,02:00-03:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    3,03:00-04:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    4,04:00-05:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    5,05:00-06:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    6,06:00-07:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    7,07:00-08:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    8,08:00-09:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    9,09:00-10:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    10,10:00-11:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    11,11:00-12:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    12,12:00-13:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    13,13:00-14:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    14,14:00-15:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    15,15:00-16:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    16,16:00-17:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    17,17:00-18:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    18,18:00-19:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    19,19:00-20:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    20,20:00-21:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    21,21:00-22:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    22,22:00-23:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-    23,23:00-00:00,Flat (No ToD),5.55,0.00,5.55,False,False,False,Large Industry - EHT (no peak/off-peak/night differentiation),66 kV and above,FY2026-27,2026-04-01
-  west_bengal_tod_tariff_hourly_FY2026-27.csv: |
-    hour_start,hour_label,tod_block,base_energy_charge_inr_per_kwh,tod_adder_inr_per_kwh,effective_rate_inr_per_kwh,is_peak_hour,is_solar_hour,is_night_hour,category,voltage,tariff_year,effective_from
-    0,00:00-01:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    1,01:00-02:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    2,02:00-03:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    3,03:00-04:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    4,04:00-05:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    5,05:00-06:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    6,06:00-07:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    7,07:00-08:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    8,08:00-09:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    9,09:00-10:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    10,10:00-11:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    11,11:00-12:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    12,12:00-13:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    13,13:00-14:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    14,14:00-15:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    15,15:00-16:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    16,16:00-17:00,Normal,7.07,0.39,7.46,False,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    17,17:00-18:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    18,18:00-19:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    19,19:00-20:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    20,20:00-21:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    21,21:00-22:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    22,22:00-23:00,Peak,7.07,3.88,10.95,True,False,False,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
-    23,23:00-00:00,Off-Peak,7.07,-2.62,4.45,False,False,True,Industries (Rate E-BT, Normal-TOD),11 kV,FY2026-27,2025-04-01
+  master_tod_tariff_all_regions.csv: |
+    Time,Time_of_day,Base_charge,Adder_charge,Effective_price,Region,Currency,Tariff_type,Season
+    00:00-01:00,Night,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    01:00-02:00,Night,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    02:00-03:00,Night,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    03:00-04:00,Night,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    04:00-05:00,Night,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    05:00-06:00,Night,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    06:00-07:00,Normal,7.65,0.0,7.65,IN-TG,INR,ToD,All-Year
+    07:00-08:00,Normal,7.65,0.0,7.65,IN-TG,INR,ToD,All-Year
+    08:00-09:00,Normal,7.65,0.0,7.65,IN-TG,INR,ToD,All-Year
+    09:00-10:00,Normal,7.65,0.0,7.65,IN-TG,INR,ToD,All-Year
+    10:00-11:00,Solar,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    11:00-12:00,Solar,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    12:00-13:00,Solar,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    13:00-14:00,Solar,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    14:00-15:00,Solar,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    15:00-16:00,Solar,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    16:00-17:00,Solar,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    17:00-18:00,Solar,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    18:00-19:00,Peak,7.65,1.1,8.75,IN-TG,INR,ToD,All-Year
+    19:00-20:00,Peak,7.65,1.1,8.75,IN-TG,INR,ToD,All-Year
+    20:00-21:00,Peak,7.65,1.1,8.75,IN-TG,INR,ToD,All-Year
+    21:00-22:00,Peak,7.65,1.1,8.75,IN-TG,INR,ToD,All-Year
+    22:00-23:00,Night,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    23:00-00:00,Night,7.65,-0.5,7.15,IN-TG,INR,ToD,All-Year
+    00:00-01:00,Normal,4.0,0.0,4.0,IN-GJ,INR,ToD,All-Year
+    01:00-02:00,Normal,4.0,0.0,4.0,IN-GJ,INR,ToD,All-Year
+    02:00-03:00,Normal,4.0,0.0,4.0,IN-GJ,INR,ToD,All-Year
+    03:00-04:00,Normal,4.0,0.0,4.0,IN-GJ,INR,ToD,All-Year
+    04:00-05:00,Normal,4.0,0.0,4.0,IN-GJ,INR,ToD,All-Year
+    05:00-06:00,Normal,4.0,0.0,4.0,IN-GJ,INR,ToD,All-Year
+    06:00-07:00,Normal,4.0,0.0,4.0,IN-GJ,INR,ToD,All-Year
+    07:00-08:00,Peak,4.0,0.45,4.45,IN-GJ,INR,ToD,All-Year
+    08:00-09:00,Peak,4.0,0.45,4.45,IN-GJ,INR,ToD,All-Year
+    09:00-10:00,Peak,4.0,0.45,4.45,IN-GJ,INR,ToD,All-Year
+    10:00-11:00,Peak,4.0,0.45,4.45,IN-GJ,INR,ToD,All-Year
+    11:00-12:00,Solar,4.0,-0.6,3.4,IN-GJ,INR,ToD,All-Year
+    12:00-13:00,Solar,4.0,-0.6,3.4,IN-GJ,INR,ToD,All-Year
+    13:00-14:00,Solar,4.0,-0.6,3.4,IN-GJ,INR,ToD,All-Year
+    14:00-15:00,Solar,4.0,-0.6,3.4,IN-GJ,INR,ToD,All-Year
+    15:00-16:00,Solar,4.0,-0.6,3.4,IN-GJ,INR,ToD,All-Year
+    16:00-17:00,Solar,4.0,-0.6,3.4,IN-GJ,INR,ToD,All-Year
+    17:00-18:00,Normal,4.0,0.0,4.0,IN-GJ,INR,ToD,All-Year
+    18:00-19:00,Peak,4.0,0.45,4.45,IN-GJ,INR,ToD,All-Year
+    19:00-20:00,Peak,4.0,0.45,4.45,IN-GJ,INR,ToD,All-Year
+    20:00-21:00,Peak,4.0,0.45,4.45,IN-GJ,INR,ToD,All-Year
+    21:00-22:00,Peak,4.0,0.45,4.45,IN-GJ,INR,ToD,All-Year
+    22:00-23:00,Normal,4.0,0.0,4.0,IN-GJ,INR,ToD,All-Year
+    23:00-00:00,Normal,4.0,0.0,4.0,IN-GJ,INR,ToD,All-Year
+    00:00-01:00,Off-Peak,7.07,-2.62,4.45,IN-WB,INR,ToD,All-Year
+    01:00-02:00,Off-Peak,7.07,-2.62,4.45,IN-WB,INR,ToD,All-Year
+    02:00-03:00,Off-Peak,7.07,-2.62,4.45,IN-WB,INR,ToD,All-Year
+    03:00-04:00,Off-Peak,7.07,-2.62,4.45,IN-WB,INR,ToD,All-Year
+    04:00-05:00,Off-Peak,7.07,-2.62,4.45,IN-WB,INR,ToD,All-Year
+    05:00-06:00,Off-Peak,7.07,-2.62,4.45,IN-WB,INR,ToD,All-Year
+    06:00-07:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    07:00-08:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    08:00-09:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    09:00-10:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    10:00-11:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    11:00-12:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    12:00-13:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    13:00-14:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    14:00-15:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    15:00-16:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    16:00-17:00,Normal,7.07,0.39,7.46,IN-WB,INR,ToD,All-Year
+    17:00-18:00,Peak,7.07,3.88,10.95,IN-WB,INR,ToD,All-Year
+    18:00-19:00,Peak,7.07,3.88,10.95,IN-WB,INR,ToD,All-Year
+    19:00-20:00,Peak,7.07,3.88,10.95,IN-WB,INR,ToD,All-Year
+    20:00-21:00,Peak,7.07,3.88,10.95,IN-WB,INR,ToD,All-Year
+    21:00-22:00,Peak,7.07,3.88,10.95,IN-WB,INR,ToD,All-Year
+    22:00-23:00,Peak,7.07,3.88,10.95,IN-WB,INR,ToD,All-Year
+    23:00-00:00,Off-Peak,7.07,-2.62,4.45,IN-WB,INR,ToD,All-Year
+    00:00-01:00,Night Rebate,7.0,-1.0,6.0,IN-PB,INR,ToD,All-Year
+    01:00-02:00,Night Rebate,7.0,-1.0,6.0,IN-PB,INR,ToD,All-Year
+    02:00-03:00,Night Rebate,7.0,-1.0,6.0,IN-PB,INR,ToD,All-Year
+    03:00-04:00,Night Rebate,7.0,-1.0,6.0,IN-PB,INR,ToD,All-Year
+    04:00-05:00,Night Rebate,7.0,-1.0,6.0,IN-PB,INR,ToD,All-Year
+    05:00-06:00,Night Rebate,7.0,-1.0,6.0,IN-PB,INR,ToD,All-Year
+    06:00-07:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    07:00-08:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    08:00-09:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    09:00-10:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    10:00-11:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    11:00-12:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    12:00-13:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    13:00-14:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    14:00-15:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    15:00-16:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    16:00-17:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    17:00-18:00,Normal,7.0,0.0,7.0,IN-PB,INR,ToD,All-Year
+    18:00-19:00,Peak Surcharge,7.0,2.0,9.0,IN-PB,INR,ToD,All-Year
+    19:00-20:00,Peak Surcharge,7.0,2.0,9.0,IN-PB,INR,ToD,All-Year
+    20:00-21:00,Peak Surcharge,7.0,2.0,9.0,IN-PB,INR,ToD,All-Year
+    21:00-22:00,Peak Surcharge,7.0,2.0,9.0,IN-PB,INR,ToD,All-Year
+    22:00-23:00,Night Rebate,7.0,-1.0,6.0,IN-PB,INR,ToD,All-Year
+    23:00-00:00,Night Rebate,7.0,-1.0,6.0,IN-PB,INR,ToD,All-Year
+    00:00-01:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    01:00-02:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    02:00-03:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    03:00-04:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    04:00-05:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    05:00-06:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    06:00-07:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    07:00-08:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    08:00-09:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    09:00-10:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    10:00-11:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    11:00-12:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    12:00-13:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    13:00-14:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    14:00-15:00,Partial-Peak,0.11482,0.02745,0.14227,US-CA,USD,ToD,Summer
+    15:00-16:00,Partial-Peak,0.11482,0.02745,0.14227,US-CA,USD,ToD,Summer
+    16:00-17:00,Peak,0.11482,0.0622,0.17702,US-CA,USD,ToD,Summer
+    17:00-18:00,Peak,0.11482,0.0622,0.17702,US-CA,USD,ToD,Summer
+    18:00-19:00,Peak,0.11482,0.0622,0.17702,US-CA,USD,ToD,Summer
+    19:00-20:00,Peak,0.11482,0.0622,0.17702,US-CA,USD,ToD,Summer
+    20:00-21:00,Peak,0.11482,0.0622,0.17702,US-CA,USD,ToD,Summer
+    21:00-22:00,Partial-Peak,0.11482,0.02745,0.14227,US-CA,USD,ToD,Summer
+    22:00-23:00,Partial-Peak,0.11482,0.02745,0.14227,US-CA,USD,ToD,Summer
+    23:00-00:00,Off-Peak,0.11482,0.0,0.11482,US-CA,USD,ToD,Summer
+    00:00-01:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    01:00-02:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    02:00-03:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    03:00-04:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    04:00-05:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    05:00-06:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    06:00-07:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    07:00-08:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    08:00-09:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    09:00-10:00,"Solar (Super Off-Peak, Mar-May only)",0.1146,-0.05588,0.05872,US-CA,USD,ToD,Winter
+    10:00-11:00,"Solar (Super Off-Peak, Mar-May only)",0.1146,-0.05588,0.05872,US-CA,USD,ToD,Winter
+    11:00-12:00,"Solar (Super Off-Peak, Mar-May only)",0.1146,-0.05588,0.05872,US-CA,USD,ToD,Winter
+    12:00-13:00,"Solar (Super Off-Peak, Mar-May only)",0.1146,-0.05588,0.05872,US-CA,USD,ToD,Winter
+    13:00-14:00,"Solar (Super Off-Peak, Mar-May only)",0.1146,-0.05588,0.05872,US-CA,USD,ToD,Winter
+    14:00-15:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    15:00-16:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    16:00-17:00,Peak,0.1146,0.04172,0.15632,US-CA,USD,ToD,Winter
+    17:00-18:00,Peak,0.1146,0.04172,0.15632,US-CA,USD,ToD,Winter
+    18:00-19:00,Peak,0.1146,0.04172,0.15632,US-CA,USD,ToD,Winter
+    19:00-20:00,Peak,0.1146,0.04172,0.15632,US-CA,USD,ToD,Winter
+    20:00-21:00,Peak,0.1146,0.04172,0.15632,US-CA,USD,ToD,Winter
+    21:00-22:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    22:00-23:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    23:00-00:00,Off-Peak,0.1146,0.0,0.1146,US-CA,USD,ToD,Winter
+    00:00-01:00,Off-Peak (demand),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    01:00-02:00,Off-Peak (demand),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    02:00-03:00,Off-Peak (demand),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    03:00-04:00,Off-Peak (demand),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    04:00-05:00,Off-Peak (demand),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    05:00-06:00,Off-Peak (demand),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    06:00-07:00,Off-Peak (demand),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    07:00-08:00,Off-Peak (demand),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    08:00-09:00,Peak (demand - summer daytime),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    09:00-10:00,Peak (demand - summer daytime),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    10:00-11:00,Peak (demand - summer daytime),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    11:00-12:00,Peak (demand - summer daytime),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    12:00-13:00,Peak (demand - summer daytime),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    13:00-14:00,Peak (demand - summer daytime),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    14:00-15:00,Peak (demand - summer daytime),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    15:00-16:00,Peak (demand - summer daytime),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    16:00-17:00,Peak (demand - summer daytime),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    17:00-18:00,Peak (demand - summer daytime),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    18:00-19:00,Peak (demand - year-round evening),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    19:00-20:00,Peak (demand - year-round evening),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    20:00-21:00,Peak (demand - year-round evening),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    21:00-22:00,Peak (demand - year-round evening),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    22:00-23:00,Off-Peak (demand),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    23:00-00:00,Off-Peak (demand),0.208,0.0,0.208,US-NY,USD,Demand,All-Year
+    00:00-01:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    01:00-02:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    02:00-03:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    03:00-04:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    04:00-05:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    05:00-06:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    06:00-07:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    07:00-08:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    08:00-09:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    09:00-10:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    10:00-11:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    11:00-12:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    12:00-13:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    13:00-14:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    14:00-15:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    15:00-16:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    16:00-17:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    17:00-18:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    18:00-19:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    19:00-20:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    20:00-21:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    21:00-22:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    22:00-23:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    23:00-00:00,Flat (No ToD),0.061196,0.0,0.061196,US-TX,USD,Flat,All-Year
+    00:00-01:00,Laglasttid (Low-Load),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    01:00-02:00,Laglasttid (Low-Load),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    02:00-03:00,Laglasttid (Low-Load),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    03:00-04:00,Laglasttid (Low-Load),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    04:00-05:00,Laglasttid (Low-Load),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    05:00-06:00,Laglasttid (Low-Load),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    06:00-07:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    07:00-08:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    08:00-09:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    09:00-10:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    10:00-11:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    11:00-12:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    12:00-13:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    13:00-14:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    14:00-15:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    15:00-16:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    16:00-17:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    17:00-18:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    18:00-19:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    19:00-20:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    20:00-21:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    21:00-22:00,Hoglasttid (High-Load; winter weekdays),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    22:00-23:00,Laglasttid (Low-Load),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    23:00-00:00,Laglasttid (Low-Load),0.034,0.0,0.034,SE,SEK,Demand,Winter
+    00:00-01:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    01:00-02:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    02:00-03:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    03:00-04:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    04:00-05:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    05:00-06:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    06:00-07:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    07:00-08:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    08:00-09:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    09:00-10:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    10:00-11:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    11:00-12:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    12:00-13:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    13:00-14:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    14:00-15:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    15:00-16:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    16:00-17:00,Peak (demand - Nov-Mar only),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    17:00-18:00,Peak (demand - Nov-Mar only),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    18:00-19:00,Peak (demand - Nov-Mar only),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    19:00-20:00,Peak (demand - Nov-Mar only),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    20:00-21:00,Peak (demand - Nov-Mar only),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    21:00-22:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    22:00-23:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    23:00-00:00,Off-Peak (demand),0.0,0.0,0.0,AU-SA-Large,AUD,Demand,Summer
+    00:00-01:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    01:00-02:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    02:00-03:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    03:00-04:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    04:00-05:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    05:00-06:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    06:00-07:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    07:00-08:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    08:00-09:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    09:00-10:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    10:00-11:00,Solar Sponge,0.09,-0.06,0.03,AU-SA-Small,AUD,ToD,All-Year
+    11:00-12:00,Solar Sponge,0.09,-0.06,0.03,AU-SA-Small,AUD,ToD,All-Year
+    12:00-13:00,Solar Sponge,0.09,-0.06,0.03,AU-SA-Small,AUD,ToD,All-Year
+    13:00-14:00,Solar Sponge,0.09,-0.06,0.03,AU-SA-Small,AUD,ToD,All-Year
+    14:00-15:00,Solar Sponge,0.09,-0.06,0.03,AU-SA-Small,AUD,ToD,All-Year
+    15:00-16:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    16:00-17:00,Peak,0.09,0.23,0.32,AU-SA-Small,AUD,ToD,All-Year
+    17:00-18:00,Peak,0.09,0.23,0.32,AU-SA-Small,AUD,ToD,All-Year
+    18:00-19:00,Peak,0.09,0.23,0.32,AU-SA-Small,AUD,ToD,All-Year
+    19:00-20:00,Peak,0.09,0.23,0.32,AU-SA-Small,AUD,ToD,All-Year
+    20:00-21:00,Peak,0.09,0.23,0.32,AU-SA-Small,AUD,ToD,All-Year
+    21:00-22:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    22:00-23:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year
+    23:00-00:00,Off-Peak,0.09,0.0,0.09,AU-SA-Small,AUD,ToD,All-Year

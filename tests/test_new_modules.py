@@ -198,8 +198,7 @@ class TestDataSourcePriority:
         """Status endpoint returns 'mock' when no CSV or API key is configured."""
         monkeypatch.delenv("CARBON_CSV_PATH", raising=False)
         monkeypatch.delenv("TARIFF_CSV_PATH", raising=False)
-        monkeypatch.delenv("TARIFF_HT1_PATH", raising=False)
-        monkeypatch.delenv("TARIFF_HT2_PATH", raising=False)
+        monkeypatch.setenv("MASTER_TARIFF_DATASET", "")
         monkeypatch.delenv("JOB_DATA_PATH", raising=False)
         monkeypatch.setenv("ELECTRICITY_MAPS_API_KEY", "")
         monkeypatch.setenv("TARIFF_API_KEY", "")

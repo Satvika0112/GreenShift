@@ -38,6 +38,18 @@ class Settings(BaseSettings):
     # ─── Kubernetes ───────────────────────────────────────────────
     k8s_namespace: str = Field(default="greenshift")
     k8s_in_cluster: bool = Field(default=False)
+    kubeconfig_path: Optional[str] = Field(
+        default=None,
+        description="Optional custom path to kubeconfig file",
+    )
+    k8s_host_override: Optional[str] = Field(
+        default=None,
+        description="Optional Kubernetes API server host override (e.g. https://host.docker.internal:63799)",
+    )
+    k8s_insecure_skip_tls_verify: bool = Field(
+        default=False,
+        description="Set True to skip TLS certificate verification if connecting via rewritten hostnames",
+    )
 
     # ─── Application ──────────────────────────────────────────────
     log_level: str    = Field(default="INFO")
@@ -45,29 +57,32 @@ class Settings(BaseSettings):
     api_port: int     = Field(default=8000)
     environment: str  = Field(default="development")
 
-    # ─── Cache ────────────────────────────────────────────────────
+    # ─── Cache & Redis ────────────────────────────────────────────
     cache_ttl_seconds: int = Field(default=300)
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis connection URL for shared Carbon API cache",
+    )
+    redis_connect_timeout: float = Field(
+        default=2.0,
+        description="Timeout in seconds for connecting to Redis",
+    )
 
     # ─── Dispatcher poll ──────────────────────────────────────────
-    dispatcher_poll_interval_seconds: int = Field(default=30)
+    dispatcher_poll_interval_seconds: int = Field(default=5)
+    dispatch_poll_seconds: int = Field(default=5)
+    status_refresh_seconds: int = Field(default=5)
 
     # ─── Real Data Sources ────────────────────────────────────────
     # Job workloads CSV (560 real jobs from greenshift_workloads_final.csv)
     job_data_path: str = Field(default="data/greenshift_workloads_final.csv", description="Path to workloads CSV")
 
-    # ─── Indian Regional Tariff Data Sources ──────────────────────
-    # Telangana (IN-TG) dual-tariff CSVs (HT-I(A) and HT-II(A))
-    tariff_ht1_path: str = Field(default="data/telangana_tod_tariff_ht1a.csv", description="Path to Telangana HT-I(A) Industry General tariff CSV")
-    tariff_ht2_path: str = Field(default="data/telangana_tod_tariff_ht2a.csv", description="Path to Telangana HT-II(A) Others tariff CSV")
-
-    # Gujarat (IN-GJ) ToD tariff CSV (HTP-I)
-    tariff_gj_path: str = Field(default="data/gujarat_tod_tariff_hourly_FY2026-27.csv", description="Path to Gujarat HTP-I tariff CSV")
-
-    # Himachal Pradesh (IN-HP) Flat tariff CSV (Large Industry - EHT)
-    tariff_hp_path: str = Field(default="data/himachal_pradesh_flat_tariff_hourly_FY2026-27.csv", description="Path to Himachal Pradesh Large Industry flat tariff CSV")
-
-    # West Bengal (IN-WB) ToD tariff CSV (Industries Rate E-BT)
-    tariff_wb_path: str = Field(default="data/west_bengal_tod_tariff_hourly_FY2026-27.csv", description="Path to West Bengal Industries tariff CSV")
+    # ─── Master ToD Tariff Dataset (Single Source of Truth) ──────
+    # 264-row dataset across IN-TG, IN-GJ, IN-WB, IN-PB, US-CA, US-NY, US-TX, SE, AU-SA-Large, AU-SA-Small
+    master_tariff_dataset: str = Field(
+        default="data/master_tod_tariff_all_regions.csv",
+        description="Path to Master ToD Regional Tariff CSV",
+    )
 
     # Job-type to tariff-category mapping (comma-separated; industrial types → HT-I(A) / Industrial)
     tariff_industrial_types: str = Field(
@@ -75,10 +90,18 @@ class Settings(BaseSettings):
         description="Comma-separated job types that map to HT-I(A) / Industrial tariff",
     )
 
-    # FX Conversion rate from INR to USD (used for normalized cost comparison)
+    # FX Conversion rates to USD (used for normalized cost comparison)
     tariff_inr_to_usd: float = Field(
         default=0.012,
         description="Conversion rate from INR to USD for electricity cost calculation",
+    )
+    tariff_sek_to_usd: float = Field(
+        default=0.095,
+        description="Conversion rate from SEK to USD for electricity cost calculation",
+    )
+    tariff_aud_to_usd: float = Field(
+        default=0.65,
+        description="Conversion rate from AUD to USD for electricity cost calculation",
     )
 
     # Default carbon region (used by ingest loop if no per-job region specified)

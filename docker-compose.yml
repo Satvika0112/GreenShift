@@ -1,9 +1,20 @@
-version: "3.9"
-
 # GreenShift — Local Development / Demonstration Docker Compose
 # Runs all 5 GreenShift Agents + Dashboard
 
 services:
+  # ─── Redis Shared Cache (Carbon API) ─────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: greenshift-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
   # ─── FastAPI API ──────────────────────────────────────────────
   api:
     build:
@@ -15,17 +26,21 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=sqlite:////data/greenshift.db
+      - REDIS_URL=redis://redis:6379/0
+      - CARBON_CACHE_TTL_SECONDS=900
       - LOG_LEVEL=INFO
       - ENVIRONMENT=development
       - K8S_IN_CLUSTER=false
       - JOB_DATA_PATH=/app/data/greenshift_workloads_final.csv
-      - TARIFF_HT1_PATH=/app/data/telangana_tod_tariff_ht1a.csv
-      - TARIFF_HT2_PATH=/app/data/telangana_tod_tariff_ht2a.csv
+      - MASTER_TARIFF_DATASET=/app/data/master_tod_tariff_all_regions.csv
       - TARIFF_INR_TO_USD=0.012
     env_file:
       - .env
     volumes:
       - greenshift-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
       interval: 30s
@@ -45,10 +60,11 @@ services:
     environment:
       - GREENSHIFT_API_URL=http://api:8000
       - DATABASE_URL=sqlite:////data/greenshift.db
+      - REDIS_URL=redis://redis:6379/0
+      - CARBON_CACHE_TTL_SECONDS=900
       - LOG_LEVEL=INFO
       - JOB_DATA_PATH=/app/data/greenshift_workloads_final.csv
-      - TARIFF_HT1_PATH=/app/data/telangana_tod_tariff_ht1a.csv
-      - TARIFF_HT2_PATH=/app/data/telangana_tod_tariff_ht2a.csv
+      - MASTER_TARIFF_DATASET=/app/data/master_tod_tariff_all_regions.csv
       - TARIFF_INR_TO_USD=0.012
     env_file:
       - .env
@@ -68,10 +84,11 @@ services:
     container_name: greenshift-ingest
     environment:
       - DATABASE_URL=sqlite:////data/greenshift.db
+      - REDIS_URL=redis://redis:6379/0
+      - CARBON_CACHE_TTL_SECONDS=900
       - LOG_LEVEL=INFO
       - JOB_DATA_PATH=/app/data/greenshift_workloads_final.csv
-      - TARIFF_HT1_PATH=/app/data/telangana_tod_tariff_ht1a.csv
-      - TARIFF_HT2_PATH=/app/data/telangana_tod_tariff_ht2a.csv
+      - MASTER_TARIFF_DATASET=/app/data/master_tod_tariff_all_regions.csv
       - TARIFF_INR_TO_USD=0.012
     env_file:
       - .env
@@ -91,10 +108,11 @@ services:
     container_name: greenshift-scheduler
     environment:
       - DATABASE_URL=sqlite:////data/greenshift.db
+      - REDIS_URL=redis://redis:6379/0
+      - CARBON_CACHE_TTL_SECONDS=900
       - LOG_LEVEL=INFO
       - JOB_DATA_PATH=/app/data/greenshift_workloads_final.csv
-      - TARIFF_HT1_PATH=/app/data/telangana_tod_tariff_ht1a.csv
-      - TARIFF_HT2_PATH=/app/data/telangana_tod_tariff_ht2a.csv
+      - MASTER_TARIFF_DATASET=/app/data/master_tod_tariff_all_regions.csv
       - TARIFF_INR_TO_USD=0.012
     env_file:
       - .env
@@ -116,10 +134,17 @@ services:
       - DATABASE_URL=sqlite:////data/greenshift.db
       - LOG_LEVEL=INFO
       - K8S_IN_CLUSTER=false
+      - K8S_NAMESPACE=greenshift
+      - KUBECONFIG=/home/greenshift/.kube/config
     env_file:
       - .env
     volumes:
       - greenshift-data:/data
+      - ${USERPROFILE:-~}/.kube:/home/greenshift/.kube:ro
+      - ${USERPROFILE:-~}/.kube:/root/.kube:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "desktop-control-plane:host-gateway"
     depends_on:
       api:
         condition: service_healthy

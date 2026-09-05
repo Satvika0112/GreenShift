@@ -67,9 +67,10 @@
 
 | Source | Priority | Activation |
 |---|---|---|
-| CSV file | 1 (highest) | Set `CARBON_CSV_PATH` / `TARIFF_CSV_PATH` env vars |
-| Live API | 2 | Set `ELECTRICITY_MAPS_API_KEY` / `TARIFF_API_KEY` |
-| Mock (synthetic) | 3 (fallback) | Always available — no config needed |
+| Master Regional Tariff Dataset | 1 (highest) | `MASTER_TARIFF_DATASET=data/master_tod_tariff_all_regions.csv` (10 canonical regions: IN-TG, IN-GJ, IN-WB, IN-PB, US-CA, US-NY, US-TX, SE, AU-SA-Large, AU-SA-Small) |
+| Carbon Live API | 1 (primary) | Set `ELECTRICITY_MAPS_API_KEY` (Zone mapping: IN-SO, IN-WE, IN-NO, IN-EA) |
+| Carbon DB Cache | 2 (resilience) | Persistent database cache with TTL |
+| Mock / Fallback | 3 (fallback) | Controlled deterministic fallback when live data unavailable |
 
 ---
 

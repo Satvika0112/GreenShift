@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.ingest.data_sources import get_carbon_data, get_tariff_data, get_data_source_status
 from app.ingest.job_csv_loader import load_jobs_from_csv, get_job_csv_count
 from app.ingest.jobs import submit_job, get_job, list_jobs
+from app.ingest.regional_registry import list_supported_regions, resolve_region_id
 from app.shared.config import settings
 from app.shared.database import SessionLocal
 from app.shared.models import (
@@ -48,7 +49,8 @@ def fetch_and_store_carbon(
     Fetch carbon data via the resilience layer and persist to DB cache.
     Returns the list of CarbonDataPoint objects.
     """
-    points = get_carbon_data(region, start_time, end_time, db=db)
+    canonical_region = resolve_region_id(region)
+    points = get_carbon_data(canonical_region, start_time, end_time, db=db)
     now = utcnow()
     ttl = getattr(settings, "carbon_cache_ttl_seconds", 900)
     expires_at = now + timedelta(seconds=ttl)
@@ -74,7 +76,7 @@ def fetch_and_store_carbon(
             from app.trust.service import record_carbon_provenance
             record_carbon_provenance(
                 db=db,
-                region=region,
+                region=canonical_region,
                 carbon_intensity=sample.carbon_gco2_kwh,
                 source=sample.source,
                 cache_age_seconds=sample.cache_age_seconds,
@@ -84,7 +86,7 @@ def fetch_and_store_carbon(
         except Exception as exc:
             logger.debug("Audit provenance record skipped: %s", exc)
 
-    logger.info("Stored %d carbon data points for %s (source=%s, fallback=%s)", len(points), region, points[0].source if points else "n/a", points[0].is_fallback if points else False)
+    logger.info("Stored %d carbon data points for %s (source=%s, fallback=%s)", len(points), canonical_region, points[0].source if points else "n/a", points[0].is_fallback if points else False)
     return points
 
 
@@ -100,11 +102,12 @@ def fetch_and_store_tariff(
     Fetch tariff data and persist to DB cache.
     Returns the list of TariffDataPoint objects.
     """
+    canonical_region = resolve_region_id(region)
     from app.ingest.regional_tariff_loader import get_regional_tariff_curve
     # 1. Persist canonical regional records
     try:
         get_regional_tariff_curve(
-            region=region,
+            region=canonical_region,
             start_time=start_time,
             end_time=end_time,
             tariff_plan=tariff_plan,
@@ -115,7 +118,7 @@ def fetch_and_store_tariff(
         logger.debug("Canonical regional tariff persistence skipped: %s", exc)
 
     # 2. Standard TariffDataPoint points
-    points = get_tariff_data(region, start_time, end_time, job_type=job_type, tariff_plan=tariff_plan)
+    points = get_tariff_data(canonical_region, start_time, end_time, job_type=job_type, tariff_plan=tariff_plan)
     now = utcnow()
     for p in points:
         orm = TariffDataPointORM(
@@ -126,7 +129,7 @@ def fetch_and_store_tariff(
         )
         db.merge(orm)
     db.commit()
-    logger.info("Stored %d tariff data points for %s", len(points), region)
+    logger.info("Stored %d tariff data points for %s", len(points), canonical_region)
     return points
 
 
@@ -332,7 +335,6 @@ def run_ingest_loop() -> None:
         logger.info("No JOB_DATA_PATH configured — skipping initial CSV load")
 
     # ── Periodic refresh loop ─────────────────────────────────────
-    known_regions = {"IN-TG", "IN-GJ", "IN-HP", "IN-WB", "IN-SO", "IN-WE", "IN-NO", "IN-EA"}
     refresh_interval = 3600  # refresh hourly
 
     logger.info("Ingest service started — refreshing data every %ds", refresh_interval)
@@ -341,7 +343,8 @@ def run_ingest_loop() -> None:
         try:
             now = utcnow()
             window_end = now + timedelta(hours=48)
-            for region in known_regions:
+            for region_config in list_supported_regions():
+                region = region_config.region_id
                 try:
                     fetch_and_store_carbon(db, region, now, window_end)
                     fetch_and_store_tariff(db, region, now, window_end)

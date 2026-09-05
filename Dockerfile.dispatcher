@@ -4,7 +4,7 @@
 
 FROM python:3.11-slim AS base
 
-RUN groupadd -r greenshift && useradd -r -g greenshift greenshift
+RUN groupadd -r greenshift && useradd -r -m -g greenshift greenshift
 
 WORKDIR /app
 
@@ -13,8 +13,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
 
+# Setup kube directories for home and ensure permissions
+RUN mkdir -p /home/greenshift/.kube /root/.kube && \
+    chown -R greenshift:greenshift /home/greenshift/.kube
+
 USER greenshift
 
 ENV PYTHONUNBUFFERED=1
+ENV KUBECONFIG=/home/greenshift/.kube/config
 
 CMD ["python", "-m", "app.dispatch.service"]

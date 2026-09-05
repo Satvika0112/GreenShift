@@ -29,17 +29,18 @@ The GreenShift REST API is built with FastAPI and runs on port 8000. Interactive
 ```json
 {
   "carbon": {
-    "source": "api",
+    "source": "electricity_maps",
     "csv_path": null,
-    "api_key_set": true,
+    "api_available": true,
     "description": "Electricity Maps live API"
   },
   "tariff": {
-    "source": "telangana_tod_csv",
-    "csv_path": "/data/tariff/telangana_tod_tariff_ht1a.csv",
-    "api_key_set": false,
-    "description": "Indian Regional ToD tariff CSVs (INR->USD)",
-    "csv_format": "hour-based regional schema"
+    "source": "master_csv",
+    "dataset": "master_tod_tariff_all_regions.csv",
+    "dataset_path": "data/master_tod_tariff_all_regions.csv",
+    "status": "available",
+    "regions": ["IN-TG", "IN-GJ", "IN-WB", "IN-PB", "US-CA", "US-NY", "US-TX", "SE", "AU-SA-Large", "AU-SA-Small"],
+    "description": "Master Regional Tariff Dataset (master_tod_tariff_all_regions.csv) for global regions"
   }
 }
 ```

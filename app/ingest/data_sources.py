@@ -22,6 +22,7 @@ Hierarchy:
     2. Workload CSV dataset (JOB_DATA_PATH)
 """
 
+import csv
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -38,7 +39,7 @@ from app.ingest.carbon_api import (
 )
 from app.ingest.csv_carbon_loader import get_carbon_from_csv, csv_carbon_available
 from app.ingest.csv_tariff_loader import get_tariff_from_csv, csv_tariff_available
-from app.ingest.regional_registry import resolve_region_id, get_region_config
+from app.ingest.regional_registry import resolve_region_id, get_region_config, list_supported_regions
 from app.ingest.regional_tariff_loader import (
     get_tariff_data_points,
     get_regional_tariff_curve,
@@ -96,6 +97,10 @@ def get_tariff_data(
     3. Tariff API (TARIFF_API_KEY).
     4. Synthetic mock data.
     """
+    canonical_region = resolve_region_id(region)
+    # Validates region is supported; raises ValueError if unsupported
+    get_region_config(canonical_region)
+
     if start_time.tzinfo is None:
         start_time = start_time.replace(tzinfo=timezone.utc)
     if end_time.tzinfo is None:
@@ -104,7 +109,7 @@ def get_tariff_data(
     # 1. Regional Data Layer (Primary)
     try:
         regional_points = get_tariff_data_points(
-            region=region,
+            region=canonical_region,
             start_time=start_time,
             end_time=end_time,
             tariff_plan=tariff_plan,
@@ -116,27 +121,29 @@ def get_tariff_data(
                 len(regional_points),
                 min(p.price_per_kwh for p in regional_points),
                 max(p.price_per_kwh for p in regional_points),
-                region,
+                canonical_region,
             )
             return regional_points
+    except ValueError:
+        raise
     except Exception as exc:
-        logger.warning("Regional tariff loader exception for region %s: %s", region, exc)
+        logger.warning("Regional tariff loader exception for region %s: %s", canonical_region, exc)
 
     # 2. Legacy timestamp-based CSV
     tariff_path = os.environ.get("TARIFF_CSV_PATH", "")
     if tariff_path and csv_tariff_available(tariff_path):
-        csv_data = get_tariff_from_csv(region, start_time, end_time, csv_path=tariff_path)
+        csv_data = get_tariff_from_csv(canonical_region, start_time, end_time, csv_path=tariff_path)
         if csv_data:
             logger.info(
-                "Tariff data: timestamp CSV (%d points) for region=%s", len(csv_data), region
+                "Tariff data: timestamp CSV (%d points) for region=%s", len(csv_data), canonical_region
             )
             return csv_data
 
     # 3/4. API or mock
-    data = _api_tariff_curve(region, start_time, end_time)
+    data = _api_tariff_curve(canonical_region, start_time, end_time)
     tariff_key = os.environ.get("TARIFF_API_KEY", settings.tariff_api_key)
     source = "tariff API" if tariff_key else "synthetic mock"
-    logger.info("Tariff data: %s (%d points) for region=%s", source, len(data), region)
+    logger.info("Tariff data: %s (%d points) for region=%s", source, len(data), canonical_region)
     return data
 
 
@@ -200,32 +207,64 @@ def get_data_source_status(db: Optional[Session] = None) -> Dict[str, Any]:
         fallback_reason = "Electricity Maps API unavailable, no valid cache, no carbon CSV"
 
     # ── Tariff source ──────────────────────────────────────────────
+    from app.ingest.regional_tariff_loader import get_master_tariff_path
+    from app.shared.tariff_service import get_available_regions
+    master_path = get_master_tariff_path()
+    master_available = bool(master_path and Path(master_path).exists())
     categories = tariff_categories_loaded()
+
     if tariff_path and csv_tariff_available(tariff_path):
         tariff_source = "csv"
-        tariff_desc   = "User-provided timestamp tariff CSV"
-    elif (ht1_path and Path(ht1_path).exists()) or (ht2_path and Path(ht2_path).exists()):
-        tariff_source = "telangana_tod_csv"
-        tariff_desc   = "Authoritative Indian Regional ToD & Flat Tariff CSVs (Telangana, Gujarat, Himachal Pradesh, West Bengal)"
+        tariff_dataset = Path(tariff_path).name
+        tariff_desc = "User-provided timestamp tariff CSV"
+        tariff_status = "available"
+    elif master_available:
+        tariff_source = "master_csv"
+        tariff_dataset = Path(master_path).name
+        avail_regs = ", ".join(get_available_regions())
+        tariff_desc = f"Master Regional Tariff Dataset ({tariff_dataset}) for {avail_regs}"
+        tariff_status = "available"
     elif tariff_key:
         tariff_source = "api"
-        tariff_desc   = "Tariff live API"
+        tariff_dataset = None
+        tariff_desc = "Tariff live API"
+        tariff_status = "available"
     else:
         tariff_source = "mock"
-        tariff_desc   = "Synthetic ToU mock data (no real tariff configured)"
+        tariff_dataset = None
+        tariff_desc = "Synthetic ToU mock data (no real tariff configured)"
+        tariff_status = "fallback"
 
     # ── Job source ─────────────────────────────────────────────────
     jobs_loaded = 0
+    detected_regions = []
+    supported_regions_in_dataset = []
     if job_csv_path and os.path.exists(job_csv_path):
         filename = Path(job_csv_path).name
-        job_source = filename if filename else "greenshift_workloads_final.csv"
+        job_source = "csv"
+        job_dataset = filename
         job_desc   = f"Real workloads CSV dataset ({job_csv_path})"
         jobs_loaded = get_job_csv_count(job_csv_path)
+        job_status = "available" if jobs_loaded > 0 else "empty"
+        try:
+            with open(job_csv_path, newline="", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                regs = {r.get("region") for r in reader if r.get("region")}
+                from app.ingest.regional_registry import is_supported_region
+                detected_regions = sorted(list(regs))
+                supported_regions_in_dataset = sorted([r for r in regs if is_supported_region(r)])
+        except Exception:
+            pass
     else:
         job_source = "api_only"
+        job_dataset = None
         job_desc   = "Jobs submitted via API only (no CSV configured)"
+        job_status = "unavailable"
 
     regional_inventory = get_regional_tariff_inventory()
+
+    from app.shared.carbon_cache import is_redis_available
+    redis_live = is_redis_available()
 
     return {
         "carbon": {
@@ -234,7 +273,8 @@ def get_data_source_status(db: Optional[Session] = None) -> Dict[str, Any]:
             "api_available":          api_available,
             "api_key_configured":     bool(em_key),
             "api_simulated_down":     api_sim_down,
-            "cache_available":        cache_available,
+            "redis_available":        redis_live,
+            "cache_available":        cache_available or redis_live,
             "cache_fresh":            is_fresh,
             "cache_age_seconds":      cache_age,
             "cache_ttl_seconds":      getattr(settings, "carbon_cache_ttl_seconds", 900),
@@ -245,9 +285,11 @@ def get_data_source_status(db: Optional[Session] = None) -> Dict[str, Any]:
         },
         "tariff": {
             "source":              tariff_source,
+            "dataset":             tariff_dataset if master_available else (tariff_dataset or None),
+            "dataset_path":        master_path if master_available else None,
             "description":         tariff_desc,
-            "ht1_path":            ht1_path or None,
-            "ht2_path":            ht2_path or None,
+            "status":              tariff_status,
+            "regions":             get_available_regions() if master_available else ["IN-TG", "IN-GJ", "IN-HP", "IN-WB"],
             "api_key_configured":  bool(tariff_key),
             "categories_loaded":   categories,
             "inr_to_usd_rate":     float(os.environ.get(
@@ -255,13 +297,17 @@ def get_data_source_status(db: Optional[Session] = None) -> Dict[str, Any]:
             )),
         },
         "jobs": {
-            "source":       job_source,
-            "description":  job_desc,
-            "csv_path":     job_csv_path or None,
-            "jobs_loaded":  jobs_loaded,
+            "source":                      job_source,
+            "dataset":                     job_dataset,
+            "description":                 job_desc,
+            "csv_path":                    job_csv_path or None,
+            "jobs_loaded":                 jobs_loaded,
+            "status":                      job_status,
+            "detected_regions":            detected_regions,
+            "supported_regions_in_dataset": supported_regions_in_dataset,
         },
         "regional": {
-            "supported_regions": ["IN-TG", "IN-GJ", "IN-HP", "IN-WB"],
+            "supported_regions": [r.region_id for r in list_supported_regions()],
             "plans_count": len(regional_inventory),
             "inventory": regional_inventory,
         },

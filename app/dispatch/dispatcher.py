@@ -112,7 +112,12 @@ def dispatch_job(db: Session, job: JobORM) -> KubernetesExecutionORM:
     except Exception as exc:
         logger.warning("Audit record failed for job %s creation: %s", job.job_id, exc)
 
-    logger.info("Kubernetes Job %s created — GreenShift status: QUEUED", k8s_name)
+    from app.shared.timezone import format_regional_time
+    local_display = format_regional_time(decision.selected_start, region=job.region)
+    logger.info(
+        "Kubernetes Job %s created — GreenShift status: QUEUED | UTC: %s | Local (%s): %s",
+        k8s_name, decision.selected_start.strftime("%Y-%m-%d %H:%M UTC"), job.region, local_display,
+    )
     return execution
 
 

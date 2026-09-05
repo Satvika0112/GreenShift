@@ -102,55 +102,36 @@ timestamp,region,carbon_gco2_kwh
 
 ---
 
-## 2. Electricity Tariff CSV
+## 2. Master Regional Tariff Dataset
 
-### Required Columns
+GreenShift uses a single master regional tariff dataset containing tariff information across 10 canonical global regions (`data/master_tod_tariff_all_regions.csv`).
+
+### Master Dataset Schema
 
 | Column | Description | Example |
 |---|---|---|
-| `timestamp` | UTC datetime | `2026-08-18T00:00:00+05:30` |
-| `region` | Grid zone code | `IN-WE` |
-| `price_per_kwh` | Price in USD/kWh or INR/kWh | `0.0552` or `4.6` |
+| `Time` | Hourly time block | `00:00-01:00` |
+| `Time_of_day` | Time-of-Day block indicator | `Night`, `Normal`, `Solar`, `Peak`, `Off-Peak`, `Flat (No ToD)` |
+| `Base_charge` | Base energy charge (in regional currency) | `7.65`, `4.00`, `0.18`, `0.35` |
+| `Adder_charge` | ToD surcharge or rebate (in regional currency) | `0.0`, `-0.5`, `0.45`, `0.10` |
+| `Effective_price`| Effective electricity rate (in regional currency) | `7.15`, `7.65`, `0.28`, `0.45` |
+| `Region` | Regional grid identifier | `IN-TG`, `IN-GJ`, `IN-WB`, `IN-PB`, `US-CA`, `US-NY`, `US-TX`, `SE`, `AU-SA-Large`, `AU-SA-Small` |
+| `Currency` | Currency denomination | `INR`, `USD`, `SEK`, `AUD` |
+| `Tariff_type` | Tariff model | `ToD`, `Flat` |
+| `Season` | Tariff applicability period | `All-Year`, `Summer`, `Winter` |
 
-> **INR Auto-Conversion:** If price values exceed 1.0, GreenShift assumes they are in
-> Indian Rupees (INR) and converts using `TARIFF_INR_TO_USD` (default: 0.012).
-> Example: 4.6 INR/kWh × 0.012 = 0.0552 USD/kWh.
+### Supported Regions
 
-### Accepted Header Variations
-
-| Field | Accepted Names |
-|---|---|
-| Price | `price_per_kwh`, `tariff_per_kwh`, `electricity_price`, `price`, `tariff`, `cost_per_kwh`, `inr_per_kwh`, `grid_price_per_kwh`, `rate_per_kwh`, `rupees_per_kwh` |
-
-### Example Tariff CSV (Indian ToU rates in INR/kWh)
-
-```csv
-timestamp,region,price_per_kwh
-2026-08-18T00:00:00+00:00,IN-WE,4.20
-2026-08-18T01:00:00+00:00,IN-WE,4.10
-2026-08-18T02:00:00+00:00,IN-WE,4.05
-2026-08-18T03:00:00+00:00,IN-WE,4.00
-2026-08-18T04:00:00+00:00,IN-WE,4.00
-2026-08-18T05:00:00+00:00,IN-WE,4.10
-2026-08-18T06:00:00+00:00,IN-WE,5.50
-2026-08-18T07:00:00+00:00,IN-WE,6.80
-2026-08-18T08:00:00+00:00,IN-WE,7.20
-2026-08-18T09:00:00+00:00,IN-WE,7.10
-2026-08-18T10:00:00+00:00,IN-WE,6.90
-2026-08-18T11:00:00+00:00,IN-WE,6.70
-2026-08-18T12:00:00+00:00,IN-WE,6.50
-2026-08-18T13:00:00+00:00,IN-WE,6.40
-2026-08-18T14:00:00+00:00,IN-WE,6.30
-2026-08-18T15:00:00+00:00,IN-WE,6.20
-2026-08-18T16:00:00+00:00,IN-WE,6.50
-2026-08-18T17:00:00+00:00,IN-WE,8.00
-2026-08-18T18:00:00+00:00,IN-WE,9.50
-2026-08-18T19:00:00+00:00,IN-WE,9.80
-2026-08-18T20:00:00+00:00,IN-WE,9.20
-2026-08-18T21:00:00+00:00,IN-WE,8.50
-2026-08-18T22:00:00+00:00,IN-WE,6.00
-2026-08-18T23:00:00+00:00,IN-WE,4.50
-```
+1. **Telangana (`IN-TG`)**: Time-of-Day tariff with Night rebate, Solar hours, and Evening Peak (INR).
+2. **Gujarat (`IN-GJ`)**: Time-of-Day tariff with Morning/Evening Peak and Solar rebate (INR).
+3. **West Bengal (`IN-WB`)**: Time-of-Day tariff with Off-Peak night rebate, Normal daytime, and Evening Peak (INR).
+4. **Punjab (`IN-PB`)**: Time-of-Day tariff with Off-Peak and Peak rates (INR).
+5. **California (`US-CA`)**: Seasonal Time-of-Day tariff with Summer/Winter Peak and Off-Peak (USD).
+6. **New York (`US-NY`)**: Time-of-Day tariff with Peak and Off-Peak pricing (USD).
+7. **Texas (`US-TX`)**: Dynamic/Time-of-Day tariff (USD).
+8. **Sweden (`SE`)**: Nord Pool Time-of-Day pricing (SEK).
+9. **South Australia Large (`AU-SA-Large`)**: Time-of-Day tariff for large commercial/industrial loads (AUD).
+10. **South Australia Small (`AU-SA-Small`)**: Time-of-Day tariff for small/medium loads (AUD).
 
 ---
 

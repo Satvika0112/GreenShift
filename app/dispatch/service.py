@@ -101,9 +101,17 @@ def run_dispatch_loop() -> None:
             time.sleep(4)
     else:
         logger.error("Database never became ready after 15 attempts — exiting")
-        return
+    # Verify Kubernetes connectivity at startup
+    from app.dispatch.kubernetes_client import check_kubernetes_available
+    try:
+        if check_kubernetes_available():
+            logger.info("Kubernetes connection successful")
+        else:
+            logger.warning("Kubernetes connection failed: API unreachable or health check timed out")
+    except Exception as exc:
+        logger.warning("Kubernetes connection failed: %s", exc)
 
-    poll_interval = settings.dispatcher_poll_interval_seconds
+    poll_interval = getattr(settings, "dispatch_poll_seconds", settings.dispatcher_poll_interval_seconds)
     logger.info("DISPATCH service started — polling every %ds", poll_interval)
     while True:
         db = SessionLocal()

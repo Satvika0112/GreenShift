@@ -17,7 +17,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY data/ ./data/
 
-# Switch to non-root
+# Create persistent data directory and give permissions
+RUN mkdir -p /data && chown -R greenshift:greenshift /data /app
+
+# Switch to non-root user
 USER greenshift
 
 # Health check

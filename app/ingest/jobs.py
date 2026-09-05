@@ -10,6 +10,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from app.shared.models import JobORM, JobStatus, JobSubmitRequest
+from app.shared.timezone import normalize_to_utc
 from app.shared.utils import generate_job_id, utcnow
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,15 @@ def submit_job(db: Session, request: JobSubmitRequest) -> JobORM:
     # Use provided job_id (CSV dataset) or generate a new one
     job_id = request.job_id if request.job_id else generate_job_id()
     now = utcnow()
+    req_tz = getattr(request, "timezone", None)
+    submitted_at_raw = request.submit_time if request.submit_time else now
+    submitted_at = normalize_to_utc(submitted_at_raw, region=request.region, timezone_name=req_tz)
+    deadline = normalize_to_utc(request.deadline, region=request.region, timezone_name=req_tz)
+    earliest_start_time = (
+        normalize_to_utc(request.earliest_start_time, region=request.region, timezone_name=req_tz)
+        if request.earliest_start_time
+        else None
+    )
 
     # Calculate energy_kwh if not provided:
     # Formula: energy_kwh = power_kw × (runtime_minutes / 60)
@@ -43,8 +53,8 @@ def submit_job(db: Session, request: JobSubmitRequest) -> JobORM:
     job = JobORM(
         job_id               = job_id,
         team_id              = request.team_id,
-        submitted_at         = now,
-        deadline             = request.deadline,
+        submitted_at         = submitted_at,
+        deadline             = deadline,
         runtime_minutes      = request.runtime_minutes,
         power_kw             = request.power_kw,
         region               = request.region,
@@ -56,7 +66,7 @@ def submit_job(db: Session, request: JobSubmitRequest) -> JobORM:
         # Real-dataset fields
         job_type             = request.job_type,
         priority             = request.priority,
-        earliest_start_time  = request.earliest_start_time,
+        earliest_start_time  = earliest_start_time,
         energy_kwh           = round(energy_kwh, 6),
         deferrable           = request.deferrable,
     )

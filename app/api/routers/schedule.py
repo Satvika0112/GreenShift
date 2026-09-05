@@ -33,6 +33,8 @@ def trigger_schedule(job_id: str, db: Session = Depends(get_db)):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    from app.shared.timezone import format_dual_time
+
     return {
         "job_id": decision.job_id,
         "selected_start": decision.selected_start.isoformat(),
@@ -55,4 +57,8 @@ def trigger_schedule(job_id: str, db: Session = Depends(get_db)):
         "cost_reduction_pct": decision.cost_reduction_pct,
         "scheduling_delay_hours": decision.scheduling_delay_hours,
         "sla_met": decision.sla_met,
+        "time_details": {
+            "selected_start": format_dual_time(decision.selected_start, region=decision.region_id),
+            "selected_end": format_dual_time(decision.selected_end, region=decision.region_id),
+        },
     }

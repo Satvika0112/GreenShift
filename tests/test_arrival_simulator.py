@@ -171,13 +171,16 @@ class TestDynamicArrivalSimulator:
         assert summary.total_jobs == 0
         assert summary.jobs_released == 0
 
-    def test_real_dataset_simulation_with_max_jobs(self, db_session):
+    def test_real_dataset_simulation_with_max_jobs(self, db_session, monkeypatch):
+        monkeypatch.setenv("SIMULATE_CARBON_API_DOWN", "true")
         # Run real dataset with max_jobs=5 and auto_schedule=True
+        # With 10 supported regions (including IN-TG, IN-PB, US-CA), all 5 jobs succeed
         config = SimulationConfig(
             dataset_path="data/greenshift_workloads_final.csv",
             simulation_speed=0,
             max_jobs=5,
             auto_schedule=True,
+            reanchor_historical=True,
         )
 
         sim = DynamicArrivalSimulator(config=config, db=db_session)
@@ -189,7 +192,7 @@ class TestDynamicArrivalSimulator:
         assert summary.jobs_submitted_successfully == 5
         assert summary.jobs_failed == 0
 
-        # Verify DB records and ScheduleDecisions were actually created
+        # Verify DB records and ScheduleDecisions for supported jobs
         for j_rec in sim.jobs:
             job = db_session.get(JobORM, j_rec.job_id)
             assert job is not None

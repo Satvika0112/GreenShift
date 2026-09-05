@@ -40,39 +40,22 @@ logger = logging.getLogger(__name__)
 REQUIRED_COLUMNS = {
     "job_id", "job_type", "team", "priority", "region",
     "submit_time", "earliest_start_time", "deadline",
-    "runtime_hours", "power_kw", "energy_kwh", "slack_hours",
-    "deferrable", "container_image", "cpu_request", "memory_request",
+    "runtime_hours", "power_kw", "deferrable",
+    "container_image", "cpu_request", "memory_request",
     "carbon_budget_kg",
 }
 
 
-def _parse_timestamp(value: str) -> Optional[datetime]:
-    """Parse an ISO-8601 / common datetime string to UTC-aware datetime."""
+from app.shared.timezone import normalize_to_utc
+
+
+def _parse_timestamp(value: str, region: Optional[str] = None, timezone_name: Optional[str] = None) -> Optional[datetime]:
+    """Parse an ISO-8601 / common datetime string to UTC-aware datetime using IANA timezone normalization."""
     if not value or value.strip() in ("", "None", "nan", "NaT"):
         return None
-    value = value.strip()
-    formats = [
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%dT%H:%M:%S.%f%z",
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-    ]
-    for fmt in formats:
-        try:
-            dt = datetime.strptime(value, fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
-        except ValueError:
-            continue
     try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except ValueError:
+        return normalize_to_utc(value, region=region, timezone_name=timezone_name)
+    except Exception:
         return None
 
 
@@ -105,6 +88,7 @@ def _reanchor_to_future(
 def load_jobs_from_csv(
     csv_path: str,
     reanchor_historical: bool = True,
+    validate_regions: bool = False,
 ) -> Tuple[List[Dict], List[str]]:
     """
     Load and validate workload jobs from a CSV file.
@@ -114,6 +98,7 @@ def load_jobs_from_csv(
         reanchor_historical: If True, re-anchor past deadlines to current time
                              preserving slack_hours. If False, keep original
                              timestamps (useful for testing/reporting).
+        validate_regions:    If True, filter out jobs with unsupported regions.
 
     Returns:
         (valid_jobs, validation_errors)
@@ -157,14 +142,26 @@ def load_jobs_from_csv(
                     validation_errors.append(f"Row {row_num}: missing job_id — skipped")
                     continue
 
-                # ── Parse timestamps ──────────────────────────────────────
+                # ── Parse region and validate if requested ────────────────
+                region = get(row, "region") or "IN-SO"
+                if validate_regions:
+                    from app.ingest.regional_registry import is_supported_region
+                    if not is_supported_region(region):
+                        validation_errors.append(
+                            f"Row {row_num} ({job_id}): region '{region}' is unsupported. "
+                            f"(No tariff profile present in master_tod_tariff_all_regions.csv) — skipped"
+                        )
+                        continue
+
+                # ── Parse timestamps with region-aware IANA normalization ─
                 submit_time_raw    = get(row, "submit_time")
                 earliest_start_raw = get(row, "earliest_start_time")
                 deadline_raw       = get(row, "deadline")
+                row_tz             = get(row, "timezone") or None
 
-                submit_time    = _parse_timestamp(submit_time_raw)
-                earliest_start = _parse_timestamp(earliest_start_raw)
-                deadline       = _parse_timestamp(deadline_raw)
+                submit_time    = _parse_timestamp(submit_time_raw, region=region, timezone_name=row_tz)
+                earliest_start = _parse_timestamp(earliest_start_raw, region=region, timezone_name=row_tz)
+                deadline       = _parse_timestamp(deadline_raw, region=region, timezone_name=row_tz)
 
                 if submit_time is None:
                     validation_errors.append(
@@ -226,9 +223,10 @@ def load_jobs_from_csv(
                     )
 
                 try:
-                    slack_hours = float(get(row, "slack_hours"))
+                    slack_hours_raw = float(get(row, "slack_hours"))
+                    slack_hours = slack_hours_raw if slack_hours_raw > 0 else round(max(0.0, (deadline - earliest_start).total_seconds() / 3600.0 - runtime_hours), 4)
                 except ValueError:
-                    slack_hours = 2.0
+                    slack_hours = round(max(0.0, (deadline - earliest_start).total_seconds() / 3600.0 - runtime_hours), 4)
 
                 try:
                     carbon_budget_kg_raw = get(row, "carbon_budget_kg")

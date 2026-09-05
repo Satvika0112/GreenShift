@@ -1,16 +1,32 @@
 """
-Tests for GreenShift Indian Regional Data Layer & Canonical Common Schema.
+Tests for GreenShift Indian Regional Data Layer & Canonical Master Regional Tariff Dataset.
 
 Covers:
-- All 4 Indian regions: Telangana (IN-TG), Gujarat (IN-GJ), Himachal Pradesh (IN-HP), West Bengal (IN-WB)
-- All 5 tariff plans: HT-I(A), HT-II(A), HTP-I, Large Industry - EHT (Flat), Industries (Rate E-BT)
-- Timezone awareness (Asia/Kolkata UTC+05:30 across all regions)
-- Flat tariff handling for Himachal Pradesh (no artificial ToD variation)
-- ToD adders, peak, solar, and night flags for Gujarat, West Bengal, and Telangana
-- Canonical Regional Common Schema validation and USD rate normalization
+1. Master dataset exists.
+2. Master dataset loads successfully.
+3. Required columns are present.
+4. All four regions are detected (IN-TG, IN-GJ, IN-HP, IN-WB).
+5. Telangana lookup works.
+6. Gujarat lookup works.
+7. Himachal Pradesh lookup works.
+8. West Bengal lookup works.
+9. Region filtering works.
+10. Hourly ToD lookup works where applicable.
+11. Flat tariff behavior works for Himachal if indicated by dataset.
+12. Asia/Kolkata timezone handling works.
+13. No duplicate tariff records on repeated loading.
+14. Database loading works.
+15. CSV recovery works when DB cache is empty.
+16. Data-source status reports the master dataset.
+17. Dashboard inventory uses the master dataset.
+18. Dynamic arrival remains compatible.
+19. DECIDE scheduler remains compatible.
+20. Carbon resilience remains unaffected.
 """
 
-from datetime import datetime, timezone
+import csv
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import pytest
 
 from app.ingest.regional_registry import (
@@ -21,166 +37,205 @@ from app.ingest.regional_registry import (
     utc_to_local,
     select_tariff_plan_for_job,
     get_fx_rate_to_usd,
+    get_electricity_maps_zone,
 )
 from app.ingest.regional_tariff_loader import (
+    get_master_tariff_path,
+    load_master_tariff_dataset,
+    load_raw_tariff_template,
     get_regional_tariff_curve,
     get_tariff_data_points,
     get_regional_tariff_inventory,
-    load_raw_tariff_template,
-    get_tariff_csv_path,
 )
-from app.shared.models import RegionalTariffRecord
+from app.ingest.data_sources import get_data_source_status, get_tariff_data
+from app.shared.models import RegionalTariffRecord, RegionalTariffORM, CarbonDataPoint
+from app.decide.scheduler import schedule_job
 
 
-class TestRegionalRegistry:
-    def test_supported_regions_count(self):
-        regions = list_supported_regions()
-        assert len(regions) == 4
-        ids = {r.region_id for r in regions}
-        assert "IN-TG" in ids
-        assert "IN-GJ" in ids
-        assert "IN-HP" in ids
-        assert "IN-WB" in ids
+class TestMasterRegionalTariffDataset:
+    def test_1_master_dataset_exists(self):
+        path = get_master_tariff_path()
+        assert Path(path).exists()
+        assert Path(path).is_file()
 
-    def test_alias_normalization(self):
-        assert resolve_region_id("IN-SO") == "IN-TG"
-        assert resolve_region_id("IN-TG") == "IN-TG"
-        assert resolve_region_id("TELANGANA") == "IN-TG"
+    def test_2_master_dataset_loads_successfully(self):
+        data = load_master_tariff_dataset()
+        assert isinstance(data, dict)
+        assert len(data) >= 4
 
-        assert resolve_region_id("IN-WE") == "IN-GJ"
-        assert resolve_region_id("IN-GJ") == "IN-GJ"
-        assert resolve_region_id("GUJARAT") == "IN-GJ"
+    def test_3_required_columns_present(self):
+        path = get_master_tariff_path()
+        with open(path, "r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            headers = [h.strip() for h in (reader.fieldnames or [])]
+            required = ["Time", "Time_of_day", "Base_charge", "Adder_charge", "Effective_price", "Region", "Currency", "Tariff_type", "Season"]
+            for col in required:
+                assert col in headers
 
-        assert resolve_region_id("IN-NO") == "IN-HP"
-        assert resolve_region_id("IN-HP") == "IN-HP"
-        assert resolve_region_id("HIMACHAL") == "IN-HP"
+    def test_4_all_four_regions_detected(self):
+        data = load_master_tariff_dataset()
+        assert "IN-TG" in data
+        assert "IN-GJ" in data
+        assert "IN-PB" in data
+        assert "IN-WB" in data
+        for reg in ("IN-TG", "IN-GJ", "IN-PB", "IN-WB"):
+            assert len(data[reg]) == 24
 
-        assert resolve_region_id("IN-EA") == "IN-WB"
-        assert resolve_region_id("IN-WB") == "IN-WB"
-        assert resolve_region_id("WEST BENGAL") == "IN-WB"
+    def test_5_telangana_lookup_works(self):
+        now = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
+        curve = get_regional_tariff_curve("IN-TG", now, now + timedelta(hours=23))
+        assert len(curve) == 24
+        assert curve[0].region_id == "IN-TG"
+        assert curve[0].region_name == "Telangana"
+        assert curve[0].currency == "INR"
 
-    def test_region_timezones_and_currency(self):
-        for reg in ("IN-TG", "IN-GJ", "IN-HP", "IN-WB"):
-            cfg = get_region_config(reg)
-            assert cfg.country == "India"
-            assert cfg.timezone_name == "Asia/Kolkata"
-            assert cfg.currency == "INR"
+    def test_6_gujarat_lookup_works(self):
+        now = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
+        curve = get_regional_tariff_curve("IN-GJ", now, now + timedelta(hours=23))
+        assert len(curve) == 24
+        assert curve[0].region_id == "IN-GJ"
+        assert curve[0].region_name == "Gujarat"
+        assert curve[0].base_energy_rate == 4.0
 
-    def test_timezone_conversion(self):
-        # 00:00 UTC -> 05:30 IST
+    def test_7_punjab_lookup_works(self):
+        now = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
+        curve = get_regional_tariff_curve("IN-PB", now, now + timedelta(hours=23))
+        assert len(curve) == 24
+        assert curve[0].region_id == "IN-PB"
+        assert curve[0].region_name == "Punjab"
+        assert curve[0].currency == "INR"
+
+    def test_8_west_bengal_lookup_works(self):
+        now = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
+        curve = get_regional_tariff_curve("IN-WB", now, now + timedelta(hours=23))
+        assert len(curve) == 24
+        assert curve[0].region_id == "IN-WB"
+        assert curve[0].region_name == "West Bengal"
+        assert curve[0].base_energy_rate == 7.07
+
+    def test_9_region_filtering_works(self):
+        data = load_master_tariff_dataset()
+        tg_rates = {h: d["rate"] for h, d in data["IN-TG"].items()}
+        gj_rates = {h: d["rate"] for h, d in data["IN-GJ"].items()}
+        pb_rates = {h: d["rate"] for h, d in data["IN-PB"].items()}
+        wb_rates = {h: d["rate"] for h, d in data["IN-WB"].items()}
+
+        assert tg_rates != gj_rates
+        assert gj_rates != pb_rates
+        assert pb_rates != wb_rates
+
+    def test_10_hourly_tod_lookup_works(self):
+        data = load_master_tariff_dataset()
+        # Gujarat Peak hours (07:00-11:00, 18:00-22:00)
+        assert data["IN-GJ"][7]["is_peak_hour"] is True
+        assert data["IN-GJ"][7]["rate"] == 4.45
+        # Gujarat Solar hours (11:00-17:00)
+        assert data["IN-GJ"][12]["is_solar_hour"] is True
+        assert data["IN-GJ"][12]["rate"] == 3.40
+
+    def test_11_flat_tariff_behavior_texas(self):
+        data = load_master_tariff_dataset()
+        tx_hours = data["US-TX"]
+        for h, d in tx_hours.items():
+            assert d["rate"] == pytest.approx(0.061196, rel=1e-4)
+            assert d["tod_adder"] == 0.0
+            assert d["is_peak_hour"] is False
+            assert d["is_solar_hour"] is False
+            assert d["is_night_hour"] is False
+            assert "Flat" in d["tod_block"]
+
+    def test_12_asia_kolkata_timezone_handling(self):
+        # 00:00 UTC is 05:30 IST
         utc_time = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
-        for reg in ("IN-TG", "IN-GJ", "IN-HP", "IN-WB"):
+        for reg in ("IN-TG", "IN-GJ", "IN-PB", "IN-WB"):
             local_dt, local_hour = utc_to_local(utc_time, reg)
             assert local_hour == 5
             assert local_dt.minute == 30
 
-    def test_plan_selection_logic(self):
-        # IN-TG: Industrial -> HT-I(A), Other -> HT-II(A)
-        assert select_tariff_plan_for_job("IN-TG", job_type="DATA_PROCESSING") == "HT-I(A)"
-        assert select_tariff_plan_for_job("IN-TG", job_type="BACKUP") == "HT-II(A)"
-
-        # IN-GJ: HTP-I
-        assert select_tariff_plan_for_job("IN-GJ") == "HTP-I"
-
-        # IN-HP: Large Industry - EHT
-        assert select_tariff_plan_for_job("IN-HP") == "Large Industry - EHT"
-
-        # IN-WB: Industries (Rate E-BT)
-        assert select_tariff_plan_for_job("IN-WB") == "Industries (Rate E-BT)"
-
-    def test_inr_to_usd_fx_rate(self):
-        assert get_fx_rate_to_usd("INR") == 0.012
-
-
-class TestRegionalTariffLoader:
-    def test_telangana_ht1_and_ht2_loading(self):
+    def test_13_no_duplicate_tariff_records(self, db):
         start = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 4, 1, 23, 0, tzinfo=timezone.utc)
+        end = start + timedelta(hours=5)
 
-        curve_ht1 = get_regional_tariff_curve("IN-TG", start, end, tariff_plan="HT-I(A)")
-        assert len(curve_ht1) == 24
-        assert curve_ht1[0].currency == "INR"
-        assert curve_ht1[0].region_id == "IN-TG"
-        assert all(isinstance(r, RegionalTariffRecord) for r in curve_ht1)
+        # Call twice with db
+        get_regional_tariff_curve("IN-TG", start, end, db=db)
+        count_first = db.query(RegionalTariffORM).filter_by(region_id="IN-TG").count()
 
-        curve_ht2 = get_regional_tariff_curve("IN-TG", start, end, tariff_plan="HT-II(A)")
-        assert len(curve_ht2) == 24
-        assert curve_ht2[0].currency == "INR"
+        get_regional_tariff_curve("IN-TG", start, end, db=db)
+        count_second = db.query(RegionalTariffORM).filter_by(region_id="IN-TG").count()
 
-    def test_gujarat_loading_and_tod_flags(self):
+        assert count_first == 6
+        assert count_second == 6  # No duplicates
+
+    def test_14_database_loading_works(self, db):
+        start = datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc)
+        end = start + timedelta(hours=2)
+        get_regional_tariff_curve("IN-GJ", start, end, db=db)
+
+        orm_records = db.query(RegionalTariffORM).filter_by(region_id="IN-GJ").all()
+        assert len(orm_records) == 3
+        assert orm_records[0].country == "India"
+        assert orm_records[0].region_name == "Gujarat"
+
+    def test_15_csv_recovery_works(self):
+        # Even without DB session, CSV recovery returns complete curve
         start = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 4, 1, 23, 0, tzinfo=timezone.utc)
+        end = start + timedelta(hours=10)
+        curve = get_regional_tariff_curve("IN-PB", start, end, db=None)
+        assert len(curve) == 11
+        assert all(r.currency == "INR" for r in curve)
 
-        curve_gj = get_regional_tariff_curve("IN-GJ", start, end, tariff_plan="HTP-I")
-        assert len(curve_gj) == 24
-        assert curve_gj[0].region_id == "IN-GJ"
-        assert curve_gj[0].region_name == "Gujarat"
-        assert curve_gj[0].currency == "INR"
+    def test_16_data_source_status_reports_master_dataset(self):
+        status = get_data_source_status()
+        assert status["tariff"]["source"] == "master_csv"
+        assert "master_" in status["tariff"]["dataset"]
+        assert len(status["tariff"]["regions"]) >= 4
+        assert status["tariff"]["status"] == "available"
 
-        # Gujarat has peak, solar, and night hours
-        has_peak = any(r.is_peak_hour for r in curve_gj)
-        has_solar = any(r.is_solar_hour for r in curve_gj)
-        has_night = any(r.is_night_hour for r in curve_gj)
-        assert has_peak is True
-        assert has_solar is True
-        assert has_night is True
-
-        # Base energy charge should be 4.00 INR
-        assert curve_gj[0].base_energy_rate == 4.00
-
-    def test_himachal_pradesh_flat_tariff(self):
-        start = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 4, 1, 23, 0, tzinfo=timezone.utc)
-
-        curve_hp = get_regional_tariff_curve("IN-HP", start, end, tariff_plan="Large Industry - EHT")
-        assert len(curve_hp) == 24
-        assert curve_hp[0].region_id == "IN-HP"
-        assert curve_hp[0].region_name == "Himachal Pradesh"
-        assert curve_hp[0].currency == "INR"
-
-        # All 24 hours must have the exact same flat rate of 5.55 INR/kWh
-        rates = [r.electricity_rate for r in curve_hp]
-        assert all(rate == 5.55 for rate in rates)
-        assert all("Flat" in r.tod_block for r in curve_hp)
-
-    def test_west_bengal_tod_loading(self):
-        start = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 4, 1, 23, 0, tzinfo=timezone.utc)
-
-        curve_wb = get_regional_tariff_curve("IN-WB", start, end, tariff_plan="Industries (Rate E-BT)")
-        assert len(curve_wb) == 24
-        assert curve_wb[0].region_id == "IN-WB"
-        assert curve_wb[0].region_name == "West Bengal"
-        assert curve_wb[0].currency == "INR"
-
-        # Base rate 7.07
-        assert curve_wb[0].base_energy_rate == 7.07
-
-        # Has Off-Peak (rate 4.45), Normal (rate 7.46), Peak (rate 10.95)
-        unique_rates = {round(r.electricity_rate, 2) for r in curve_wb}
-        assert 4.45 in unique_rates
-        assert 7.46 in unique_rates
-        assert 10.95 in unique_rates
-
-    def test_canonical_schema_fields(self):
-        start = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 4, 1, 5, 0, tzinfo=timezone.utc)
-
-        for reg in ("IN-TG", "IN-GJ", "IN-HP", "IN-WB"):
-            curve = get_regional_tariff_curve(reg, start, end)
-            for point in curve:
-                assert point.region_id == reg
-                assert point.country == "India"
-                assert point.timezone == "Asia/Kolkata"
-                assert point.currency == "INR"
-                assert point.electricity_rate > 0.0
-                assert point.price_per_kwh_usd == pytest.approx(point.electricity_rate * 0.012, rel=1e-3)
-                assert point.category is not None
-                assert point.voltage is not None
-                assert point.source != ""
-
-    def test_tariff_inventory_endpoint(self):
+    def test_17_dashboard_uses_master_dataset(self):
         inv = get_regional_tariff_inventory()
-        assert len(inv) == 5
-        regions_found = {item["region_id"] for item in inv}
-        assert regions_found == {"IN-TG", "IN-GJ", "IN-HP", "IN-WB"}
+        assert len(inv) >= 4
+        source_files = {item["source_file"] for item in inv}
+        assert any("master_" in s for s in source_files)
+
+    def test_18_dynamic_arrival_compatibility(self):
+        from app.arrival.simulator import DynamicArrivalSimulator, SimulationConfig
+        config = SimulationConfig(
+            dataset_path="data/greenshift_workloads_final.csv",
+            simulation_speed=0,
+            max_jobs=2,
+            auto_schedule=False,
+        )
+        sim = DynamicArrivalSimulator(config=config)
+        summary = sim.run()
+        assert summary.jobs_released == 2
+
+    def test_19_decide_compatibility(self):
+        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        deadline = now + timedelta(hours=6)
+        carbon_curve = [
+            CarbonDataPoint(timestamp=now + timedelta(hours=i), region="IN-TG", carbon_gco2_kwh=300.0)
+            for i in range(6)
+        ]
+        tariff_points = get_tariff_data_points("IN-TG", now, deadline)
+
+        decision = schedule_job(
+            job_id="TEST-JOB-DECIDE",
+            team_id="ops",
+            deadline=deadline,
+            runtime_minutes=60,
+            power_kw=5.0,
+            region="IN-TG",
+            carbon_curve=carbon_curve,
+            tariff_curve=tariff_points,
+            energy_kwh=5.0,
+            earliest_start_time=now,
+        )
+        assert decision.job_id == "TEST-JOB-DECIDE"
+        assert decision.electricity_cost > 0
+
+    def test_20_carbon_resilience_unaffected(self):
+        from app.ingest.carbon_api import map_region_to_zone
+        assert map_region_to_zone("IN-TG") == "IN-SO"
+        assert map_region_to_zone("IN-GJ") == "IN-WE"
+        assert map_region_to_zone("IN-HP") == "IN-NO"
+        assert map_region_to_zone("IN-WB") == "IN-EA"

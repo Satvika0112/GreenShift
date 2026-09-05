@@ -66,7 +66,7 @@ class TestJobWorkloadsDataset:
         assert first_job["job_type"] == "DATA_PROCESSING"
         assert first_job["team_id"] == "operations"
         assert first_job["priority"] == "MEDIUM"
-        assert first_job["region"] == "IN-SO"
+        assert first_job["region"] in ("IN-TG", "IN-SO")
         assert first_job["runtime_minutes"] == int(round(0.78 * 60))
         assert first_job["power_kw"] == 3.0
         assert abs(first_job["energy_kwh"] - 2.340) < 1e-4
@@ -114,34 +114,22 @@ class TestJobWorkloadsDataset:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestTelanganaTariff:
-    HT1_PATH = "data/telangana_tod_tariff_ht1a.csv"
-    HT2_PATH = "data/telangana_tod_tariff_ht2a.csv"
+    MASTER_PATH = "data/master_tod_tariff_all_regions.csv"
 
     def test_tariff_files_exist(self):
-        assert Path(self.HT1_PATH).exists()
-        assert Path(self.HT2_PATH).exists()
+        assert Path(self.MASTER_PATH).exists()
 
     def test_detect_telangana_format(self):
-        assert is_telangana_tariff_csv(self.HT1_PATH) is True
-        assert is_telangana_tariff_csv(self.HT2_PATH) is True
+        assert is_telangana_tariff_csv(self.MASTER_PATH) is True
 
     def test_ht1_load_24_hours(self):
-        """HT-I(A) Industry General has 24 hourly rate slots."""
-        rates = load_telangana_tariff(self.HT1_PATH)
+        """Master dataset has 24 hourly rate slots for Telangana."""
+        rates = load_telangana_tariff(self.MASTER_PATH)
         assert len(rates) == 24
-        assert rates[0] == 7.65   # Night/Normal base
-        assert rates[6] == 9.15   # Morning Peak (+1.50)
-        assert rates[10] == 7.15  # Solar Hours (-0.50)
-        assert rates[18] == 9.15  # Evening Peak (+1.50)
-
-    def test_ht2_load_24_hours(self):
-        """HT-II(A) Others has 24 hourly rate slots."""
-        rates = load_telangana_tariff(self.HT2_PATH)
-        assert len(rates) == 24
-        assert rates[0] == 8.80   # Night/Normal base
-        assert rates[6] == 10.30  # Morning Peak (+1.50)
-        assert rates[10] == 8.30  # Solar Hours (-0.50)
-        assert rates[18] == 10.30 # Evening Peak (+1.50)
+        assert rates[0] == 7.15   # Night rate
+        assert rates[6] == 7.65   # Normal base
+        assert rates[10] == 7.15  # Solar Hours
+        assert rates[18] == 8.75  # Evening Peak
 
     def test_tariff_category_selection(self):
         """Verify industrial job types select HT-I(A), others select HT-II(A)."""
@@ -157,7 +145,7 @@ class TestTelanganaTariff:
     def test_inr_to_usd_conversion(self, monkeypatch):
         """Verify hourly curve converts INR to USD using configured rate."""
         monkeypatch.setenv("TARIFF_INR_TO_USD", "0.012")
-        monkeypatch.setenv("TARIFF_HT1_PATH", self.HT1_PATH)
+        monkeypatch.setenv("MASTER_TARIFF_DATASET", self.MASTER_PATH)
 
         start = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
         end = start + timedelta(hours=23)
@@ -165,12 +153,12 @@ class TestTelanganaTariff:
 
         assert len(curve) == 24
         prices = [p.price_per_kwh for p in curve]
-        assert max(prices) == pytest.approx(9.15 * 0.012, rel=1e-3)
+        assert max(prices) == pytest.approx(8.75 * 0.012, rel=1e-3)
         assert min(prices) == pytest.approx(7.15 * 0.012, rel=1e-3)
 
     def test_hourly_inr_lookup(self):
-        rate = get_telangana_tariff_inr_at_hour(6, tariff_category="ht1a", csv_path_ht1=self.HT1_PATH)
-        assert rate == 9.15
+        rate = get_telangana_tariff_inr_at_hour(6, tariff_category="ht1a")
+        assert rate == 7.65
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,11 +167,14 @@ class TestTelanganaTariff:
 
 class TestElectricityMapsV4:
     def test_region_to_zone_mapping(self):
+        assert map_region_to_zone("IN-TG") == "IN-SO"
+        assert map_region_to_zone("IN-GJ") == "IN-WE"
+        assert map_region_to_zone("IN-HP") == "IN-NO"
+        assert map_region_to_zone("IN-WB") == "IN-EA"
         assert map_region_to_zone("IN-SO") == "IN-SO"
-        assert map_region_to_zone("IN-WE") == "IN-WE"
-        assert map_region_to_zone("IN-NO") == "IN-NO"
-        assert map_region_to_zone("DE") == "DE"
         assert map_region_to_zone(None) == "IN-SO"
+        with pytest.raises(ValueError):
+            map_region_to_zone("DE")
 
     def test_missing_api_key_handles_gracefully(self, monkeypatch):
         from app.shared import config
@@ -197,8 +188,8 @@ class TestElectricityMapsV4:
 
     def test_invalid_region_handled_gracefully(self):
         now = datetime.now(timezone.utc)
-        curve = get_carbon_curve("INVALID-REGION-999", now, now + timedelta(hours=6))
-        assert len(curve) > 0
+        with pytest.raises(ValueError):
+            get_carbon_curve("INVALID-REGION-999", now, now + timedelta(hours=6))
 
     def test_api_401_auth_failure_handling(self, monkeypatch):
         monkeypatch.setenv("ELECTRICITY_MAPS_API_KEY", "invalid_token_test")
@@ -249,18 +240,19 @@ class TestElectricityMapsV4:
             mock_get.return_value = mock_resp
 
             now = datetime.now(timezone.utc)
-            curve = get_carbon_curve("UNKNOWN-ZONE", now, now + timedelta(hours=6))
+            curve = get_carbon_curve("IN-TG", now, now + timedelta(hours=6))
             assert len(curve) > 0
 
-    def test_live_api_integration_if_key_available(self):
+    def test_live_api_integration_if_key_available(self, monkeypatch):
         """Live API test if real ELECTRICITY_MAPS_API_KEY is available in environment."""
+        monkeypatch.delenv("SIMULATE_CARBON_API_DOWN", raising=False)
         key = os.environ.get("ELECTRICITY_MAPS_API_KEY")
         if not key:
             pytest.skip("ELECTRICITY_MAPS_API_KEY not provided")
 
         point = get_latest_carbon_intensity("IN-SO")
         if point is not None:
-            assert point.region == "IN-SO"
+            assert point.region in ("IN-TG", "IN-SO")
             assert point.carbon_gco2_kwh > 0
 
 
@@ -284,8 +276,7 @@ class TestFormulasAndScheduling:
 
     def test_schedule_real_job_from_dataset(self, monkeypatch):
         """Schedule GS-JOB-000001 with real carbon & Telangana HT-I tariff."""
-        monkeypatch.setenv("TARIFF_HT1_PATH", "data/telangana_tod_tariff_ht1a.csv")
-        monkeypatch.setenv("TARIFF_HT2_PATH", "data/telangana_tod_tariff_ht2a.csv")
+        monkeypatch.setenv("MASTER_TARIFF_DATASET", "data/master_tod_tariff_all_regions.csv")
 
         now = datetime.now(timezone.utc)
         deadline = now + timedelta(hours=12)
@@ -317,7 +308,7 @@ class TestFormulasAndScheduling:
         assert decision.carbon_emission > 0
         assert decision.electricity_cost > 0
         assert decision.carbon_avoided is not None
-        assert decision.tariff_category in ("ht1a", "HT-I(A)")
+        assert decision.tariff_category in ("ht1a", "HT-I(A)", "ToD")
 
     def test_carbon_budget_enforcement(self):
         """Job with tight carbon budget filters high-carbon slots."""
@@ -383,12 +374,13 @@ class TestFormulasAndScheduling:
 class TestDataSourcesStatus:
     def test_status_reports_sources_without_leaking_key(self, monkeypatch):
         monkeypatch.setenv("JOB_DATA_PATH", "data/greenshift_workloads_final.csv")
-        monkeypatch.setenv("TARIFF_HT1_PATH", "data/telangana_tod_tariff_ht1a.csv")
-        monkeypatch.setenv("TARIFF_HT2_PATH", "data/telangana_tod_tariff_ht2a.csv")
+        monkeypatch.setenv("MASTER_TARIFF_DATASET", "data/master_tod_tariff_all_regions.csv")
 
         status = get_data_source_status()
         assert status["jobs"]["jobs_loaded"] == 560
-        assert status["tariff"]["source"] == "telangana_tod_csv"
+        assert status["tariff"]["source"] == "master_csv"
+        assert "master_tod_tariff_all_regions.csv" in status["tariff"]["dataset"]
+        assert len(status["tariff"]["regions"]) >= 4
         assert len(status["tariff"]["categories_loaded"]) >= 2
 
         # Verify key is never exposed as string

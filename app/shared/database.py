@@ -9,7 +9,7 @@ import time
 import logging
 from typing import Generator
 
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import create_engine, text, inspect, event
 from sqlalchemy.orm import sessionmaker, Session
 
 from app.shared.config import settings
@@ -20,12 +20,25 @@ logger = logging.getLogger(__name__)
 
 engine = create_engine(
     settings.database_url,
-    # SQLite-specific: allow multi-threaded use
-    connect_args={"check_same_thread": False}
+    # SQLite-specific: allow multi-threaded use and set timeout
+    connect_args={"check_same_thread": False, "timeout": 30.0}
     if settings.database_url.startswith("sqlite")
     else {},
     echo=settings.log_level == "DEBUG",
 )
+
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    if settings.database_url.startswith("sqlite"):
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+        finally:
+            cursor.close()
+
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -105,6 +118,22 @@ def run_schema_migrations() -> None:
                 logger.info("Schema migration: added column %s.%s (%s)", table, column, col_type)
             except Exception as exc:
                 logger.debug("Migration skip %s.%s: %s", table, column, exc)
+
+        # Check and enforce unique index on audit_events (sequence)
+        try:
+            if insp.has_table("audit_events"):
+                indexes = insp.get_indexes("audit_events")
+                has_unique_seq = any(
+                    idx.get("unique") and "sequence" in idx.get("column_names", [])
+                    for idx in indexes
+                )
+                if not has_unique_seq:
+                    conn.execute(
+                        text("CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_events_sequence ON audit_events (sequence)")
+                    )
+                    logger.info("Schema migration: created unique index uq_audit_events_sequence on audit_events(sequence)")
+        except Exception as exc:
+            logger.debug("Migration skip unique index on audit_events.sequence: %s", exc)
 
 
 def init_db(max_retries: int = 15, delay_seconds: float = 2.0) -> None:

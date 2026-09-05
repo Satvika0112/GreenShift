@@ -11,6 +11,14 @@ from app.shared.models import Base, JobStatus
 from app.shared.config import settings
 
 
+@pytest.fixture(autouse=True)
+def default_simulate_carbon_api_down(monkeypatch):
+    """Ensure tests run deterministically and fast without external internet API calls by default."""
+    import os
+    if "SIMULATE_CARBON_API_DOWN" not in os.environ:
+        monkeypatch.setenv("SIMULATE_CARBON_API_DOWN", "true")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # In-memory SQLite database for tests
 # ─────────────────────────────────────────────────────────────────────────────

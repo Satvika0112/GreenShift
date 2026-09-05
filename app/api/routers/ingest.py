@@ -35,8 +35,12 @@ router = APIRouter()
 @router.post("/jobs", response_model=JobSubmitResponse, status_code=201)
 def submit_new_job(request: JobSubmitRequest, db: Session = Depends(get_db)):
     """Submit a new deferrable compute job."""
-    if request.deadline <= utcnow():
+    from app.shared.timezone import normalize_to_utc
+    req_tz = getattr(request, "timezone", None)
+    normalized_deadline = normalize_to_utc(request.deadline, region=request.region, timezone_name=req_tz)
+    if normalized_deadline <= utcnow():
         raise HTTPException(status_code=400, detail="Deadline must be in the future")
+    request.deadline = normalized_deadline
     job = ingest_job(db, request)
     return JobSubmitResponse(
         job_id=job.job_id,
@@ -71,8 +75,9 @@ def list_all_jobs(
 ):
     """List jobs, optionally filtered by team_id and/or status."""
     jobs = list_jobs(db, team_id=team_id, status=status, limit=limit)
-    return [
-        {
+    res = []
+    for j in jobs:
+        item = {
             "job_id": j.job_id,
             "team_id": j.team_id,
             "job_type": j.job_type,
@@ -90,9 +95,22 @@ def list_all_jobs(
             "cpu_request": j.cpu_request,
             "memory_request": j.memory_request,
             "carbon_budget_kg": j.carbon_budget_kg,
+            "selected_start": j.schedule_decision.selected_start.isoformat() if j.schedule_decision else None,
+            "selected_end": j.schedule_decision.selected_end.isoformat() if j.schedule_decision else None,
+            "carbon_intensity": j.schedule_decision.carbon_intensity if j.schedule_decision else None,
+            "carbon_emission": j.schedule_decision.carbon_emission if j.schedule_decision else None,
+            "electricity_cost": j.schedule_decision.electricity_cost if j.schedule_decision else None,
+            "native_cost": getattr(j.schedule_decision, "native_cost", None) if j.schedule_decision else None,
+            "currency": getattr(j.schedule_decision, "currency", "USD") if j.schedule_decision else "USD",
+            "kubernetes_job_name": j.kubernetes_execution.kubernetes_job_name if j.kubernetes_execution else None,
+            "kubernetes_namespace": j.kubernetes_execution.kubernetes_namespace if j.kubernetes_execution else None,
+            "k8s_status": j.kubernetes_execution.k8s_status if j.kubernetes_execution else None,
+            "pod_name": j.kubernetes_execution.pod_name if j.kubernetes_execution else None,
+            "actual_start": j.kubernetes_execution.actual_start.isoformat() if j.kubernetes_execution and j.kubernetes_execution.actual_start else None,
+            "actual_end": j.kubernetes_execution.actual_end.isoformat() if j.kubernetes_execution and j.kubernetes_execution.actual_end else None,
         }
-        for j in jobs
-    ]
+        res.append(item)
+    return res
 
 
 @router.get("/jobs/{job_id}")
@@ -177,6 +195,75 @@ def get_status(db: Session = Depends(get_db)):
 
 # ─── Regional Data Layer endpoints ────────────────────────────────────────────
 
+@router.get("/regions", response_model=List[dict])
+def list_regions_endpoint():
+    """
+    Return all supported regions with metadata, Electricity Maps zones,
+    and tariff plans.
+    """
+    from app.ingest.regional_registry import list_supported_regions
+    return [
+        {
+            "region_id": r.region_id,
+            "country": r.country,
+            "region_name": r.region_name,
+            "timezone": r.timezone_name,
+            "currency": r.currency,
+            "electricity_maps_zone": r.electricity_maps_zone,
+            "default_plan": r.default_plan,
+            "supported_tariff_plans": [
+                {
+                    "plan_id": p.plan_id,
+                    "display_name": p.display_name,
+                    "description": p.description,
+                    "is_industrial": p.is_industrial,
+                    "is_commercial": p.is_commercial,
+                    "is_flat": p.is_flat,
+                    "default_rate": p.default_rate,
+                }
+                for p in r.plans.values()
+            ],
+            "aliases": r.aliases,
+            "is_active": True,
+        }
+        for r in list_supported_regions()
+    ]
+
+
+@router.get("/regions/{region_id}", response_model=dict)
+def get_region_endpoint(region_id: str):
+    """Return resolved regional configuration for a given region or alias."""
+    from app.ingest.regional_registry import get_region_config
+    try:
+        r = get_region_config(region_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return {
+        "region_id": r.region_id,
+        "country": r.country,
+        "region_name": r.region_name,
+        "timezone": r.timezone_name,
+        "currency": r.currency,
+        "electricity_maps_zone": r.electricity_maps_zone,
+        "default_plan": r.default_plan,
+        "supported_tariff_plans": [
+            {
+                "plan_id": p.plan_id,
+                "display_name": p.display_name,
+                "description": p.description,
+                "is_industrial": p.is_industrial,
+                "is_commercial": p.is_commercial,
+                "is_flat": p.is_flat,
+                "default_rate": p.default_rate,
+            }
+            for p in r.plans.values()
+        ],
+        "aliases": r.aliases,
+        "is_active": True,
+    }
+
+
 @router.get("/regional/inventory", response_model=dict)
 def get_regional_inventory_endpoint():
     """Return supported regions, active plans, and data source mappings."""
@@ -214,18 +301,122 @@ def get_regional_tariff_endpoint(
     now = utcnow()
     start = start or now
     end = end or (now + timedelta(hours=24))
-    records = get_regional_tariff_curve(
-        region=region,
-        start_time=start,
-        end_time=end,
-        tariff_plan=tariff_plan,
-        job_type=job_type,
-        db=db,
-    )
+    try:
+        records = get_regional_tariff_curve(
+            region=region,
+            start_time=start,
+            end_time=end,
+            tariff_plan=tariff_plan,
+            job_type=job_type,
+            db=db,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {
         "region_id": region,
         "data": [r.model_dump(mode="json") for r in records],
     }
+
+
+# ─── Master ToD Tariff Endpoints ─────────────────────────────────────────────
+
+@router.get("/tariffs/regions", response_model=dict)
+def list_tariff_regions():
+    """List all available regions and their metadata from the master ToD tariff dataset."""
+    from app.shared.tariff_service import get_available_regions, get_currency_for_region
+    from app.shared.timezone import get_region_timezone_name
+
+    regions = []
+    for reg_id in get_available_regions():
+        tz = get_region_timezone_name(reg_id, default_tz="UTC")
+        curr = get_currency_for_region(reg_id)
+        regions.append({
+            "region": reg_id,
+            "region_id": reg_id,
+            "timezone": tz,
+            "currency": curr,
+        })
+    return {
+        "count": len(regions),
+        "regions": regions,
+    }
+
+
+@router.get("/tariffs/{region}", response_model=dict)
+def get_region_hourly_tariffs(
+    region: str,
+    season: Optional[str] = Query(None, description="Optional season filter (e.g. Summer, Winter)"),
+    date: Optional[datetime] = Query(None, description="Optional date for auto seasonal resolution (e.g. 2026-07-15T12:00:00Z)"),
+):
+    """Retrieve 24-hour tariff profile for a region from the master dataset."""
+    from app.shared.tariff_service import (
+        determine_season_for_region,
+        get_currency_for_region,
+        get_hourly_tariffs,
+        validate_region,
+    )
+    if not validate_region(region):
+        raise HTTPException(status_code=404, detail=f"Region '{region}' not found in master tariff dataset")
+
+    resolved_season = season
+    if not resolved_season and date is not None:
+        resolved_season = determine_season_for_region(region, date)
+
+    data = get_hourly_tariffs(region, season=resolved_season)
+    currency = get_currency_for_region(region)
+    active_season = data[0].get("season", "All-Year") if data else "All-Year"
+
+    return {
+        "region": region,
+        "region_id": region,
+        "currency": currency,
+        "season": resolved_season or active_season,
+        "tariffs": data,
+    }
+
+
+@router.get("/tariffs/{region}/current", response_model=dict)
+def get_current_tariff(
+    region: str,
+    timestamp: Optional[datetime] = Query(None, description="Optional UTC timestamp (defaults to current time)"),
+    season: Optional[str] = Query(None, description="Optional season override"),
+):
+    """
+    Retrieve active tariff for a region at the current or specified UTC timestamp,
+    correctly converted to regional local time.
+    """
+    from app.shared.tariff_service import (
+        get_currency_for_region,
+        get_tariff_for_region_and_time,
+        validate_region,
+    )
+    if not validate_region(region):
+        raise HTTPException(status_code=404, detail=f"Region '{region}' not found in master tariff dataset")
+    ts = timestamp or utcnow()
+    t_info = get_tariff_for_region_and_time(region, ts, season=season)
+    currency = get_currency_for_region(region)
+
+    return {
+        "region": region,
+        "region_id": region,
+        "currency": currency,
+        "current_tariff": {
+            "utc_timestamp": t_info["utc_timestamp"].isoformat(),
+            "local_timestamp": t_info["local_timestamp"].isoformat(),
+            "local_hour": t_info["local_hour"],
+            "timezone": t_info["timezone"],
+            "time_interval": t_info["time_interval"],
+            "time_of_day": t_info["time_of_day"],
+            "base_charge": t_info["base_charge"],
+            "adder_charge": t_info["adder_charge"],
+            "effective_price": t_info["effective_price"],
+            "currency": t_info["currency"],
+            "tariff_type": t_info["tariff_type"],
+            "season": t_info["season"],
+            "price_per_kwh_usd": t_info["price_per_kwh_usd"],
+        },
+    }
+
 
 
 # ─── Carbon data endpoints ────────────────────────────────────────────────────
@@ -241,7 +432,10 @@ def get_carbon_data_endpoint(
     now = utcnow()
     start = start or now
     end = end or (now + timedelta(hours=24))
-    data = fetch_and_store_carbon(db, region, start, end)
+    try:
+        data = fetch_and_store_carbon(db, region, start, end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {
         "region": region,
         "data": [
@@ -249,6 +443,9 @@ def get_carbon_data_endpoint(
                 "timestamp": p.timestamp.isoformat(),
                 "region": p.region,
                 "carbon_gco2_kwh": p.carbon_gco2_kwh,
+                "source": p.source,
+                "em_zone": p.em_zone,
+                "is_fallback": p.is_fallback,
             }
             for p in data
         ],
@@ -270,7 +467,10 @@ def get_tariff_data_endpoint(
     now = utcnow()
     start = start or now
     end = end or (now + timedelta(hours=24))
-    data = fetch_and_store_tariff(db, region, start, end, job_type=job_type, tariff_plan=tariff_plan)
+    try:
+        data = fetch_and_store_tariff(db, region, start, end, job_type=job_type, tariff_plan=tariff_plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {
         "region": region,
         "data": [

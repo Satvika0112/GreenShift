@@ -85,6 +85,7 @@ def build_kubernetes_job(
                 "app":                  "greenshift",
                 "greenshift-job-id":    job.job_id,
                 "greenshift-team-id":   job.team_id,
+                "greenshift-region":    job.region,
             },
             annotations={
                 "greenshift/scheduled-start":   decision.selected_start.isoformat(),

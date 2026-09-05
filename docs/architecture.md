@@ -45,7 +45,7 @@ External Inputs (Electricity Maps API, Tariff CSV)
 - **Purpose**: Input intake, format normalization, and validation.
 - **Data Sources**:
   - Carbon Intensity: Live Electricity Maps API (forecast + history), cached with TTL. Diurnal synthetic fallback.
-  - Electricity Tariff: Indian Regional Time-of-Day/Flat CSV format (Telangana, Gujarat, Himachal Pradesh, West Bengal with hourly INR rates converted to USD).
+  - Electricity Tariff: GreenShift uses a single master regional tariff dataset (`data/master_tod_tariff_all_regions.csv`) containing tariff information for 10 canonical regions (IN-TG, IN-GJ, IN-WB, IN-PB, US-CA, US-NY, US-TX, SE, AU-SA-Large, AU-SA-Small).
 - **Validation**: Strict validation of deadlines (must be in future), power (kW > 0), runtime (minutes > 0), and region.
 - **Audit**: Emits `JOB_SUBMITTED` event to Trust ledger.
 
