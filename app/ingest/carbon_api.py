@@ -27,6 +27,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from app.ingest.regional_registry import get_electricity_maps_zone, resolve_region_id
 from app.shared.config import settings
 from app.shared.database import SessionLocal
+from app.shared.metrics import record_carbon_api_fallback
 from app.shared.models import CarbonDataPoint, CarbonDataPointORM
 from app.shared.utils import utcnow
 
@@ -82,7 +83,9 @@ def fetch_live_carbon_from_api(
     if is_carbon_api_down_simulated():
         raise RuntimeError("Electricity Maps API simulated down by SIMULATE_CARBON_API_DOWN")
 
-    api_key = os.environ.get("ELECTRICITY_MAPS_API_KEY", settings.electricity_maps_api_key)
+    api_key = settings.electricity_maps_api_key
+    if api_key is None:
+        api_key = os.environ.get("ELECTRICITY_MAPS_API_KEY", "")
     if not api_key or api_key.strip() in ("", "mock", "placeholder"):
         raise ValueError("ELECTRICITY_MAPS_API_KEY is not configured")
 
@@ -92,7 +95,7 @@ def fetch_live_carbon_from_api(
     now = utcnow()
     points_dict: Dict[datetime, CarbonDataPoint] = {}
 
-    with httpx.Client(timeout=15.0) as client:
+    with httpx.Client(timeout=3.0) as client:
         # A. Fetch forecast for future windows
         try:
             forecast_url = f"{settings.carbon_api_base_url}/carbon-intensity/forecast"
@@ -531,6 +534,7 @@ def get_resilient_carbon_curve(
     # ── Tier 3: Try Carbon CSV Dataset ────────────────────────────
     csv_points = get_carbon_from_csv_dataset(canonical_region, start_time, end_time)
     if csv_points:
+        record_carbon_api_fallback("csv")
         return csv_points
 
     # ── Tier 4A: Try Stale Redis Cache ────────────────────────────
@@ -539,6 +543,7 @@ def get_resilient_carbon_curve(
         if stale_redis_res:
             stale_points, stale_age = stale_redis_res
             logger.warning("Carbon API failed — using stale fallback | region=%s | age=%.1fs", canonical_region, stale_age)
+            record_carbon_api_fallback("stale_cache")
             return stale_points
     except Exception as exc:
         logger.debug("Stale Redis cache check skipped: %s", exc)
@@ -549,11 +554,13 @@ def get_resilient_carbon_curve(
     )
     if stale_points:
         logger.warning("[CARBON] Using stale DB cache fallback (age: %.1fs) for region %s", stale_age or 0.0, canonical_region)
+        record_carbon_api_fallback("stale_cache")
         return stale_points
 
     # ── Tier 5: Controlled Fallback ───────────────────────────────
     reason = api_failure_reason or "Electricity Maps API unavailable, no valid cache, no carbon CSV"
     fallback_points = get_controlled_fallback_carbon_curve(canonical_region, start_time, end_time, reason=reason)
+    record_carbon_api_fallback("controlled_fallback")
     return fallback_points
 
 

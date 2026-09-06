@@ -32,7 +32,9 @@ python-dotenv==1.0.1
 # Async support
 anyio==4.3.0
 
-# Hashing / crypto (stdlib, no package needed for SHA-256)
+# Hashing / crypto / authentication
+bcrypt>=4.0.0
+pyjwt>=2.8.0
 
 # Scheduling
 apscheduler==3.10.4

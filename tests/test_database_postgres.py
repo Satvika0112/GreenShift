@@ -29,6 +29,7 @@ from app.shared.models import (
     JobORM,
     JobStatus,
     ScheduleDecisionORM,
+    ApprovalORM,
     KubernetesExecutionORM,
     AuditEventORM,
     CarbonDataPointORM,
@@ -329,7 +330,41 @@ class TestDatabaseArchitecture:
         assert "carbon_data" in tables
         assert "tariff_data" in tables
         assert "regional_tariffs" in tables
+        assert "approvals" in tables
         assert "alembic_version" in tables
+        eng.dispose()
+
+    def test_alembic_downgrade_and_reupgrade(self, tmp_path):
+        """Verify full upgrade -> downgrade -> re-upgrade cycle via Alembic."""
+        from alembic.config import Config
+        from alembic import command
+
+        db_file = tmp_path / "alembic_cycle.db"
+        db_url = f"sqlite:///{db_file}"
+        alembic_cfg = Config("alembic.ini")
+        alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+
+        # 1. Upgrade to head
+        command.upgrade(alembic_cfg, "head")
+        eng = create_engine(db_url)
+        insp = inspect(eng)
+        tables = set(insp.get_table_names())
+        assert "jobs" in tables
+        assert "approvals" in tables
+        assert "alembic_version" in tables
+
+        # 2. Downgrade to base
+        command.downgrade(alembic_cfg, "base")
+        insp = inspect(eng)
+        tables_after_down = set(insp.get_table_names())
+        assert "jobs" not in tables_after_down
+
+        # 3. Re-upgrade to head
+        command.upgrade(alembic_cfg, "head")
+        insp = inspect(eng)
+        tables_reup = set(insp.get_table_names())
+        assert "jobs" in tables_reup
+        assert "approvals" in tables_reup
         eng.dispose()
 
     def test_fastapi_endpoints_database_integration(self, db_session):
@@ -392,3 +427,431 @@ class TestDatabaseArchitecture:
 
         finally:
             app.dependency_overrides.clear()
+
+    def test_session_lifecycle_and_transaction_rollback(self, sqlite_engine):
+        """Verify transaction rollback behavior and session lifecycle."""
+        Session = sessionmaker(bind=sqlite_engine, autocommit=False, autoflush=False)
+        session = Session()
+
+        now_utc = datetime.now(timezone.utc)
+        job = JobORM(
+            job_id="JOB-ROLLBACK-001",
+            team_id="team-rollback",
+            submitted_at=now_utc,
+            deadline=now_utc + timedelta(hours=2),
+            runtime_minutes=15,
+            power_kw=1.0,
+            region="IN-TG",
+            status=JobStatus.SUBMITTED,
+            container_image="greenshift/workload:latest",
+        )
+        session.add(job)
+        session.commit()
+
+        # Attempt to insert an invalid duplicate primary key from a separate session
+        session2 = Session()
+        try:
+            duplicate_job = JobORM(
+                job_id="JOB-ROLLBACK-001",
+                team_id="team-duplicate",
+                submitted_at=now_utc,
+                deadline=now_utc + timedelta(hours=2),
+                runtime_minutes=15,
+                power_kw=1.0,
+                region="IN-TG",
+                status=JobStatus.SUBMITTED,
+                container_image="greenshift/workload:latest",
+            )
+            session2.add(duplicate_job)
+            session2.commit()
+        except Exception:
+            session2.rollback()
+        finally:
+            session2.close()
+
+        # Verify session is clean and original job remains intact
+        original = session.get(JobORM, "JOB-ROLLBACK-001")
+        assert original is not None
+        assert original.team_id == "team-rollback"
+        session.close()
+
+    def test_get_db_session_context_manager(self, monkeypatch, tmp_path):
+        """Verify get_db_session context manager commits on success and rolls back on exception."""
+        from app.shared.database import get_db_session
+        import app.shared.database as db_mod
+
+        db_file = tmp_path / "ctx_test.sqlite"
+        eng = build_engine(f"sqlite:///{db_file}")
+        Base.metadata.create_all(bind=eng)
+        TestSession = sessionmaker(bind=eng, autocommit=False, autoflush=False)
+        monkeypatch.setattr(db_mod, "SessionLocal", TestSession)
+
+        now_utc = datetime.now(timezone.utc)
+
+        # 1. Success path auto-commits
+        with get_db_session() as s:
+            j = JobORM(
+                job_id="JOB-CTX-001",
+                team_id="team-ctx",
+                submitted_at=now_utc,
+                deadline=now_utc + timedelta(hours=3),
+                runtime_minutes=20,
+                power_kw=2.0,
+                region="IN-GJ",
+                status=JobStatus.SUBMITTED,
+                container_image="greenshift/workload:latest",
+            )
+            s.add(j)
+
+        # Verify persisted outside context manager
+        check_s = TestSession()
+        assert check_s.get(JobORM, "JOB-CTX-001") is not None
+        check_s.close()
+
+        # 2. Error path rolls back
+        with pytest.raises(ValueError):
+            with get_db_session() as s:
+                j2 = JobORM(
+                    job_id="JOB-CTX-002",
+                    team_id="team-ctx-fail",
+                    submitted_at=now_utc,
+                    deadline=now_utc + timedelta(hours=3),
+                    runtime_minutes=20,
+                    power_kw=2.0,
+                    region="IN-GJ",
+                    status=JobStatus.SUBMITTED,
+                    container_image="greenshift/workload:latest",
+                )
+                s.add(j2)
+                raise ValueError("Simulated unexpected failure")
+
+        check_s2 = TestSession()
+        assert check_s2.get(JobORM, "JOB-CTX-002") is None
+        check_s2.close()
+        eng.dispose()
+
+    def test_foreign_key_cascade_deletion(self, db_session):
+        """Verify deleting a Job cascades to ScheduleDecision, Approval, and KubernetesExecution."""
+        from app.shared.models import ApprovalORM
+
+        now_utc = datetime.now(timezone.utc)
+        job = JobORM(
+            job_id="JOB-CASCADE-001",
+            team_id="team-cascade",
+            submitted_at=now_utc,
+            deadline=now_utc + timedelta(hours=5),
+            runtime_minutes=30,
+            power_kw=4.0,
+            region="IN-WB",
+            status=JobStatus.SCHEDULED,
+            container_image="greenshift/workload:latest",
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        decision = ScheduleDecisionORM(
+            job_id="JOB-CASCADE-001",
+            selected_start=now_utc + timedelta(hours=1),
+            selected_end=now_utc + timedelta(hours=1, minutes=30),
+            carbon_intensity=280.0,
+            electricity_cost=0.12,
+            carbon_emission=0.56,
+            reason="Low carbon slot",
+            region_id="IN-WB",
+            tariff_plan="Large Industry",
+            currency="USD",
+        )
+        db_session.add(decision)
+        db_session.commit()
+
+        approval = ApprovalORM(
+            job_id="JOB-CASCADE-001",
+            schedule_decision_id=decision.id,
+            decision="APPROVED",
+            reason="Cascade test approval",
+        )
+        execution = KubernetesExecutionORM(
+            job_id="JOB-CASCADE-001",
+            kubernetes_job_name="gs-job-cascade-001",
+            planned_start=now_utc + timedelta(hours=1),
+            gs_status=JobStatus.QUEUED,
+        )
+        db_session.add_all([approval, execution])
+        db_session.commit()
+
+        # Verify all child records exist
+        assert len(job.approvals) == 1
+        assert len(job.schedule_decisions) == 1
+        assert len(job.executions) == 1
+
+        # Delete job and verify cascade
+        db_session.delete(job)
+        db_session.commit()
+
+        assert db_session.get(JobORM, "JOB-CASCADE-001") is None
+        assert db_session.query(ScheduleDecisionORM).filter_by(job_id="JOB-CASCADE-001").first() is None
+        assert db_session.query(ApprovalORM).filter_by(job_id="JOB-CASCADE-001").first() is None
+        assert db_session.query(KubernetesExecutionORM).filter_by(job_id="JOB-CASCADE-001").first() is None
+
+    def test_database_indexes_exist(self, sqlite_engine):
+        """Verify indexes on job_id, team_id, status, created_at, schedule_decision_id exist."""
+        insp = inspect(sqlite_engine)
+
+        job_indexes = {idx["name"] for idx in insp.get_indexes("jobs")}
+        assert "ix_jobs_team_id" in job_indexes
+        assert "ix_jobs_status" in job_indexes
+        assert "ix_jobs_created_at" in job_indexes
+        assert "ix_jobs_team_status" in job_indexes
+
+        sd_indexes = {idx["name"] for idx in insp.get_indexes("schedule_decisions")}
+        assert "ix_schedule_decisions_job_id" in sd_indexes
+        assert "ix_schedule_decisions_job_created" in sd_indexes
+
+        appr_indexes = {idx["name"] for idx in insp.get_indexes("approvals")}
+        assert "ix_approvals_job_id" in appr_indexes
+        assert "ix_approvals_schedule_decision_id" in appr_indexes
+        assert "ix_approvals_job_decision" in appr_indexes
+
+        k8s_indexes = {idx["name"] for idx in insp.get_indexes("kubernetes_executions")}
+        assert "ix_kubernetes_executions_job_id" in k8s_indexes
+        assert "ix_k8s_executions_job_status" in k8s_indexes
+
+
+class TestDataIntegrityConstraints:
+    """Tests verifying database-level CHECK constraints and foreign keys reject invalid records."""
+
+    def test_invalid_runtime_minutes_rejected(self, db_session):
+        """1. Invalid runtime (<= 0) is rejected by database CHECK constraint."""
+        now = datetime.now(timezone.utc)
+        job = JobORM(
+            job_id="JOB-INV-RUNTIME",
+            team_id="team-val",
+            submitted_at=now,
+            deadline=now + timedelta(hours=2),
+            runtime_minutes=0,  # Invalid: must be > 0
+            power_kw=5.0,
+            region="IN-TG",
+            status=JobStatus.SUBMITTED,
+            container_image="greenshift/workload:latest",
+        )
+        db_session.add(job)
+        with pytest.raises(Exception):
+            db_session.commit()
+        db_session.rollback()
+
+    def test_invalid_power_kw_rejected(self, db_session):
+        """2. Invalid power draw (<= 0) is rejected by database CHECK constraint."""
+        now = datetime.now(timezone.utc)
+        job = JobORM(
+            job_id="JOB-INV-POWER",
+            team_id="team-val",
+            submitted_at=now,
+            deadline=now + timedelta(hours=2),
+            runtime_minutes=30,
+            power_kw=-1.5,  # Invalid: must be > 0
+            region="IN-TG",
+            status=JobStatus.SUBMITTED,
+            container_image="greenshift/workload:latest",
+        )
+        db_session.add(job)
+        with pytest.raises(Exception):
+            db_session.commit()
+        db_session.rollback()
+
+    def test_invalid_schedule_time_rejected(self, db_session):
+        """3. Invalid schedule time (selected_end <= selected_start) is rejected."""
+        now = datetime.now(timezone.utc)
+        job = JobORM(
+            job_id="JOB-INV-TIME",
+            team_id="team-val",
+            submitted_at=now,
+            deadline=now + timedelta(hours=4),
+            runtime_minutes=30,
+            power_kw=2.0,
+            region="IN-TG",
+            status=JobStatus.SCHEDULED,
+            container_image="greenshift/workload:latest",
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        start = now + timedelta(hours=1)
+        end = start - timedelta(minutes=10)  # Invalid: end before start
+        decision = ScheduleDecisionORM(
+            job_id="JOB-INV-TIME",
+            selected_start=start,
+            selected_end=end,
+            carbon_intensity=200.0,
+            electricity_cost=0.1,
+            carbon_emission=0.4,
+            reason="Invalid time test",
+        )
+        db_session.add(decision)
+        with pytest.raises(Exception):
+            db_session.commit()
+        db_session.rollback()
+
+    def test_invalid_status_rejected(self, db_session):
+        """4. Invalid status string is rejected by database constraint."""
+        now = datetime.now(timezone.utc)
+        from sqlalchemy import text
+        stmt = text("""
+            INSERT INTO jobs (job_id, team_id, submitted_at, deadline, runtime_minutes, power_kw, region, status, container_image, created_at)
+            VALUES ('JOB-INV-STATUS', 'team-val', :now, :deadline, 30, 2.0, 'IN-TG', 'INVALID_STATUS', 'greenshift/img:latest', :now)
+        """)
+        with pytest.raises(Exception):
+            db_session.execute(stmt, {"now": now, "deadline": now + timedelta(hours=2)})
+            db_session.commit()
+        db_session.rollback()
+
+    def test_invalid_approval_decision_rejected(self, db_session):
+        """5. Invalid approval decision is rejected by database constraint."""
+        now = datetime.now(timezone.utc)
+        job = JobORM(
+            job_id="JOB-INV-APPR",
+            team_id="team-val",
+            submitted_at=now,
+            deadline=now + timedelta(hours=4),
+            runtime_minutes=30,
+            power_kw=2.0,
+            region="IN-TG",
+            status=JobStatus.SCHEDULED,
+            container_image="greenshift/workload:latest",
+        )
+        decision = ScheduleDecisionORM(
+            job_id="JOB-INV-APPR",
+            selected_start=now + timedelta(hours=1),
+            selected_end=now + timedelta(hours=1, minutes=30),
+            carbon_intensity=200.0,
+            electricity_cost=0.1,
+            carbon_emission=0.4,
+            reason="Approval test",
+        )
+        db_session.add_all([job, decision])
+        db_session.commit()
+
+        invalid_approval = ApprovalORM(
+            job_id="JOB-INV-APPR",
+            schedule_decision_id=decision.id,
+            decision="INVALID_DECISION",
+            reason="Should fail",
+        )
+        db_session.add(invalid_approval)
+        with pytest.raises(Exception):
+            db_session.commit()
+        db_session.rollback()
+
+    def test_invalid_foreign_key_rejected(self, db_session):
+        """6. Invalid foreign key reference is rejected."""
+        now = datetime.now(timezone.utc)
+        orphan_decision = ScheduleDecisionORM(
+            job_id="NON-EXISTENT-JOB-9999",
+            selected_start=now + timedelta(hours=1),
+            selected_end=now + timedelta(hours=1, minutes=30),
+            carbon_intensity=200.0,
+            electricity_cost=0.1,
+            carbon_emission=0.4,
+            reason="Orphan decision",
+        )
+        db_session.add(orphan_decision)
+        with pytest.raises(Exception):
+            db_session.commit()
+        db_session.rollback()
+
+    def test_valid_records_persist_cleanly(self, db_session):
+        """7. Valid records across all models persist cleanly."""
+        now = datetime.now(timezone.utc)
+        job = JobORM(
+            job_id="JOB-VALID-001",
+            team_id="team-val",
+            submitted_at=now,
+            deadline=now + timedelta(hours=6),
+            runtime_minutes=45,
+            power_kw=3.5,
+            region="IN-TG",
+            status=JobStatus.SUBMITTED,
+            container_image="greenshift/workload:latest",
+            carbon_budget_kg=2.5,
+            energy_kwh=2.625,
+            deferrable=True,
+        )
+        db_session.add(job)
+        db_session.commit()
+        assert db_session.get(JobORM, "JOB-VALID-001") is not None
+
+    def test_approval_workflow_persists_cleanly(self, db_session):
+        """8. Existing approval workflow persists cleanly with APPROVED and DECLINED decisions."""
+        now = datetime.now(timezone.utc)
+        job = JobORM(
+            job_id="JOB-APPR-WORKFLOW",
+            team_id="team-val",
+            submitted_at=now,
+            deadline=now + timedelta(hours=6),
+            runtime_minutes=30,
+            power_kw=2.0,
+            region="IN-GJ",
+            status=JobStatus.SCHEDULED,
+            container_image="greenshift/workload:latest",
+        )
+        decision = ScheduleDecisionORM(
+            job_id="JOB-APPR-WORKFLOW",
+            selected_start=now + timedelta(hours=1),
+            selected_end=now + timedelta(hours=1, minutes=30),
+            carbon_intensity=180.0,
+            electricity_cost=0.08,
+            carbon_emission=0.3,
+            reason="Workflow test",
+        )
+        db_session.add_all([job, decision])
+        db_session.commit()
+
+        appr1 = ApprovalORM(
+            job_id="JOB-APPR-WORKFLOW",
+            schedule_decision_id=decision.id,
+            decision="APPROVED",
+            reason="Approved window",
+            approved_by="admin",
+        )
+        db_session.add(appr1)
+        db_session.commit()
+        assert appr1.id is not None
+
+    def test_execution_retries_possible(self, db_session):
+        """9. Execution tracking and status progression remain fully functional."""
+        now = datetime.now(timezone.utc)
+        job = JobORM(
+            job_id="JOB-EXEC-RETRY",
+            team_id="team-val",
+            submitted_at=now,
+            deadline=now + timedelta(hours=6),
+            runtime_minutes=30,
+            power_kw=2.0,
+            region="IN-WB",
+            status=JobStatus.QUEUED,
+            container_image="greenshift/workload:latest",
+        )
+        exec1 = KubernetesExecutionORM(
+            job_id="JOB-EXEC-RETRY",
+            kubernetes_job_name="gs-job-exec-retry-1",
+            planned_start=now + timedelta(hours=1),
+            planned_end=now + timedelta(hours=1, minutes=30),
+            gs_status=JobStatus.QUEUED,
+        )
+        db_session.add_all([job, exec1])
+        db_session.commit()
+
+        # Status progression
+        exec1.gs_status = JobStatus.RUNNING
+        exec1.actual_start = now + timedelta(hours=1)
+        db_session.commit()
+
+        exec1.gs_status = JobStatus.FAILED
+        exec1.actual_end = now + timedelta(hours=1, minutes=10)
+        exec1.error_message = "Pod OOMKilled"
+        db_session.commit()
+
+        refreshed = db_session.get(KubernetesExecutionORM, exec1.id)
+        assert refreshed.gs_status == JobStatus.FAILED
+        assert refreshed.error_message == "Pod OOMKilled"
+
+

@@ -36,6 +36,8 @@ def trigger_schedule(job_id: str, db: Session = Depends(get_db)):
     from app.shared.timezone import format_dual_time
 
     return {
+        "id": decision.id,
+        "schedule_id": decision.id,
         "job_id": decision.job_id,
         "selected_start": decision.selected_start.isoformat(),
         "selected_end": decision.selected_end.isoformat(),
@@ -49,6 +51,14 @@ def trigger_schedule(job_id: str, db: Session = Depends(get_db)):
         "baseline_native_cost": decision.baseline_native_cost,
         "reason": decision.reason,
         "budget_remaining": decision.budget_remaining,
+        "objective": decision.scheduler_objective or "CARBON_FIRST",
+        "scheduler_objective": decision.scheduler_objective or "CARBON_FIRST",
+        "candidates_evaluated": getattr(decision, "candidates_evaluated", 0) or 0,
+        "feasible_candidates_count": getattr(decision, "feasible_candidates_count", 0) or 0,
+        "rejection_summary": getattr(decision, "rejection_summary", {}) or {},
+        "rejection_reasons": getattr(decision, "rejection_reasons", []) or [],
+        "deterministic_ranking": getattr(decision, "deterministic_rank", 1) or 1,
+        "deterministic_rank": getattr(decision, "deterministic_rank", 1) or 1,
         "baseline_start": decision.baseline_start.isoformat() if decision.baseline_start else None,
         "baseline_end": decision.baseline_end.isoformat() if decision.baseline_end else None,
         "carbon_avoided": decision.carbon_avoided,

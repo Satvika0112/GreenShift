@@ -30,6 +30,7 @@ class TestCarbonAPI:
         """Without an API key, should return mock data."""
         from app.shared import config
         monkeypatch.setattr(config.settings, "electricity_maps_api_key", "")
+        monkeypatch.delenv("ELECTRICITY_MAPS_API_KEY", raising=False)
         now = datetime.now(timezone.utc)
         data = get_carbon_curve("IN-WE", now, now + timedelta(hours=6))
         assert len(data) > 0

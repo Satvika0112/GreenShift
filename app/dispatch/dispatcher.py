@@ -19,6 +19,12 @@ from app.dispatch.status_tracker import (
     get_job_completion_time,
 )
 from app.shared.config import settings
+from app.shared.metrics import (
+    record_dispatch_attempt as metrics_record_dispatch_attempt,
+    record_dispatch_success as metrics_record_dispatch_success,
+    record_dispatch_blocked as metrics_record_dispatch_blocked,
+    record_dispatch_failure as metrics_record_dispatch_failure,
+)
 from app.shared.models import (
     JobORM,
     JobStatus,
@@ -32,35 +38,156 @@ logger = logging.getLogger(__name__)
 
 class DispatchError(Exception):
     """Raised when the dispatcher cannot create a Kubernetes Job."""
+    def __init__(self, message: str, status_code: int = 500):
+        super().__init__(message)
+        self.status_code = status_code
 
 
-def dispatch_job(db: Session, job: JobORM) -> KubernetesExecutionORM:
+class DispatchBlockedError(DispatchError):
+    """Raised when job status or approval constraints block dispatch."""
+    def __init__(self, message: str, status_code: int = 403):
+        super().__init__(message, status_code=status_code)
+
+
+class DispatchPermissionError(DispatchError):
+    """Raised when user role is not authorized to dispatch a job."""
+    def __init__(self, message: str, status_code: int = 403):
+        super().__init__(message, status_code=status_code)
+
+
+def validate_job_for_dispatch(job: JobORM, user: Optional[object] = None) -> None:
+    """
+    Validate all preconditions and authorization gates before Kubernetes dispatch.
+
+    Rules:
+    1. User authorization (if user is provided):
+       - ADMIN: full access to dispatch any job across all teams.
+       - OPERATOR: operational execution rights, allowed to dispatch.
+       - TEAM_LEAD: allowed to dispatch jobs belonging to their own team.
+         Attempting another team's job -> raises DispatchPermissionError(403).
+       - VIEWER: read-only access -> raises DispatchPermissionError(403).
+    2. Status enforcement:
+       - PENDING_APPROVAL -> raises DispatchBlockedError(403, "Job {job.job_id} is pending approval and cannot be dispatched")
+       - DECLINED -> raises DispatchBlockedError(403, "Job {job.job_id} has been declined and cannot be dispatched")
+       - Not in (APPROVED, QUEUED) -> raises DispatchBlockedError(400, "Job {job.job_id} is in status {job.status} — only APPROVED jobs can be dispatched")
+    3. Schedule decision integrity:
+       - job.schedule_decision is None -> raises DispatchBlockedError(400, "Job {job.job_id} has no schedule decision")
+       - job.schedule_decision.job_id != job.job_id -> raises DispatchBlockedError(400, "Schedule decision does not belong to job {job.job_id}")
+    """
+    if user is not None:
+        user_role = getattr(user, "role", None)
+        role_str = str(user_role.value if hasattr(user_role, "value") else user_role).upper()
+        if role_str == "ADMIN":
+            pass  # Admin has full dispatch access
+        elif role_str == "OPERATOR":
+            pass  # Operator has execution/operational rights
+        elif role_str == "TEAM_LEAD":
+            user_team = (getattr(user, "team_id", None) or "").strip().lower()
+            job_team = (job.team_id or "").strip().lower()
+            if not user_team or user_team != job_team:
+                raise DispatchPermissionError(
+                    f"Team lead from team '{getattr(user, 'team_id', None)}' cannot dispatch job belonging to team '{job.team_id}'",
+                    status_code=403,
+                )
+        elif role_str == "VIEWER":
+            raise DispatchPermissionError(
+                "Viewer role has read-only access and cannot trigger dispatch",
+                status_code=403,
+            )
+        else:
+            raise DispatchPermissionError(
+                f"Role '{role_str}' is not authorized to trigger dispatch",
+                status_code=403,
+            )
+
+    # Status validations
+    if job.status == JobStatus.PENDING_APPROVAL:
+        raise DispatchBlockedError(
+            f"Job {job.job_id} is pending approval and cannot be dispatched",
+            status_code=403,
+        )
+    elif job.status == JobStatus.DECLINED:
+        raise DispatchBlockedError(
+            f"Job {job.job_id} has been declined and cannot be dispatched",
+            status_code=403,
+        )
+    elif job.status not in (JobStatus.APPROVED, JobStatus.QUEUED):
+        raise DispatchBlockedError(
+            f"Job {job.job_id} is in status {job.status} — only APPROVED jobs can be dispatched",
+            status_code=400,
+        )
+
+    # Schedule ownership validation
+    decision = job.schedule_decision
+    if decision is None:
+        raise DispatchBlockedError(
+            f"Job {job.job_id} has no schedule decision",
+            status_code=400,
+        )
+    if decision.job_id != job.job_id:
+        raise DispatchBlockedError(
+            f"Schedule decision {decision.id} does not belong to job {job.job_id}",
+            status_code=400,
+        )
+
+
+def dispatch_job(db: Session, job: JobORM, user: Optional[object] = None) -> KubernetesExecutionORM:
     """
     Create a Kubernetes Job for an approved GreenShift job.
 
     Preconditions:
-        - job.status == APPROVED
-        - job.schedule_decision is not None
+        - job.status == APPROVED (or QUEUED for idempotency)
+        - job.schedule_decision is not None and matches job.job_id
+        - user (if supplied) has permission to dispatch (ADMIN, OPERATOR, or matching TEAM_LEAD)
 
     Args:
-        db:  SQLAlchemy session
-        job: JobORM with associated schedule_decision
+        db:   SQLAlchemy session
+        job:  JobORM with associated schedule_decision
+        user: Optional UserORM triggering the dispatch
 
     Returns:
         KubernetesExecutionORM record
 
     Raises:
-        DispatchError: If the Kubernetes Job cannot be created or job is not APPROVED.
+        DispatchPermissionError: If user is unauthorized to dispatch this job.
+        DispatchBlockedError: If job status or schedule constraints block dispatch.
+        DispatchError: If the Kubernetes Job cannot be created.
     """
-    if job.status != JobStatus.APPROVED:
-        raise DispatchError(
-            f"Job {job.job_id} requires approval before Kubernetes dispatch (current status: {job.status})"
+    caller_name = getattr(user, "username", None) if user else "system"
+    metrics_record_dispatch_attempt()
+
+    # 1. Record dispatch requested
+    try:
+        from app.trust.service import (
+            record_dispatch_requested,
+            record_dispatch_blocked,
+            record_dispatch_started,
+            record_dispatch_authorized,
+            record_k8s_job_created,
         )
+        record_dispatch_requested(db, job.job_id, requested_by=caller_name, team_id=job.team_id)
+    except Exception as exc:
+        logger.warning("Audit record failed for dispatch requested on %s: %s", job.job_id, exc)
 
-    decision: Optional[ScheduleDecisionORM] = job.schedule_decision
-    if decision is None:
-        raise DispatchError(f"Job {job.job_id} has no schedule decision")
+    # 2. Strict authorization & state validation
+    try:
+        validate_job_for_dispatch(job, user=user)
+    except (DispatchBlockedError, DispatchPermissionError, DispatchError) as exc:
+        metrics_record_dispatch_blocked(str(exc))
+        try:
+            from app.trust.service import record_dispatch_blocked as audit_record_dispatch_blocked
+            audit_record_dispatch_blocked(
+                db,
+                job.job_id,
+                reason=str(exc),
+                current_status=job.status,
+                requested_by=caller_name,
+            )
+        except Exception as audit_exc:
+            logger.warning("Audit record failed for dispatch blocked on %s: %s", job.job_id, audit_exc)
+        raise
 
+    decision: ScheduleDecisionORM = job.schedule_decision
     namespace = settings.k8s_namespace
     k8s_name = f"gs-{k8s_safe_name(job.job_id)}"
 
@@ -75,22 +202,25 @@ def dispatch_job(db: Session, job: JobORM) -> KubernetesExecutionORM:
             logger.warning("Kubernetes Job %s already exists — skipping creation", k8s_name)
         except ApiException as exc:
             if exc.status != 404:
-                raise DispatchError(f"Kubernetes API error: {exc}") from exc
+                raise DispatchError(f"Kubernetes API error: {exc}", status_code=500) from exc
             # Job does not exist — create it
             k8s_job = build_kubernetes_job(job, decision, namespace=namespace)
             batch.create_namespaced_job(namespace=namespace, body=k8s_job)
             logger.info("Created Kubernetes Job: %s", k8s_name)
 
+        metrics_record_dispatch_success()
     except ApiException as exc:
         error_msg = f"Kubernetes API error creating job {k8s_name}: {exc}"
         logger.error(error_msg)
         _mark_job_failed(db, job, error_msg)
-        raise DispatchError(error_msg) from exc
+        metrics_record_dispatch_failure(error_msg)
+        raise DispatchError(error_msg, status_code=500) from exc
     except Exception as exc:
         error_msg = f"Unexpected error dispatching job {k8s_name}: {exc}"
         logger.error(error_msg)
         _mark_job_failed(db, job, error_msg)
-        raise DispatchError(error_msg) from exc
+        metrics_record_dispatch_failure(error_msg)
+        raise DispatchError(error_msg, status_code=500) from exc
 
     # Create execution tracking record
     now = utcnow()
@@ -113,7 +243,12 @@ def dispatch_job(db: Session, job: JobORM) -> KubernetesExecutionORM:
 
     # Record audit events
     try:
-        from app.trust.service import record_dispatch_authorized, record_k8s_job_created
+        from app.trust.service import (
+            record_dispatch_started,
+            record_dispatch_authorized,
+            record_k8s_job_created,
+        )
+        record_dispatch_started(db, job.job_id, k8s_name, namespace, dispatched_by=caller_name)
         record_dispatch_authorized(db, job.job_id, decision.id, now.isoformat())
         record_k8s_job_created(db, job.job_id, k8s_name, namespace)
     except Exception as exc:

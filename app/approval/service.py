@@ -17,9 +17,16 @@ from app.shared.models import (
     JobStatus,
     PendingApprovalItem,
     ScheduleDecisionORM,
+    UserORM,
+    UserRole,
 )
 from app.shared.timezone import to_regional_time
 from app.shared.utils import utcnow
+from app.shared.metrics import (
+    record_approval_pending,
+    record_approval_granted as metrics_record_approval_granted,
+    record_approval_declined as metrics_record_approval_declined,
+)
 from app.trust.service import (
     record_approval_granted,
     record_approval_declined,
@@ -40,6 +47,57 @@ class ApprovalNotFoundError(ValueError):
     def __init__(self, message: str):
         super().__init__(message)
         self.status_code = 404
+
+
+class ApprovalPermissionError(ValueError):
+    """Raised when a user lacks authorization to approve or decline a schedule."""
+    def __init__(self, message: str, status_code: int = 403):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def check_user_approval_permission(job: JobORM, user: Optional[UserORM] = None) -> None:
+    """
+    Enforces server-side RBAC authorization rules:
+      - ADMIN: Full access to approve/decline any job across all teams.
+      - TEAM_LEAD: Can approve/decline only jobs matching user.team_id.
+      - OPERATOR: Cannot approve schedules unless explicitly configured (raises 403).
+      - VIEWER: Read-only access (raises 403).
+    """
+    if user is None:
+        return  # Service-level backwards compatibility if no user context is passed
+
+    user_role = user.role.value if hasattr(user.role, "value") else str(user.role)
+
+    if user_role == UserRole.ADMIN.value:
+        return
+
+    if user_role == UserRole.TEAM_LEAD.value:
+        user_team = (user.team_id or "").strip().lower()
+        job_team = (job.team_id or "").strip().lower()
+        if not user_team or user_team != job_team:
+            raise ApprovalPermissionError(
+                f"Team lead of team '{user.team_id}' is not authorized to approve/decline jobs for team '{job.team_id}'",
+                status_code=403,
+            )
+        return
+
+    if user_role == UserRole.OPERATOR.value:
+        raise ApprovalPermissionError(
+            "Role 'OPERATOR' is not authorized to approve or decline schedules",
+            status_code=403,
+        )
+
+    if user_role == UserRole.VIEWER.value:
+        raise ApprovalPermissionError(
+            "Role 'VIEWER' has read-only access and cannot approve or decline schedules",
+            status_code=403,
+        )
+
+    raise ApprovalPermissionError(
+        f"Role '{user_role}' is not authorized to approve or decline schedules",
+        status_code=403,
+    )
 
 
 def validate_approval_request(
@@ -80,6 +138,7 @@ def approve_schedule(
     schedule_id: int,
     reason: Optional[str] = None,
     approved_by: Optional[str] = "admin",
+    user: Optional[UserORM] = None,
 ) -> ApprovalResponse:
     """
     Approve a proposed schedule for a job.
@@ -88,6 +147,7 @@ def approve_schedule(
     Idempotent: If already APPROVED for this schedule, returns the existing approval.
     """
     job, sd = validate_approval_request(db, job_id, schedule_id, "APPROVED")
+    check_user_approval_permission(job, user)
 
     # Idempotency check: if already approved for this schedule, return existing
     existing_approval = (
@@ -139,6 +199,9 @@ def approve_schedule(
     db.refresh(approval)
     db.refresh(job)
 
+    # Record metrics
+    metrics_record_approval_granted()
+
     # Record audit event in hash-chain ledger
     try:
         record_approval_granted(
@@ -180,6 +243,7 @@ def decline_schedule(
     schedule_id: int,
     reason: Optional[str] = None,
     approved_by: Optional[str] = "admin",
+    user: Optional[UserORM] = None,
 ) -> ApprovalResponse:
     """
     Decline a proposed schedule for a job.
@@ -189,6 +253,7 @@ def decline_schedule(
     No Kubernetes job will be dispatched.
     """
     job, sd = validate_approval_request(db, job_id, schedule_id, "DECLINED")
+    check_user_approval_permission(job, user)
 
     # Idempotency check
     existing_decline = (
@@ -239,6 +304,9 @@ def decline_schedule(
     db.refresh(approval)
     db.refresh(job)
 
+    # Record metrics
+    metrics_record_approval_declined()
+
     # Record audit event
     try:
         record_approval_declined(
@@ -278,18 +346,21 @@ def get_job_approvals(db: Session, job_id: str) -> List[ApprovalORM]:
     )
 
 
-def get_pending_approvals(db: Session) -> List[PendingApprovalItem]:
+def get_pending_approvals(db: Session, team_id: Optional[str] = None) -> List[PendingApprovalItem]:
     """
     Retrieve all jobs currently awaiting human approval (status == PENDING_APPROVAL)
     with their schedule decisions and converted local/UTC timestamps.
+    Optionally filters by team_id.
     """
-    jobs = (
+    query = (
         db.query(JobORM)
         .join(JobORM.schedule_decision)
         .filter(JobORM.status == JobStatus.PENDING_APPROVAL)
-        .order_by(JobORM.submitted_at.desc())
-        .all()
     )
+    if team_id:
+        query = query.filter(JobORM.team_id == team_id)
+
+    jobs = query.order_by(JobORM.submitted_at.desc()).all()
 
     items: List[PendingApprovalItem] = []
     for j in jobs:
@@ -322,7 +393,18 @@ def get_pending_approvals(db: Session) -> List[PendingApprovalItem]:
                 deadline_local=deadline_local,
                 status=j.status,
                 tariff_plan=sd.tariff_plan,
+                scheduler_objective=getattr(sd, "scheduler_objective", "CARBON_FIRST") or "CARBON_FIRST",
+                objective=getattr(sd, "scheduler_objective", "CARBON_FIRST") or "CARBON_FIRST",
+                reason=sd.reason,
+                job_type=j.job_type,
+                candidates_evaluated=getattr(sd, "candidates_evaluated", 0) or 0,
+                feasible_candidates_count=getattr(sd, "feasible_candidates_count", 0) or 0,
+                rejection_summary=getattr(sd, "rejection_summary", {}) or {},
+                rejection_reasons=list((getattr(sd, "rejection_summary", {}) or {}).keys()),
+                deterministic_ranking=getattr(sd, "deterministic_rank", 1) or 1,
+                deterministic_rank=getattr(sd, "deterministic_rank", 1) or 1,
             )
         )
 
+    record_approval_pending(len(items))
     return items

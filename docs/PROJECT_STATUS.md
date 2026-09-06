@@ -27,7 +27,7 @@
 | 6 | Carbon-aware scheduler works | ✅ app/decide/scheduler.py |
 | 7 | Cost-aware scheduler works | ✅ dual-objective: carbon primary, cost tiebreaker |
 | 8 | Deadline constraints work | ✅ slot generation enforces deadline - runtime |
-| 9 | Carbon budget constraints work | ✅ budget filter in schedule_job() |
+| 9 | Carbon budget constraints work | ✅ strict budget filter in schedule_job() without silent relaxation |
 | 10 | Human Approval Gate works | ✅ app/approval/service.py + PENDING_APPROVAL / APPROVED / DECLINED states |
 | 11 | Kubernetes Job is created | ✅ app/dispatch/dispatcher.py (only for APPROVED jobs after selected_start) |
 | 12 | Kubernetes Pod actually runs | 🔲 Requires live cluster |

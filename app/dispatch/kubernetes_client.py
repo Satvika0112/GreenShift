@@ -167,10 +167,13 @@ def get_core_v1() -> CoreV1Api:
     return CoreV1Api(api_client)
 
 
+K8S_CHECK_CACHE_TTL: float = 30.0
+
+
 def check_kubernetes_available(force: bool = False) -> bool:
     """
     Verify Kubernetes API reachability by performing a lightweight API call.
-    Cached for 5 seconds to prevent repeated timeouts in hot loops.
+    Cached for 30 seconds to prevent repeated timeouts in hot loops.
 
     Returns:
         True if Kubernetes API is reachable and responding, False otherwise.
@@ -182,6 +185,16 @@ def check_kubernetes_available(force: bool = False) -> bool:
         return _last_k8s_available
 
     try:
+        api_client = _load_kube_config()
+        host = api_client.configuration.host
+        if host:
+            parsed = urlparse(host)
+            host_name = parsed.hostname or "localhost"
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            # Quick 0.2s socket probe to prevent urllib3 TCP connect hang
+            with socket.create_connection((host_name, port), timeout=0.2):
+                pass
+
         core = get_core_v1()
         core.list_namespace(limit=1, _request_timeout=3)
         logger.debug("Kubernetes API health check passed (namespace list successful)")

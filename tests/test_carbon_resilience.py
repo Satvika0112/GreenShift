@@ -51,13 +51,8 @@ from app.trust.service import record_carbon_provenance
 
 
 @pytest.fixture
-def db_session():
-    init_db()
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+def db_session(db):
+    yield db
 
 
 class TestCarbonAPIResilience:

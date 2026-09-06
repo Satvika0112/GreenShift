@@ -26,20 +26,32 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
+    """Resolve target database URL prioritizing settings/environment over alembic.ini default."""
     url = config.get_main_option("sqlalchemy.url")
-    if url:
-        return url
-    return settings.database_url or "sqlite:///./greenshift.db"
+    if not url or url == "sqlite:///./greenshift.db":
+        if getattr(settings, "database_url", None):
+            url = settings.database_url
+    if not url:
+        url = "sqlite:///./greenshift.db"
+
+    # Normalize legacy postgres:// scheme to postgresql://
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    return url
 
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     url = get_url()
+    is_sqlite = url.startswith("sqlite")
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        render_as_batch=is_sqlite,
+        compare_type=True,
+        compare_server_default=True,
     )
 
     with context.begin_transaction():
@@ -49,7 +61,8 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_url()
+    url = get_url()
+    configuration["sqlalchemy.url"] = url
 
     connectable = engine_from_config(
         configuration,
@@ -58,9 +71,13 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        is_sqlite = connection.dialect.name == "sqlite"
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            render_as_batch=is_sqlite,
+            compare_type=True,
+            compare_server_default=True,
         )
 
         with context.begin_transaction():
@@ -71,3 +88,4 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
+

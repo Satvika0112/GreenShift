@@ -112,7 +112,8 @@ class TestKubernetesHealthCheck:
         mock_core = MagicMock()
         mock_core.list_namespace.return_value = MagicMock(items=[MagicMock()])
 
-        with patch("app.dispatch.kubernetes_client.get_core_v1", return_value=mock_core):
+        with patch("app.dispatch.kubernetes_client.socket.create_connection"), \
+             patch("app.dispatch.kubernetes_client.get_core_v1", return_value=mock_core):
             assert check_kubernetes_available() is True
             mock_core.list_namespace.assert_called_once_with(limit=1, _request_timeout=3)
 

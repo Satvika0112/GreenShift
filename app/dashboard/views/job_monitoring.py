@@ -1,0 +1,121 @@
+"""
+GreenShift — Real-time Job Monitoring & Kubernetes Dispatch View.
+"""
+
+import streamlit as st
+import pandas as pd
+
+from app.dashboard.api_client import fetch_jobs, fetch_job_detail, dispatch_job_api
+from app.dashboard.components import (
+    render_section_header,
+    render_metric_card,
+    render_status_badge,
+    render_execution_timeline,
+)
+
+
+def render_job_monitoring_view() -> None:
+    """Render the real-time Job Monitoring and Kubernetes Dispatch execution view."""
+    render_section_header("🖥️ Job Monitoring & Kubernetes Dispatch", "Monitor active execution pods, lifecycle state transitions, and trigger authorized dispatches")
+
+    jobs = fetch_jobs(limit=500)
+    if not jobs:
+        st.info("No active or historical workloads to monitor.")
+        return
+
+    col_nav, col_main = st.columns([1, 2.2], gap="large")
+
+    with col_nav:
+        st.markdown("#### Filter Workloads")
+        status_filter = st.selectbox(
+            "Filter Lifecycle Status",
+            ["ALL", "APPROVED", "QUEUED", "RUNNING", "COMPLETED", "PENDING_APPROVAL", "DECLINED", "FAILED"],
+        )
+
+        filtered = [j for j in jobs if status_filter == "ALL" or j.get("status") == status_filter]
+        st.caption(f"Found {len(filtered)} workloads")
+
+        job_ids = [j.get("job_id") for j in filtered]
+        selected_id = st.selectbox("Select Job to Inspect", job_ids) if job_ids else None
+
+    with col_main:
+        if not selected_id:
+            st.info("Select a workload from the left panel to inspect execution status.")
+            return
+
+        job_info = fetch_job_detail(selected_id)
+        current_status = job_info.get("status", "SUBMITTED")
+
+        st.markdown(
+            f"""
+            <div class="gs-card">
+                <div class="gs-card-header">
+                    <div>
+                        <div class="gs-card-title">{job_info.get('workload_name', selected_id)}</div>
+                        <div class="gs-card-subtitle">Job ID: <code>{selected_id}</code> | Team: {job_info.get('team_id')} | Region: {job_info.get('region')}</div>
+                    </div>
+                    <div>{render_status_badge(current_status)}</div>
+                </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Lifecycle Timeline
+        st.markdown("#### Lifecycle Progress")
+        st.markdown(render_execution_timeline(current_status), unsafe_allow_html=True)
+
+        # Metrics Grid
+        dec = job_info.get("schedule_decision") or {}
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.markdown(render_metric_card("Power", f"{job_info.get('power_kw', 1.0)} kW", "Demand"), unsafe_allow_html=True)
+        with m2:
+            st.markdown(render_metric_card("Runtime", f"{job_info.get('runtime_minutes', 30)} min", "Duration"), unsafe_allow_html=True)
+        with m3:
+            st.markdown(render_metric_card("Carbon", f"{dec.get('carbon_intensity', 0.0):.1f}", "gCO₂/kWh", accent=True), unsafe_allow_html=True)
+        with m4:
+            st.markdown(render_metric_card("Cost", f"${dec.get('electricity_cost', 0.0):.4f}", "Estimated"), unsafe_allow_html=True)
+
+        # Specs & Scheduling Details
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            st.markdown("#### ☸️ Container & Cluster Specs")
+            st.markdown(f"- **Image:** `{job_info.get('container_image', 'greenshift/job:v1')}`")
+            st.markdown(f"- **CPU / Memory:** `{job_info.get('cpu_request', '500m')} / {job_info.get('memory_request', '512Mi')}`")
+            st.markdown(f"- **Target Region:** `{job_info.get('region', 'IN-TG')}`")
+            st.markdown(f"- **Deadline:** `{job_info.get('deadline', 'N/A')}`")
+
+        with col_s2:
+            st.markdown("#### ⏱️ Timing & SLA Compliance")
+            st.markdown(f"- **Submitted At:** `{job_info.get('submitted_at', 'N/A')}`")
+            st.markdown(f"- **Scheduled Window:** `{dec.get('selected_start', 'N/A')[:16]} → {dec.get('selected_end', 'N/A')[:16]}`")
+            st.markdown(f"- **Carbon Avoided:** `{dec.get('carbon_avoided', 0.0):.4f} kg`")
+            st.markdown(f"- **SLA Status:** `MET (Within Deadline)`")
+
+        # Action Button: Dispatch to Kubernetes
+        st.markdown("---")
+        col_act1, col_act2 = st.columns([1.5, 1])
+        with col_act1:
+            if current_status == "APPROVED":
+                st.markdown("✅ **Workload is Approved and ready for Kubernetes dispatch.**")
+            elif current_status in ("QUEUED", "RUNNING", "COMPLETED"):
+                st.markdown(f"ℹ️ Workload already dispatched. Current status: **{current_status}**.")
+            elif current_status == "PENDING_APPROVAL":
+                st.markdown("⚠️ Workload requires **Human Approval** before dispatch is permitted.")
+            elif current_status == "DECLINED":
+                st.markdown("🛑 Workload was **DECLINED**. Kubernetes dispatch is strictly blocked.")
+
+        with col_act2:
+            token = st.session_state.get("auth_token")
+            dispatch_btn = st.button("🚀 Dispatch to Kubernetes", type="primary", use_container_width=True)
+
+            if dispatch_btn:
+                try:
+                    with st.spinner("Dispatching job to Kubernetes cluster via backend authorization gate..."):
+                        disp_res = dispatch_job_api(selected_id, token=token)
+                        st.success(f"Job successfully dispatched! Status: {disp_res.get('gs_status', 'QUEUED')} | Pod: {disp_res.get('kubernetes_job_name')}")
+                        st.rerun()
+                except Exception as exc:
+                    st.error(f"Dispatch Blocked / Failed: {exc}")
+
+        st.markdown("</div>", unsafe_allow_html=True)

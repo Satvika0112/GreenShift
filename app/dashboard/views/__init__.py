@@ -1,0 +1,3 @@
+"""
+GreenShift Dashboard Views Package.
+"""

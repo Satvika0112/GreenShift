@@ -8,12 +8,13 @@ Every agent imports from here. Do NOT redefine models in individual agent module
 from __future__ import annotations
 
 import enum
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Enum as SAEnum,
@@ -21,6 +22,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -29,11 +31,16 @@ from sqlalchemy.orm import DeclarativeBase, relationship, foreign
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SQLAlchemy Base
+# SQLAlchemy Base & UTC Helper
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Base(DeclarativeBase):
     pass
+
+
+def utcnow() -> datetime:
+    """Return current timezone-aware UTC datetime."""
+    return datetime.now(timezone.utc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -58,6 +65,9 @@ class EventType(str, enum.Enum):
     SCHEDULE_PROPOSED    = "SCHEDULE_PROPOSED"
     APPROVAL_GRANTED     = "APPROVAL_GRANTED"
     APPROVAL_DECLINED    = "APPROVAL_DECLINED"
+    DISPATCH_REQUESTED   = "DISPATCH_REQUESTED"
+    DISPATCH_BLOCKED     = "DISPATCH_BLOCKED"
+    DISPATCH_STARTED     = "DISPATCH_STARTED"
     DISPATCH_AUTHORIZED  = "DISPATCH_AUTHORIZED"
     K8S_JOB_CREATED      = "K8S_JOB_CREATED"
     K8S_JOB_STARTED      = "K8S_JOB_STARTED"
@@ -74,6 +84,36 @@ class EventType(str, enum.Enum):
     CARBON_FALLBACK_USED = "CARBON_FALLBACK_USED"
 
 
+class UserRole(str, enum.Enum):
+    ADMIN     = "ADMIN"
+    TEAM_LEAD = "TEAM_LEAD"
+    OPERATOR  = "OPERATOR"
+    VIEWER    = "VIEWER"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLAlchemy ORM — User
+# ─────────────────────────────────────────────────────────────────────────────
+
+class UserORM(Base):
+    """User account registry record for authentication and RBAC authorization."""
+
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("role IN ('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'VIEWER')", name="ck_users_role_valid"),
+    )
+
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    username        = Column(String(50), nullable=False, unique=True, index=True)
+    email           = Column(String(255), nullable=False, unique=True, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    role            = Column(SAEnum(UserRole), default=UserRole.VIEWER, nullable=False, index=True)
+    team_id         = Column(String, nullable=True, index=True)
+    is_active       = Column(Boolean, default=True, nullable=False)
+    created_at      = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    updated_at      = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLAlchemy ORM — Job
 # ─────────────────────────────────────────────────────────────────────────────
@@ -82,12 +122,21 @@ class JobORM(Base):
     """Persistent job registry record."""
 
     __tablename__ = "jobs"
+    __table_args__ = (
+        Index("ix_jobs_team_status", "team_id", "status"),
+        Index("ix_jobs_status_created", "status", "created_at"),
+        CheckConstraint("runtime_minutes > 0", name="ck_jobs_runtime_minutes_positive"),
+        CheckConstraint("power_kw > 0", name="ck_jobs_power_kw_positive"),
+        CheckConstraint("carbon_budget_kg IS NULL OR carbon_budget_kg >= 0", name="ck_jobs_carbon_budget_non_negative"),
+        CheckConstraint("energy_kwh IS NULL OR energy_kwh >= 0", name="ck_jobs_energy_kwh_non_negative"),
+        CheckConstraint("status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')", name="ck_jobs_status_valid"),
+    )
 
     job_id               = Column(String, primary_key=True)
     workload_name        = Column(String, nullable=True)   # workload name/identifier
     team_id              = Column(String, nullable=False, index=True)
-    submitted_at         = Column(DateTime, nullable=False, index=True)
-    deadline             = Column(DateTime, nullable=False, index=True)
+    submitted_at         = Column(DateTime(timezone=True), nullable=False, index=True)
+    deadline             = Column(DateTime(timezone=True), nullable=False, index=True)
     runtime_minutes      = Column(Integer, nullable=False)
     power_kw             = Column(Float, nullable=False)
     region               = Column(String, nullable=False, index=True)
@@ -100,22 +149,38 @@ class JobORM(Base):
     # ── Real-dataset fields (added for workloads CSV integration) ──
     job_type             = Column(String, nullable=True)   # e.g. DATA_PROCESSING, ETL
     priority             = Column(String, nullable=True)   # CRITICAL / HIGH / MEDIUM / LOW
-    earliest_start_time  = Column(DateTime, nullable=True) # job cannot start before this
+    earliest_start_time  = Column(DateTime(timezone=True), nullable=True) # job cannot start before this
     energy_kwh           = Column(Float, nullable=True)    # pre-computed or power_kw * runtime_h
     deferrable           = Column(Boolean, nullable=True)  # True = can be shifted for savings
-    created_at           = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
-    updated_at           = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+    created_at           = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    updated_at           = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
 
     # Relationships
     schedule_decision = relationship(
         "ScheduleDecisionORM",
         back_populates="job",
         uselist=False,
+        cascade="all, delete-orphan",
+        foreign_keys="ScheduleDecisionORM.job_id",
+    )
+    schedule_decisions = relationship(
+        "ScheduleDecisionORM",
+        cascade="all, delete-orphan",
+        order_by="ScheduleDecisionORM.created_at.desc()",
+        viewonly=True,
     )
     kubernetes_execution = relationship(
         "KubernetesExecutionORM",
         back_populates="job",
         uselist=False,
+        cascade="all, delete-orphan",
+        foreign_keys="KubernetesExecutionORM.job_id",
+    )
+    executions = relationship(
+        "KubernetesExecutionORM",
+        cascade="all, delete-orphan",
+        order_by="KubernetesExecutionORM.created_at.desc()",
+        viewonly=True,
     )
     approvals = relationship(
         "ApprovalORM",
@@ -127,6 +192,7 @@ class JobORM(Base):
         "AuditEventORM",
         primaryjoin="JobORM.job_id==foreign(AuditEventORM.job_id)",
         viewonly=True,
+        order_by="AuditEventORM.sequence.asc()",
     )
 
 
@@ -138,18 +204,25 @@ class ScheduleDecisionORM(Base):
     """Output of the DECIDE agent — the chosen execution window."""
 
     __tablename__ = "schedule_decisions"
+    __table_args__ = (
+        Index("ix_schedule_decisions_job_created", "job_id", "created_at"),
+        CheckConstraint("selected_end > selected_start", name="ck_schedule_decisions_time_window"),
+        CheckConstraint("carbon_emission >= 0", name="ck_schedule_decisions_carbon_emission_non_negative"),
+        CheckConstraint("electricity_cost >= 0", name="ck_schedule_decisions_electricity_cost_non_negative"),
+        CheckConstraint("carbon_intensity >= 0", name="ck_schedule_decisions_carbon_intensity_non_negative"),
+    )
 
     id                = Column(Integer, primary_key=True, autoincrement=True)
-    job_id            = Column(String, ForeignKey("jobs.job_id"), nullable=False, unique=True, index=True)
-    selected_start    = Column(DateTime, nullable=False, index=True)
-    selected_end      = Column(DateTime, nullable=False, index=True)
+    job_id            = Column(String, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    selected_start    = Column(DateTime(timezone=True), nullable=False, index=True)
+    selected_end      = Column(DateTime(timezone=True), nullable=False, index=True)
     carbon_intensity  = Column(Float, nullable=False)   # gCO2/kWh
     electricity_cost  = Column(Float, nullable=False)   # total cost in USD
     carbon_emission   = Column(Float, nullable=False)   # kg CO2
     optimization_score = Column(Float, nullable=True)
     reason            = Column(Text, nullable=False)
     budget_remaining  = Column(Float, nullable=True)
-    created_at        = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at        = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
 
     # Regional & Currency context
     region_id          = Column(String, nullable=True, default="IN-TG", index=True)
@@ -163,8 +236,8 @@ class ScheduleDecisionORM(Base):
     tariff_category    = Column(String, nullable=True)  # "ht1a" / "ht2a" or plan identifier
 
     # Baseline comparison & Impact metrics
-    baseline_start           = Column(DateTime, nullable=True)
-    baseline_end             = Column(DateTime, nullable=True)
+    baseline_start           = Column(DateTime(timezone=True), nullable=True)
+    baseline_end             = Column(DateTime(timezone=True), nullable=True)
     baseline_carbon_emission = Column(Float, nullable=True)  # kg CO2
     baseline_cost            = Column(Float, nullable=True)    # $ USD
     carbon_avoided           = Column(Float, nullable=True)    # kg CO2
@@ -174,7 +247,14 @@ class ScheduleDecisionORM(Base):
     scheduling_delay_hours   = Column(Float, nullable=True)    # hours delayed from earliest bound
     sla_met                  = Column(Boolean, nullable=True, default=True) # completion <= deadline
 
-    job = relationship("JobORM", back_populates="schedule_decision")
+    # Decision Explainability
+    candidates_evaluated      = Column(Integer, nullable=True, default=0)
+    feasible_candidates_count = Column(Integer, nullable=True, default=0)
+    rejection_summary         = Column(JSON, nullable=True)
+    scheduler_objective       = Column(String, nullable=True, default="CARBON_FIRST")
+    deterministic_rank        = Column(Integer, nullable=True, default=1)
+
+    job = relationship("JobORM", back_populates="schedule_decision", foreign_keys=[job_id])
     approvals = relationship(
         "ApprovalORM",
         back_populates="schedule_decision",
@@ -199,15 +279,20 @@ class ApprovalORM(Base):
     """Human approval record for a proposed schedule decision."""
 
     __tablename__ = "approvals"
+    __table_args__ = (
+        Index("ix_approvals_job_decision", "job_id", "decision"),
+        Index("ix_approvals_schedule_decision", "schedule_decision_id", "decision"),
+        CheckConstraint("decision IN ('APPROVED', 'DECLINED')", name="ck_approvals_decision_valid"),
+    )
 
     id                   = Column(Integer, primary_key=True, autoincrement=True)
-    job_id               = Column(String, ForeignKey("jobs.job_id"), nullable=False, index=True)
-    schedule_decision_id = Column(Integer, ForeignKey("schedule_decisions.id"), nullable=False, index=True)
+    job_id               = Column(String, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False, index=True)
+    schedule_decision_id = Column(Integer, ForeignKey("schedule_decisions.id", ondelete="CASCADE"), nullable=False, index=True)
     decision             = Column(String, nullable=False, index=True)   # "APPROVED" or "DECLINED"
     reason               = Column(Text, nullable=True)
     approved_by          = Column(String, nullable=True, default="admin")
-    created_at           = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
-    updated_at           = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+    created_at           = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    updated_at           = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
 
     # Relationships
     job = relationship("JobORM", back_populates="approvals")
@@ -222,23 +307,29 @@ class KubernetesExecutionORM(Base):
     """Kubernetes Job execution tracking — owned by DISPATCH agent."""
 
     __tablename__ = "kubernetes_executions"
+    __table_args__ = (
+        Index("ix_k8s_executions_job_status", "job_id", "gs_status"),
+        CheckConstraint("planned_end IS NULL OR planned_start IS NULL OR planned_end > planned_start", name="ck_k8s_executions_planned_time_window"),
+        CheckConstraint("actual_end IS NULL OR actual_start IS NULL OR actual_end >= actual_start", name="ck_k8s_executions_actual_time_window"),
+        CheckConstraint("gs_status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')", name="ck_k8s_executions_status_valid"),
+    )
 
     id                   = Column(Integer, primary_key=True, autoincrement=True)
-    job_id               = Column(String, ForeignKey("jobs.job_id"), nullable=False, unique=True, index=True)
+    job_id               = Column(String, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
     kubernetes_job_name  = Column(String, nullable=False, index=True)
     kubernetes_namespace = Column(String, nullable=False, default="greenshift")
     pod_name             = Column(String, nullable=True)
-    planned_start        = Column(DateTime, nullable=False, index=True)
-    actual_start         = Column(DateTime, nullable=True)
-    planned_end          = Column(DateTime, nullable=True)
-    actual_end           = Column(DateTime, nullable=True)
+    planned_start        = Column(DateTime(timezone=True), nullable=False, index=True)
+    actual_start         = Column(DateTime(timezone=True), nullable=True)
+    planned_end          = Column(DateTime(timezone=True), nullable=True)
+    actual_end           = Column(DateTime(timezone=True), nullable=True)
     k8s_status           = Column(String, nullable=True)   # raw Kubernetes status
     gs_status            = Column(SAEnum(JobStatus), nullable=False, default=JobStatus.QUEUED, index=True)
     error_message        = Column(Text, nullable=True)
-    created_at           = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at           = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+    created_at           = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    updated_at           = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
 
-    job = relationship("JobORM", back_populates="kubernetes_execution")
+    job = relationship("JobORM", back_populates="kubernetes_execution", foreign_keys=[job_id])
 
     @property
     def execution_id(self) -> int:
@@ -255,10 +346,11 @@ class AuditEventORM(Base):
     __tablename__ = "audit_events"
     __table_args__ = (
         UniqueConstraint("sequence", name="uq_audit_events_sequence"),
+        Index("ix_audit_events_job_sequence", "job_id", "sequence"),
     )
 
     event_id      = Column(String, primary_key=True)
-    timestamp     = Column(DateTime, nullable=False, index=True)
+    timestamp     = Column(DateTime(timezone=True), nullable=False, index=True)
     event_type    = Column(SAEnum(EventType), nullable=False, index=True)
     job_id        = Column(String, nullable=True, index=True)
     payload_hash  = Column(String(64), nullable=False)   # SHA-256 hex
@@ -278,15 +370,16 @@ class CarbonDataPointORM(Base):
     __tablename__ = "carbon_data"
     __table_args__ = (
         Index("ix_carbon_data_region_timestamp", "region", "timestamp"),
+        CheckConstraint("carbon_gco2_kwh >= 0", name="ck_carbon_data_intensity_non_negative"),
     )
 
     id                = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp         = Column(DateTime, nullable=False, index=True)
+    timestamp         = Column(DateTime(timezone=True), nullable=False, index=True)
     region            = Column(String, nullable=False, index=True)
     carbon_gco2_kwh   = Column(Float, nullable=False)
-    fetched_at        = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    fetched_at        = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     source            = Column(String, nullable=False, default="electricity_maps")
-    expires_at        = Column(DateTime, nullable=True)
+    expires_at        = Column(DateTime(timezone=True), nullable=True)
     em_zone           = Column(String, nullable=True)
     confidence_status = Column(String, nullable=True)
     is_fallback       = Column(Boolean, nullable=False, default=False)
@@ -303,13 +396,14 @@ class TariffDataPointORM(Base):
     __tablename__ = "tariff_data"
     __table_args__ = (
         Index("ix_tariff_data_region_timestamp", "region", "timestamp"),
+        CheckConstraint("price_per_kwh >= 0", name="ck_tariff_data_price_non_negative"),
     )
 
     id            = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp     = Column(DateTime, nullable=False, index=True)
+    timestamp     = Column(DateTime(timezone=True), nullable=False, index=True)
     region        = Column(String, nullable=False, index=True)
     price_per_kwh = Column(Float, nullable=False)
-    fetched_at    = Column(DateTime, nullable=False, default=datetime.utcnow)
+    fetched_at    = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -323,14 +417,20 @@ class RegionalTariffORM(Base):
     """
 
     __tablename__ = "regional_tariffs"
+    __table_args__ = (
+        Index("ix_regional_tariffs_region_plan_time", "region_id", "tariff_plan", "timestamp"),
+        CheckConstraint("electricity_rate >= 0", name="ck_regional_tariffs_rate_non_negative"),
+        CheckConstraint("price_per_kwh_usd >= 0", name="ck_regional_tariffs_usd_rate_non_negative"),
+    )
+
 
     id                 = Column(Integer, primary_key=True, autoincrement=True)
     region_id          = Column(String, nullable=False, index=True)   # IN-TG, IN-GJ, IN-HP, IN-WB
     country            = Column(String, nullable=False, default="India")
     region_name        = Column(String, nullable=False)               # Telangana, Gujarat, Himachal Pradesh, West Bengal
     tariff_plan        = Column(String, nullable=False, index=True)   # HT-I(A), HT-II(A), HTP-I, Large Industry - EHT, Industries (Rate E-BT)
-    timestamp          = Column(DateTime, nullable=False, index=True) # UTC timestamp
-    local_timestamp    = Column(DateTime, nullable=False)             # Local wall-clock timestamp (Asia/Kolkata)
+    timestamp          = Column(DateTime(timezone=True), nullable=False, index=True) # UTC timestamp
+    local_timestamp    = Column(DateTime(timezone=True), nullable=False)             # Local wall-clock timestamp (Asia/Kolkata)
     timezone           = Column(String, nullable=False, default="Asia/Kolkata")
     season             = Column(String, nullable=True)
     tod_block          = Column(String, nullable=True)                # Night, Solar, Peak, Normal, Off-Peak, Flat (No ToD)
@@ -351,7 +451,7 @@ class RegionalTariffORM(Base):
     demand_charge      = Column(Float, nullable=True)
     fixed_charge       = Column(Float, nullable=True)
     price_per_kwh_usd  = Column(Float, nullable=False)                # Normalized USD rate for calculations
-    created_at         = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at         = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -459,6 +559,16 @@ class ScheduleDecision(BaseModel):
     reason:           str
     budget_remaining: Optional[float] = None
 
+    # Decision Explainability
+    objective:                 Optional[str] = "CARBON_FIRST"
+    scheduler_objective:       Optional[str] = "CARBON_FIRST"
+    candidates_evaluated:      Optional[int] = 0
+    feasible_candidates_count: Optional[int] = 0
+    rejection_summary:         Optional[Dict[str, int]] = Field(default_factory=dict)
+    rejection_reasons:         Optional[List[str]] = Field(default_factory=list)
+    deterministic_ranking:     Optional[int] = 1
+    deterministic_rank:        Optional[int] = 1
+
     # Regional & Currency context
     region_id:            Optional[str] = "IN-TG"
     tariff_plan:          Optional[str] = None
@@ -560,6 +670,7 @@ class PendingApprovalItem(BaseModel):
 
     job_id: str
     workload_name: Optional[str] = None
+    job_type: Optional[str] = None
     team_id: str
     region: str
     timezone: Optional[str] = "UTC"
@@ -577,4 +688,54 @@ class PendingApprovalItem(BaseModel):
     deadline_local: datetime
     status: JobStatus
     tariff_plan: Optional[str] = None
+    scheduler_objective: Optional[str] = "CARBON_FIRST"
+    objective: Optional[str] = "CARBON_FIRST"
+    reason: Optional[str] = None
+    candidates_evaluated: Optional[int] = 0
+    feasible_candidates_count: Optional[int] = 0
+    rejection_summary: Optional[Dict[str, int]] = Field(default_factory=dict)
+    rejection_reasons: Optional[List[str]] = Field(default_factory=list)
+    deterministic_ranking: Optional[int] = 1
+    deterministic_rank: Optional[int] = 1
+
+
+class UserRegisterRequest(BaseModel):
+    """Payload for user registration."""
+
+    username: str = Field(..., min_length=3, max_length=50, description="Unique username")
+    email: str = Field(..., description="User email address")
+    password: str = Field(..., min_length=6, description="Plaintext password")
+    role: Optional[UserRole] = Field(default=UserRole.VIEWER, description="User role")
+    team_id: Optional[str] = Field(default=None, description="Optional team identifier")
+
+
+class UserLoginRequest(BaseModel):
+    """Payload for user login."""
+
+    username: str = Field(..., description="Username or email")
+    password: str = Field(..., description="User password")
+
+
+class UserResponse(BaseModel):
+    """User profile response without exposing password hash."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    email: str
+    role: UserRole
+    team_id: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+
+
+class TokenResponse(BaseModel):
+    """JWT authentication token response."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserResponse
+
 

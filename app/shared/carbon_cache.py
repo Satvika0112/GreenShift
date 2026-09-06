@@ -26,6 +26,11 @@ except ImportError:
 
 from app.ingest.regional_registry import resolve_region_id
 from app.shared.config import settings
+from app.shared.metrics import (
+    record_carbon_cache_hit,
+    record_carbon_cache_miss,
+    record_carbon_redis_unavailable,
+)
 from app.shared.models import CarbonDataPoint
 from app.shared.utils import utcnow
 
@@ -51,6 +56,7 @@ def record_redis_failure() -> None:
     global _redis_client, _last_redis_failure_time
     _last_redis_failure_time = time.time()
     _redis_client = None
+    record_carbon_redis_unavailable()
 
 
 def get_redis_client(redis_url: Optional[str] = None) -> Optional[Any]:
@@ -68,6 +74,20 @@ def get_redis_client(redis_url: Optional[str] = None) -> Optional[Any]:
     url = redis_url or os.environ.get("REDIS_URL", getattr(settings, "redis_url", "redis://localhost:6379/0"))
     if _redis_client is not None and _redis_client_url == url:
         return _redis_client
+
+    try:
+        import socket
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        h = parsed.hostname or "127.0.0.1"
+        if h == "localhost":
+            h = "127.0.0.1"
+        p = parsed.port or 6379
+        with socket.create_connection((h, p), timeout=0.05):
+            pass
+    except Exception:
+        record_redis_failure()
+        return None
 
     try:
         import redis
@@ -194,6 +214,7 @@ def get_cached_carbon_data(
     canonical_region = resolve_region_id(region)
     r = client or get_redis_client()
     if r is None:
+        record_carbon_redis_unavailable()
         logger.debug("Carbon cache unavailable — bypassing cache")
         return None
 
@@ -201,11 +222,13 @@ def get_cached_carbon_data(
     try:
         cached_json = r.get(cache_key)
         if not cached_json:
+            record_carbon_cache_miss(canonical_region)
             logger.info("Carbon cache MISS | region=%s", canonical_region)
             return None
 
         points = _deserialize_points(cached_json, source_label="cache")
         if not points:
+            record_carbon_cache_miss(canonical_region)
             logger.info("Carbon cache MISS | region=%s (empty payload)", canonical_region)
             return None
 
@@ -227,6 +250,7 @@ def get_cached_carbon_data(
             p.is_fallback = False
             p.fallback_reason = None
 
+        record_carbon_cache_hit(canonical_region)
         logger.info("Carbon cache HIT | region=%s | points=%d", canonical_region, len(points))
         return points
 

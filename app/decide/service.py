@@ -42,7 +42,7 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
         deadline = deadline.replace(tzinfo=timezone.utc)
 
     # Fetch carbon + tariff data (API/CSV -> Mock priority)
-    carbon_curve = get_carbon_data(job.region, now, deadline)
+    carbon_curve = get_carbon_data(job.region, now, deadline, db=db)
     tariff_curve = get_tariff_data(job.region, now, deadline, job_type=job.job_type)
 
     # Run scheduler with full dataset parameters
@@ -93,6 +93,11 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
         existing_sd.cost_reduction_pct       = decision.cost_reduction_pct
         existing_sd.scheduling_delay_hours   = decision.scheduling_delay_hours
         existing_sd.sla_met                  = decision.sla_met
+        existing_sd.candidates_evaluated      = decision.candidates_evaluated
+        existing_sd.feasible_candidates_count = decision.feasible_candidates_count
+        existing_sd.rejection_summary         = decision.rejection_summary
+        existing_sd.scheduler_objective       = decision.scheduler_objective
+        existing_sd.deterministic_rank        = decision.deterministic_rank
     else:
         orm = ScheduleDecisionORM(
             job_id                   = decision.job_id,
@@ -121,6 +126,11 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
             cost_reduction_pct       = decision.cost_reduction_pct,
             scheduling_delay_hours   = decision.scheduling_delay_hours,
             sla_met                  = decision.sla_met,
+            candidates_evaluated      = decision.candidates_evaluated,
+            feasible_candidates_count = decision.feasible_candidates_count,
+            rejection_summary         = decision.rejection_summary,
+            scheduler_objective       = decision.scheduler_objective,
+            deterministic_rank        = decision.deterministic_rank,
         )
         db.add(orm)
 

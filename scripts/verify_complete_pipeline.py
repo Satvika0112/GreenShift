@@ -161,8 +161,8 @@ def main():
         print("  [OK] Deadline hard constraint successfully rejected infeasible workload window")
     passed += 1
 
-    # 9. DECIDE Cost Optimization with Carbon Tie-Breaker
-    print_step(9, "DECIDE Cost Optimization with Carbon Tie-Breaker")
+    # 9. DECIDE Carbon-First Optimization with Cost Tie-Breaker
+    print_step(9, "DECIDE Carbon-First Optimization with Cost Tie-Breaker")
     test_start = now.replace(minute=0, second=0, microsecond=0)
     decision = schedule_job(
         job_id="OPT-JOB-001",

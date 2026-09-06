@@ -181,7 +181,7 @@ def collect_cluster_state() -> ClusterResourceSnapshot:
 
     try:
         core = get_core_v1()
-        node_list = core.list_node(_request_timeout=5)
+        node_list = core.list_node(_request_timeout=(0.5, 2.0))
 
         nodes: List[NodeState] = []
         total_cpu = 0.0

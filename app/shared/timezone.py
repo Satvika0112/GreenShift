@@ -16,6 +16,7 @@ Core Principles:
 
 from __future__ import annotations
 
+import functools
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple, Union
@@ -115,6 +116,7 @@ def validate_iana_timezone(timezone_name: Optional[str]) -> bool:
         return False
 
 
+@functools.lru_cache(maxsize=256)
 def get_region_timezone_name(region: Optional[str] = None, default_tz: Optional[str] = None) -> str:
     """
     Resolve the canonical IANA timezone name for a given region code or alias.
@@ -163,6 +165,7 @@ def get_region_timezone_name(region: Optional[str] = None, default_tz: Optional[
     )
 
 
+@functools.lru_cache(maxsize=128)
 def get_region_timezone(region: Optional[str] = None, default_tz: Optional[str] = None) -> ZoneInfo:
     """
     Return a ZoneInfo instance for the region or IANA timezone.
@@ -392,3 +395,7 @@ def format_dual_time(
         "tz_abbr": tz_abbr,
         "region": region or "IN-TG",
     }
+
+
+# Convenience alias for regional timezone resolution
+resolve_region_timezone = get_region_timezone_name

@@ -69,17 +69,13 @@ def _reanchor_to_future(
     deadline: datetime,
     slack_hours: float,
     now: datetime,
+    runtime_hours: float = 1.0,
 ) -> Tuple[datetime, datetime]:
     """
     Re-anchor historical timestamps to the present while preserving the job's
-    scheduling window characteristics (slack_hours).
-
-    Strategy:
-      - new_earliest_start = now
-      - window_duration    = slack_hours (from dataset)
-      - new_deadline       = now + timedelta(hours=max(slack_hours, 2))
+    scheduling window characteristics (slack_hours + runtime_hours).
     """
-    window = timedelta(hours=max(slack_hours, 2.0))
+    window = timedelta(hours=max(slack_hours + runtime_hours, 2.0))
     new_earliest = now
     new_deadline = now + window
     return new_earliest, new_deadline
@@ -248,7 +244,7 @@ def load_jobs_from_csv(
                 # ── Re-anchor historical timestamps if needed ──────────────
                 if reanchor_historical and deadline <= now:
                     earliest_start, deadline = _reanchor_to_future(
-                        earliest_start, deadline, slack_hours, now
+                        earliest_start, deadline, slack_hours, now, runtime_hours
                     )
 
                 # Convert runtime_hours → runtime_minutes (internal representation)

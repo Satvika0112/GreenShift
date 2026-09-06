@@ -147,7 +147,8 @@ def test_declined_job_cannot_dispatch(db, sample_job_req):
 
     with pytest.raises(DispatchError) as excinfo:
         dispatch_job(db, job)
-    assert "requires approval before Kubernetes dispatch" in str(excinfo.value)
+    err = str(excinfo.value).lower()
+    assert "declined" in err or "requires approval" in err
 
 
 def test_pending_approval_job_cannot_dispatch(db, sample_job_req):
@@ -158,7 +159,8 @@ def test_pending_approval_job_cannot_dispatch(db, sample_job_req):
 
     with pytest.raises(DispatchError) as excinfo:
         dispatch_job(db, job)
-    assert "requires approval before Kubernetes dispatch" in str(excinfo.value)
+    err = str(excinfo.value).lower()
+    assert "pending approval" in err or "requires approval" in err
 
 
 def test_submitted_job_cannot_dispatch(db, sample_job_req):
@@ -168,7 +170,8 @@ def test_submitted_job_cannot_dispatch(db, sample_job_req):
 
     with pytest.raises(DispatchError) as excinfo:
         dispatch_job(db, job)
-    assert "requires approval" in str(excinfo.value) or "no schedule decision" in str(excinfo.value)
+    err = str(excinfo.value).lower()
+    assert "requires approval" in err or "no schedule decision" in err or "only approved jobs" in err
 
 
 def test_approved_job_dispatch_timing(db, sample_job_req):
@@ -180,6 +183,7 @@ def test_approved_job_dispatch_timing(db, sample_job_req):
     # Scenario 7: Future start time -> not ready in polling filter
     future_time = utcnow() + timedelta(hours=2)
     job.schedule_decision.selected_start = future_time
+    job.schedule_decision.selected_end = future_time + timedelta(minutes=job.runtime_minutes)
     db.commit()
 
     scheduled_jobs = _get_jobs_ready_to_dispatch(db)
@@ -190,6 +194,7 @@ def test_approved_job_dispatch_timing(db, sample_job_req):
     # Scenario 8: Past start time -> ready for dispatch
     past_time = utcnow() - timedelta(minutes=5)
     job.schedule_decision.selected_start = past_time
+    job.schedule_decision.selected_end = past_time + timedelta(minutes=job.runtime_minutes)
     db.commit()
 
     ready_jobs_now = _filter_ready(_get_jobs_ready_to_dispatch(db))
@@ -354,6 +359,7 @@ def test_end_to_end_scenario_a_approve(mock_batch, db, sample_job_req):
 
     # 8. Advance / prepare selected start time
     job.schedule_decision.selected_start = utcnow() - timedelta(minutes=1)
+    job.schedule_decision.selected_end = job.schedule_decision.selected_start + timedelta(minutes=job.runtime_minutes)
     db.commit()
 
     # 9, 10, 11. Dispatcher processes job -> K8s Job created -> QUEUED

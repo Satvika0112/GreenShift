@@ -8,6 +8,7 @@ Supports PostgreSQL (production) with connection pooling and SQLite (local dev/t
 import os
 import time
 import logging
+from contextlib import contextmanager
 from typing import Generator, Optional
 
 from sqlalchemy import create_engine, text, inspect, event, Engine
@@ -22,9 +23,15 @@ logger = logging.getLogger(__name__)
 def build_engine(database_url: Optional[str] = None) -> Engine:
     """
     Construct a SQLAlchemy Engine configured for the target database dialect.
-    Applies production-grade connection pooling for PostgreSQL and WAL settings for SQLite.
+    Applies production-grade connection pooling for PostgreSQL and WAL / foreign key settings for SQLite.
     """
     url = database_url or settings.database_url
+    if not url:
+        url = "sqlite:///./greenshift.db"
+
+    # Normalize legacy postgres:// scheme to postgresql:// for SQLAlchemy 1.4+ / 2.0+
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
 
     if url.startswith("sqlite"):
         eng = create_engine(
@@ -37,6 +44,7 @@ def build_engine(database_url: Optional[str] = None) -> Engine:
         def set_sqlite_pragma(dbapi_connection, connection_record):
             cursor = dbapi_connection.cursor()
             try:
+                cursor.execute("PRAGMA foreign_keys=ON")
                 cursor.execute("PRAGMA journal_mode=WAL")
                 cursor.execute("PRAGMA synchronous=NORMAL")
                 cursor.execute("PRAGMA busy_timeout=30000")
@@ -62,7 +70,12 @@ def build_engine(database_url: Optional[str] = None) -> Engine:
 
 
 engine: Engine = build_engine()
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+    expire_on_commit=False,
+)
 
 
 def run_alembic_migrations(db_url: Optional[str] = None) -> bool:
@@ -80,8 +93,10 @@ def run_alembic_migrations(db_url: Optional[str] = None) -> bool:
 
         if os.path.exists(alembic_ini_path):
             alembic_cfg = Config(alembic_ini_path)
-            if db_url or settings.database_url:
-                alembic_cfg.set_main_option("sqlalchemy.url", db_url or settings.database_url)
+            target_url = db_url or settings.database_url or "sqlite:///./greenshift.db"
+            if target_url.startswith("postgres://"):
+                target_url = target_url.replace("postgres://", "postgresql://", 1)
+            alembic_cfg.set_main_option("sqlalchemy.url", target_url)
             command.upgrade(alembic_cfg, "head")
             logger.info("Alembic database migrations applied successfully to head")
             return True
@@ -108,11 +123,11 @@ def run_schema_migrations() -> None:
         # jobs table — real dataset fields & timestamps
         ("jobs", "workload_name",       "VARCHAR",   "VARCHAR"),
         ("jobs", "timezone",            "VARCHAR",   "VARCHAR"),
-        ("jobs", "created_at",          "DATETIME",  "TIMESTAMP"),
-        ("jobs", "updated_at",          "DATETIME",  "TIMESTAMP"),
+        ("jobs", "created_at",          "DATETIME",  "TIMESTAMP WITH TIME ZONE"),
+        ("jobs", "updated_at",          "DATETIME",  "TIMESTAMP WITH TIME ZONE"),
         ("jobs", "job_type",            "VARCHAR",   "VARCHAR"),
         ("jobs", "priority",            "VARCHAR",   "VARCHAR"),
-        ("jobs", "earliest_start_time", "DATETIME",  "TIMESTAMP"),
+        ("jobs", "earliest_start_time", "DATETIME",  "TIMESTAMP WITH TIME ZONE"),
         ("jobs", "energy_kwh",          "FLOAT",     "DOUBLE PRECISION"),
         ("jobs", "deferrable",          "BOOLEAN",   "BOOLEAN"),
         ("jobs", "tariff_plan",         "VARCHAR",   "VARCHAR"),
@@ -125,7 +140,7 @@ def run_schema_migrations() -> None:
         ("schedule_decisions", "currency",               "VARCHAR", "VARCHAR"),
         ("schedule_decisions", "native_cost",            "FLOAT",   "DOUBLE PRECISION"),
         ("schedule_decisions", "baseline_native_cost",   "FLOAT",   "DOUBLE PRECISION"),
-        ("schedule_decisions", "baseline_end",           "DATETIME","TIMESTAMP"),
+        ("schedule_decisions", "baseline_end",           "DATETIME","TIMESTAMP WITH TIME ZONE"),
         ("schedule_decisions", "carbon_reduction_pct",   "FLOAT",   "DOUBLE PRECISION"),
         ("schedule_decisions", "cost_reduction_pct",     "FLOAT",   "DOUBLE PRECISION"),
         ("schedule_decisions", "scheduling_delay_hours", "FLOAT",   "DOUBLE PRECISION"),
@@ -142,7 +157,7 @@ def run_schema_migrations() -> None:
         ("regional_tariffs", "tariff_year",      "VARCHAR", "VARCHAR"),
         # carbon_data table — resilience & cache metadata
         ("carbon_data", "source",            "VARCHAR", "VARCHAR"),
-        ("carbon_data", "expires_at",        "DATETIME","TIMESTAMP"),
+        ("carbon_data", "expires_at",        "DATETIME","TIMESTAMP WITH TIME ZONE"),
         ("carbon_data", "em_zone",           "VARCHAR", "VARCHAR"),
         ("carbon_data", "confidence_status", "VARCHAR", "VARCHAR"),
         ("carbon_data", "is_fallback",       "BOOLEAN", "BOOLEAN"),
@@ -218,9 +233,26 @@ def init_db(max_retries: int = 15, delay_seconds: float = 2.0) -> None:
 
 
 def get_db() -> Generator[Session, None, None]:
-    """FastAPI dependency: yields a database session."""
+    """FastAPI dependency: yields a database session with automatic transaction rollback on error."""
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@contextmanager
+def get_db_session() -> Generator[Session, None, None]:
+    """Context manager for standalone/background tasks yielding a session with transaction management."""
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

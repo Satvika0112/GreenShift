@@ -66,13 +66,8 @@ from app.shared.models import (
 
 
 @pytest.fixture
-def db_session():
-    init_db()
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+def db_session(db):
+    yield db
 
 
 @pytest.fixture

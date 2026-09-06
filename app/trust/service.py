@@ -133,6 +133,62 @@ def record_approval_declined(
     append_event(db, EventType.APPROVAL_DECLINED, job_id=job_id, payload=payload)
 
 
+def record_dispatch_requested(
+    db: Session,
+    job_id: str,
+    requested_by: Optional[str] = "system",
+    team_id: Optional[str] = None,
+) -> None:
+    """Record a DISPATCH_REQUESTED audit event."""
+    from app.shared.utils import utcnow
+    payload = {
+        "job_id": job_id,
+        "requested_by": requested_by or "system",
+        "timestamp": utcnow().isoformat(),
+    }
+    if team_id:
+        payload["team_id"] = team_id
+    append_event(db, EventType.DISPATCH_REQUESTED, job_id=job_id, payload=payload)
+
+
+def record_dispatch_blocked(
+    db: Session,
+    job_id: str,
+    reason: str,
+    current_status: Optional[str] = None,
+    requested_by: Optional[str] = "system",
+) -> None:
+    """Record a DISPATCH_BLOCKED audit event."""
+    from app.shared.utils import utcnow
+    payload = {
+        "job_id": job_id,
+        "reason": reason,
+        "current_status": current_status,
+        "requested_by": requested_by or "system",
+        "timestamp": utcnow().isoformat(),
+    }
+    append_event(db, EventType.DISPATCH_BLOCKED, job_id=job_id, payload=payload)
+
+
+def record_dispatch_started(
+    db: Session,
+    job_id: str,
+    kubernetes_job_name: str,
+    namespace: str,
+    dispatched_by: Optional[str] = "system",
+) -> None:
+    """Record a DISPATCH_STARTED audit event."""
+    from app.shared.utils import utcnow
+    payload = {
+        "job_id": job_id,
+        "kubernetes_job_name": kubernetes_job_name,
+        "namespace": namespace,
+        "dispatched_by": dispatched_by or "system",
+        "timestamp": utcnow().isoformat(),
+    }
+    append_event(db, EventType.DISPATCH_STARTED, job_id=job_id, payload=payload)
+
+
 def record_dispatch_authorized(
     db: Session,
     job_id: str,

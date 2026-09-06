@@ -56,11 +56,14 @@ External Inputs (Electricity Maps API, Tariff CSV)
 
 ### AGENT 2 — DECIDE
 - **Purpose**: Core mathematical scheduling intelligence.
-- **Scheduling Algorithm**: Budget-aware greedy search over candidate start slots $s \in [t_{\text{now}}, t_{\text{deadline}} - t_{\text{runtime}}]$.
-- **Objective Function**:
-  $$\min_{s} \left( \text{Cost}(s) \right) \quad \text{with Carbon tie-breaking}$$
-  subject to:
-  $$\text{Carbon}(s) \le \text{Team Budget Remaining}$$
+- **Scheduling Algorithm**: Deterministic constraint-first lexicographic optimization over candidate start slots $s \in [t_{\text{now}}, t_{\text{deadline}} - t_{\text{runtime}}]$.
+- **Constraint-First Hierarchy**:
+  1. **Hard Constraints**: Deadline, SLA, Region Eligibility, CPU/RAM/GPU cluster allocatable capacity, and Strict Carbon Budget ($\text{Carbon}(s) \le \text{Team Budget Remaining}$, without silent relaxation).
+  2. **Primary Objective**: Minimize Total Workload Carbon Emissions ($\text{kg CO}_2$).
+  3. **Secondary Objective**: Minimize Electricity Cost ($\$$ USD).
+  4. **Deterministic Tie-Breaker**: Earliest Start Time ($s$).
+- **Deterministic Sort**: `(carbon_emission_kg, electricity_cost, selected_start)`
+- **Candidate Rejection Tracking**: Infeasible slots record specific failure reasons (`DEADLINE_VIOLATION`, `CARBON_BUDGET_EXCEEDED`, `INSUFFICIENT_CPU`, `INSUFFICIENT_MEMORY`, `INSUFFICIENT_GPU`, `REGION_INELIGIBLE`, `SLA_VIOLATION`, `CARBON_DATA_UNAVAILABLE`, `COST_DATA_UNAVAILABLE`).
 - **Baseline Computation**: Evaluates the immediate execution slot ($t_{\text{now}}$) as the baseline to quantify avoided carbon ($\text{kg CO}_2$) and cost savings ($\$$).
 - **Audit**: Emits `SCHEDULE_PROPOSED` and `JOB_SCHEDULED` events to Trust ledger.
 - **State Transition**: Transitions job status to `PENDING_APPROVAL`.

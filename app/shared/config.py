@@ -60,11 +60,17 @@ class Settings(BaseSettings):
         description="Set True to skip TLS certificate verification if connecting via rewritten hostnames",
     )
 
-    # ─── Application ──────────────────────────────────────────────
+    # ─── Application & Security ───────────────────────────────────
     log_level: str    = Field(default="INFO")
     api_host: str     = Field(default="0.0.0.0")
     api_port: int     = Field(default=8000)
     environment: str  = Field(default="development")
+    jwt_secret_key: str = Field(
+        default="greenshift_jwt_super_secret_key_change_in_production_2026",
+        description="Secret key used for signing JWT access tokens",
+    )
+    jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
+    jwt_expire_minutes: int = Field(default=1440, description="JWT token validity in minutes (24 hours)")
 
     # ─── Cache & Redis ────────────────────────────────────────────
     cache_ttl_seconds: int = Field(default=300)

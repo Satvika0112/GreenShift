@@ -6,32 +6,41 @@ FastAPI router for dispatch endpoints.
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.dispatch.dispatcher import dispatch_job, refresh_job_status, DispatchError
+from app.dispatch.dispatcher import (
+    dispatch_job,
+    refresh_job_status,
+    DispatchError,
+    DispatchBlockedError,
+    DispatchPermissionError,
+)
 from app.dispatch.kubernetes_client import check_kubernetes_available
 from app.ingest.jobs import get_job
+from app.shared.auth import get_current_user
 from app.shared.database import get_db
-from app.shared.models import JobStatus
+from app.shared.models import JobStatus, UserORM
 
 router = APIRouter()
 
 
 @router.post("/dispatch/{job_id}")
-def trigger_dispatch(job_id: str, db: Session = Depends(get_db)):
+def trigger_dispatch(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
     """
     Manually trigger Kubernetes dispatch for a scheduled job.
-    Normally triggered automatically by the DISPATCH background service.
+    Strictly validates user authorization, job approval status, and schedule ownership.
     """
     job = get_job(db, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    if job.status != JobStatus.APPROVED:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job {job_id} is in status {job.status} — only APPROVED jobs can be dispatched",
-        )
+
     try:
-        execution = dispatch_job(db, job)
-    except DispatchError as exc:
+        execution = dispatch_job(db, job, user=current_user)
+    except (DispatchPermissionError, DispatchBlockedError, DispatchError) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
     return {

@@ -3,8 +3,8 @@ Tests for DECIDE Scheduling Policy & Baseline vs GreenShift Impact Calculator.
 
 Covers:
 - Hard constraints enforcement (Budget, Deadline, CPU/RAM/GPU)
-- Cost optimization as primary objective
-- Carbon tie-breaker when costs are equal
+- Carbon-First optimization as primary objective
+- Cost tie-breaker when carbon emissions are equal
 - Quantitative Baseline vs GreenShift impact calculation
 """
 
@@ -34,26 +34,27 @@ class TestDecidePolicyAndConstraints:
                 earliest_start_time=now,
             )
 
-    def test_cost_minimization_with_carbon_tiebreaker(self):
+    def test_carbon_first_optimization_with_cost_tiebreaker(self):
+        """Under Carbon-First policy: lowest carbon wins; if equal carbon, lowest cost wins."""
         start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         deadline = start + timedelta(hours=4)
 
-        # Slot 1: Cost $0.10, Carbon 200
-        # Slot 2: Cost $0.05, Carbon 400 (Lowest cost -> should win)
-        # Slot 3: Cost $0.05, Carbon 350 (Equal lowest cost, lower carbon -> should win as tiebreaker)
+        # Slot 0: Carbon 300, Cost $0.05
+        # Slot 1: Carbon 200, Cost $0.10 (Lower carbon -> wins over Slot 0)
+        # Slot 2: Carbon 200, Cost $0.08 (Equal lowest carbon, lower cost -> wins over Slot 1)
         carbon_curve = [
-            CarbonDataPoint(timestamp=start, region="IN-TG", carbon_gco2_kwh=200.0),
-            CarbonDataPoint(timestamp=start + timedelta(hours=1), region="IN-TG", carbon_gco2_kwh=400.0),
-            CarbonDataPoint(timestamp=start + timedelta(hours=2), region="IN-TG", carbon_gco2_kwh=350.0),
+            CarbonDataPoint(timestamp=start, region="IN-TG", carbon_gco2_kwh=300.0),
+            CarbonDataPoint(timestamp=start + timedelta(hours=1), region="IN-TG", carbon_gco2_kwh=200.0),
+            CarbonDataPoint(timestamp=start + timedelta(hours=2), region="IN-TG", carbon_gco2_kwh=200.0),
         ]
         tariff_curve = [
-            TariffDataPoint(timestamp=start, region="IN-TG", price_per_kwh=0.10),
-            TariffDataPoint(timestamp=start + timedelta(hours=1), region="IN-TG", price_per_kwh=0.05),
-            TariffDataPoint(timestamp=start + timedelta(hours=2), region="IN-TG", price_per_kwh=0.05),
+            TariffDataPoint(timestamp=start, region="IN-TG", price_per_kwh=0.05),
+            TariffDataPoint(timestamp=start + timedelta(hours=1), region="IN-TG", price_per_kwh=0.10),
+            TariffDataPoint(timestamp=start + timedelta(hours=2), region="IN-TG", price_per_kwh=0.08),
         ]
 
         decision = schedule_job(
-            job_id="TEST-COST-TIEBREAKER",
+            job_id="TEST-CARBON-FIRST-TIEBREAKER",
             team_id="ml",
             deadline=deadline,
             runtime_minutes=60,
@@ -64,9 +65,10 @@ class TestDecidePolicyAndConstraints:
             earliest_start_time=start,
         )
 
-        # Slot 2 (hours=2) has equal minimum cost ($0.05) and lower carbon (350 vs 400)
+        # Slot 2 (hours=2) has equal minimum carbon (200 gCO2/kWh -> 2.0 kg) and lower cost ($0.08 vs $0.10)
         assert decision.selected_start == start + timedelta(hours=2)
-        assert abs(decision.electricity_cost - (10.0 * 0.05)) < 1e-5
+        assert abs(decision.carbon_emission - (10.0 * 200.0 / 1000.0)) < 1e-5
+        assert abs(decision.electricity_cost - (10.0 * 0.08)) < 1e-5
 
     def test_carbon_budget_constraint(self):
         start = (datetime.now(timezone.utc) + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)

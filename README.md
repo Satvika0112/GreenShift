@@ -22,7 +22,7 @@ REGIONAL DATA LAYER / COMMON SCHEMA (Telangana, Gujarat, Himachal Pradesh, West 
 KUBERNETES STATE COLLECTOR (Node Telemetry, CPU / RAM / GPU Allocatable)
   │
   ▼
-DECIDE AGENT (Hard Constraints: Budget, Deadline, SLA, Resources -> Cost Optimization -> Carbon Tie-Breaker)
+DECIDE AGENT (Hard Constraints -> Carbon-First Optimization -> Cost Tie-Breaker -> Earliest Start)
   │
   ▼
 BASELINE & IMPACT CALCULATOR (Emissions, Cost USD & Native INR, Avoided %, Delay, SLA Compliance)
@@ -87,24 +87,27 @@ Every regional tariff point is normalized into the following schema while preser
 
 ## 3. DECIDE Agent Scheduling Policy
 
-The DECIDE agent evaluates candidate start windows across the workload's lifetime following a strict hierarchy:
+The DECIDE agent evaluates candidate start windows across the workload's lifetime following a **deterministic, constraint-first, lexicographic optimization hierarchy**:
 
 1. **Hard Constraints (Checked FIRST)**:
-   - **Carbon Budget**: `carbon_emission <= carbon_budget_kg`
    - **Deadline**: `start + runtime <= deadline`
    - **SLA**: Completion verified on or before deadline
-   - **CPU Availability**: Cluster allocatable CPU >= workload CPU request
-   - **RAM Availability**: Cluster allocatable RAM >= workload RAM request
-   - **GPU Availability**: Cluster allocatable GPU >= workload GPU request
    - **Region Restrictions**: Active regional plan and grid zone support
+   - **CPU Availability**: Cluster allocatable CPU >= workload CPU request (evaluated against current cluster capacity)
+   - **RAM Availability**: Cluster allocatable RAM >= workload RAM request (evaluated against current cluster capacity)
+   - **GPU Availability**: Cluster allocatable GPU >= workload GPU request (evaluated against current cluster capacity)
+   - **Carbon Budget (STRICT when specified)**: `carbon_emission_kg <= carbon_budget_kg`. If specified and no candidate satisfies it, the job is marked INFEASIBLE with an explicit reason (no silent relaxation).
 
-2. **Optimization Objective**:
-   - **Minimize Electricity Cost** (`min(cost_usd)`)
+2. **Optimization Hierarchy**:
+   - **Primary Objective**: **Minimize Total Workload Carbon Emissions** (`carbon_emission_kg`)
+   - **Secondary Objective**: **Minimize Electricity Cost** (`electricity_cost` USD)
+   - **Final Tie-Breaker**: **Earliest Start Time** (`selected_start` UTC)
 
-3. **Tie-Breaker**:
-   - When costs between feasible candidate slots are equal or nearly equal (`abs(cost_a - cost_b) < 1e-6`), select the slot with **lower carbon emission**.
-
-*(No arbitrary weights, no weighted CCS score).*
+Concepts:
+- Deterministic lexicographic sort: `(carbon_emission_kg, electricity_cost, selected_start)`.
+- No arbitrary weights, no weighted CCS score.
+- Rejection tracking: Infeasible candidates are tracked with structured rejection reasons (`DEADLINE_VIOLATION`, `CARBON_BUDGET_EXCEEDED`, `INSUFFICIENT_CPU`, `INSUFFICIENT_MEMORY`, `INSUFFICIENT_GPU`, `REGION_INELIGIBLE`, `SLA_VIOLATION`, `CARBON_DATA_UNAVAILABLE`, `COST_DATA_UNAVAILABLE`).
+- Resource feasibility is evaluated against current Kubernetes cluster capacity. Future capacity forecasting is outside the current MVP scope.
 
 ---
 
