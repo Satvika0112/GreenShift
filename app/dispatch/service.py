@@ -25,12 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 def _get_jobs_ready_to_dispatch(db: Session):
-    """Return SCHEDULED jobs whose selected_start <= now."""
-    now = utcnow()
+    """Return APPROVED jobs whose selected_start <= now."""
     return (
         db.query(JobORM)
         .join(JobORM.schedule_decision)
-        .filter(JobORM.status == JobStatus.SCHEDULED)
+        .filter(JobORM.status == JobStatus.APPROVED)
         .filter(JobORM.schedule_decision.has())
         .all()
     )

@@ -13,18 +13,19 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum as SAEnum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
-    Boolean,
     UniqueConstraint,
 )
-from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.orm import DeclarativeBase, relationship, foreign
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -40,17 +41,24 @@ class Base(DeclarativeBase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class JobStatus(str, enum.Enum):
-    SUBMITTED = "SUBMITTED"
-    SCHEDULED = "SCHEDULED"
-    QUEUED    = "QUEUED"
-    RUNNING   = "RUNNING"
-    COMPLETED = "COMPLETED"
-    FAILED    = "FAILED"
+    SUBMITTED        = "SUBMITTED"
+    SCHEDULED        = "SCHEDULED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    APPROVED         = "APPROVED"
+    DECLINED         = "DECLINED"
+    QUEUED           = "QUEUED"
+    RUNNING          = "RUNNING"
+    COMPLETED        = "COMPLETED"
+    FAILED           = "FAILED"
 
 
 class EventType(str, enum.Enum):
     JOB_SUBMITTED        = "JOB_SUBMITTED"
     JOB_SCHEDULED        = "JOB_SCHEDULED"
+    SCHEDULE_PROPOSED    = "SCHEDULE_PROPOSED"
+    APPROVAL_GRANTED     = "APPROVAL_GRANTED"
+    APPROVAL_DECLINED    = "APPROVAL_DECLINED"
+    DISPATCH_AUTHORIZED  = "DISPATCH_AUTHORIZED"
     K8S_JOB_CREATED      = "K8S_JOB_CREATED"
     K8S_JOB_STARTED      = "K8S_JOB_STARTED"
     K8S_JOB_COMPLETED    = "K8S_JOB_COMPLETED"
@@ -76,13 +84,15 @@ class JobORM(Base):
     __tablename__ = "jobs"
 
     job_id               = Column(String, primary_key=True)
-    team_id              = Column(String, nullable=False)
-    submitted_at         = Column(DateTime, nullable=False)
-    deadline             = Column(DateTime, nullable=False)
+    workload_name        = Column(String, nullable=True)   # workload name/identifier
+    team_id              = Column(String, nullable=False, index=True)
+    submitted_at         = Column(DateTime, nullable=False, index=True)
+    deadline             = Column(DateTime, nullable=False, index=True)
     runtime_minutes      = Column(Integer, nullable=False)
     power_kw             = Column(Float, nullable=False)
-    region               = Column(String, nullable=False)
-    status               = Column(SAEnum(JobStatus), default=JobStatus.SUBMITTED, nullable=False)
+    region               = Column(String, nullable=False, index=True)
+    timezone             = Column(String, nullable=True, default="UTC")
+    status               = Column(SAEnum(JobStatus), default=JobStatus.SUBMITTED, nullable=False, index=True)
     container_image      = Column(String, nullable=False)
     cpu_request          = Column(String, default="500m")
     memory_request       = Column(String, default="512Mi")
@@ -93,6 +103,8 @@ class JobORM(Base):
     earliest_start_time  = Column(DateTime, nullable=True) # job cannot start before this
     energy_kwh           = Column(Float, nullable=True)    # pre-computed or power_kw * runtime_h
     deferrable           = Column(Boolean, nullable=True)  # True = can be shifted for savings
+    created_at           = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at           = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
 
     # Relationships
     schedule_decision = relationship(
@@ -104,6 +116,17 @@ class JobORM(Base):
         "KubernetesExecutionORM",
         back_populates="job",
         uselist=False,
+    )
+    approvals = relationship(
+        "ApprovalORM",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="ApprovalORM.created_at.desc()",
+    )
+    audit_events = relationship(
+        "AuditEventORM",
+        primaryjoin="JobORM.job_id==foreign(AuditEventORM.job_id)",
+        viewonly=True,
     )
 
 
@@ -117,18 +140,19 @@ class ScheduleDecisionORM(Base):
     __tablename__ = "schedule_decisions"
 
     id                = Column(Integer, primary_key=True, autoincrement=True)
-    job_id            = Column(String, ForeignKey("jobs.job_id"), nullable=False, unique=True)
-    selected_start    = Column(DateTime, nullable=False)
-    selected_end      = Column(DateTime, nullable=False)
+    job_id            = Column(String, ForeignKey("jobs.job_id"), nullable=False, unique=True, index=True)
+    selected_start    = Column(DateTime, nullable=False, index=True)
+    selected_end      = Column(DateTime, nullable=False, index=True)
     carbon_intensity  = Column(Float, nullable=False)   # gCO2/kWh
     electricity_cost  = Column(Float, nullable=False)   # total cost in USD
     carbon_emission   = Column(Float, nullable=False)   # kg CO2
+    optimization_score = Column(Float, nullable=True)
     reason            = Column(Text, nullable=False)
     budget_remaining  = Column(Float, nullable=True)
     created_at        = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     # Regional & Currency context
-    region_id          = Column(String, nullable=True, default="IN-TG")
+    region_id          = Column(String, nullable=True, default="IN-TG", index=True)
     tariff_plan        = Column(String, nullable=True)
     currency           = Column(String, nullable=True, default="USD")
     native_cost        = Column(Float, nullable=True)
@@ -151,6 +175,43 @@ class ScheduleDecisionORM(Base):
     sla_met                  = Column(Boolean, nullable=True, default=True) # completion <= deadline
 
     job = relationship("JobORM", back_populates="schedule_decision")
+    approvals = relationship(
+        "ApprovalORM",
+        back_populates="schedule_decision",
+        cascade="all, delete-orphan",
+        order_by="ApprovalORM.created_at.desc()",
+    )
+
+    @property
+    def decision_id(self) -> int:
+        return self.id
+
+    @property
+    def estimated_emissions(self) -> float:
+        return self.carbon_emission
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLAlchemy ORM — Approval
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ApprovalORM(Base):
+    """Human approval record for a proposed schedule decision."""
+
+    __tablename__ = "approvals"
+
+    id                   = Column(Integer, primary_key=True, autoincrement=True)
+    job_id               = Column(String, ForeignKey("jobs.job_id"), nullable=False, index=True)
+    schedule_decision_id = Column(Integer, ForeignKey("schedule_decisions.id"), nullable=False, index=True)
+    decision             = Column(String, nullable=False, index=True)   # "APPROVED" or "DECLINED"
+    reason               = Column(Text, nullable=True)
+    approved_by          = Column(String, nullable=True, default="admin")
+    created_at           = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at           = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+
+    # Relationships
+    job = relationship("JobORM", back_populates="approvals")
+    schedule_decision = relationship("ScheduleDecisionORM", back_populates="approvals")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,21 +224,25 @@ class KubernetesExecutionORM(Base):
     __tablename__ = "kubernetes_executions"
 
     id                   = Column(Integer, primary_key=True, autoincrement=True)
-    job_id               = Column(String, ForeignKey("jobs.job_id"), nullable=False, unique=True)
-    kubernetes_job_name  = Column(String, nullable=False)
+    job_id               = Column(String, ForeignKey("jobs.job_id"), nullable=False, unique=True, index=True)
+    kubernetes_job_name  = Column(String, nullable=False, index=True)
     kubernetes_namespace = Column(String, nullable=False, default="greenshift")
     pod_name             = Column(String, nullable=True)
-    planned_start        = Column(DateTime, nullable=False)
+    planned_start        = Column(DateTime, nullable=False, index=True)
     actual_start         = Column(DateTime, nullable=True)
     planned_end          = Column(DateTime, nullable=True)
     actual_end           = Column(DateTime, nullable=True)
     k8s_status           = Column(String, nullable=True)   # raw Kubernetes status
-    gs_status            = Column(SAEnum(JobStatus), nullable=False, default=JobStatus.QUEUED)
+    gs_status            = Column(SAEnum(JobStatus), nullable=False, default=JobStatus.QUEUED, index=True)
     error_message        = Column(Text, nullable=True)
     created_at           = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at           = Column(DateTime, nullable=True)
+    updated_at           = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
 
     job = relationship("JobORM", back_populates="kubernetes_execution")
+
+    @property
+    def execution_id(self) -> int:
+        return self.id
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -193,9 +258,9 @@ class AuditEventORM(Base):
     )
 
     event_id      = Column(String, primary_key=True)
-    timestamp     = Column(DateTime, nullable=False)
-    event_type    = Column(SAEnum(EventType), nullable=False)
-    job_id        = Column(String, nullable=True)
+    timestamp     = Column(DateTime, nullable=False, index=True)
+    event_type    = Column(SAEnum(EventType), nullable=False, index=True)
+    job_id        = Column(String, nullable=True, index=True)
     payload_hash  = Column(String(64), nullable=False)   # SHA-256 hex
     previous_hash = Column(String(64), nullable=False)   # SHA-256 hex (genesis = 0*64)
     current_hash  = Column(String(64), nullable=False)   # SHA-256 hex
@@ -211,12 +276,15 @@ class CarbonDataPointORM(Base):
     """Cached carbon intensity data points with multi-level resilience metadata."""
 
     __tablename__ = "carbon_data"
+    __table_args__ = (
+        Index("ix_carbon_data_region_timestamp", "region", "timestamp"),
+    )
 
     id                = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp         = Column(DateTime, nullable=False)
-    region            = Column(String, nullable=False)
+    timestamp         = Column(DateTime, nullable=False, index=True)
+    region            = Column(String, nullable=False, index=True)
     carbon_gco2_kwh   = Column(Float, nullable=False)
-    fetched_at        = Column(DateTime, nullable=False, default=datetime.utcnow)
+    fetched_at        = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     source            = Column(String, nullable=False, default="electricity_maps")
     expires_at        = Column(DateTime, nullable=True)
     em_zone           = Column(String, nullable=True)
@@ -233,10 +301,13 @@ class TariffDataPointORM(Base):
     """Cached tariff data points."""
 
     __tablename__ = "tariff_data"
+    __table_args__ = (
+        Index("ix_tariff_data_region_timestamp", "region", "timestamp"),
+    )
 
     id            = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp     = Column(DateTime, nullable=False)
-    region        = Column(String, nullable=False)
+    timestamp     = Column(DateTime, nullable=False, index=True)
+    region        = Column(String, nullable=False, index=True)
     price_per_kwh = Column(Float, nullable=False)
     fetched_at    = Column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -378,6 +449,7 @@ class ScheduleDecision(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    id:               Optional[int] = None
     job_id:           str
     selected_start:   datetime
     selected_end:     datetime
@@ -455,3 +527,54 @@ class DashboardSummary(BaseModel):
     cost: dict
     audit: dict
     regional: Optional[dict] = None
+
+
+class ApprovalRequest(BaseModel):
+    """Request schema for approving or declining a proposed schedule."""
+
+    schedule_id: int = Field(..., description="ID of the ScheduleDecisionORM")
+    reason: Optional[str] = Field(None, description="Optional approval comment or required decline justification")
+    approved_by: Optional[str] = Field(default="admin", description="User identifier who took the decision")
+
+
+class ApprovalResponse(BaseModel):
+    """Response schema for approval decision."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: Optional[int] = None
+    job_id: str
+    schedule_decision_id: int
+    decision: str
+    job_status: JobStatus
+    reason: Optional[str] = None
+    approved_by: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class PendingApprovalItem(BaseModel):
+    """Detailed item for pending approval listing."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    job_id: str
+    workload_name: Optional[str] = None
+    team_id: str
+    region: str
+    timezone: Optional[str] = "UTC"
+    schedule_id: int
+    selected_start_utc: datetime
+    selected_start_local: datetime
+    selected_end_utc: datetime
+    selected_end_local: datetime
+    runtime_minutes: int
+    power_kw: float
+    carbon_intensity: float
+    carbon_emission_kg: float
+    electricity_cost_usd: float
+    deadline_utc: datetime
+    deadline_local: datetime
+    status: JobStatus
+    tariff_plan: Optional[str] = None
+

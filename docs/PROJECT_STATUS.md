@@ -28,38 +28,36 @@
 | 7 | Cost-aware scheduler works | ✅ dual-objective: carbon primary, cost tiebreaker |
 | 8 | Deadline constraints work | ✅ slot generation enforces deadline - runtime |
 | 9 | Carbon budget constraints work | ✅ budget filter in schedule_job() |
-| 10 | Kubernetes Job is created | ✅ app/dispatch/dispatcher.py (mocked in tests) |
-| 11 | Kubernetes Pod actually runs | 🔲 Requires live cluster |
-| 12 | Kubernetes workload completes | 🔲 Requires live cluster |
-| 13 | Kubernetes failures are detected | ✅ DispatchError + ApiException handling |
-| 14 | Job status is tracked | ✅ status_tracker.py + refresh_job_status() |
-| 15 | Audit ledger is created | ✅ trust/ledger.py SHA-256 chain |
-| 16 | Audit tampering is detected | ✅ verify_chain() — all 4 tamper checks |
-| 17 | Dashboard works | ✅ app/dashboard/main.py (Streamlit) |
-| 18 | Baseline comparison works | ✅ baseline_* fields in ScheduleDecisionORM |
-| 19 | Carbon avoided is calculated | ✅ carbon_avoided in scheduler output |
-| 20 | Cost difference is calculated | ✅ cost_difference in scheduler output |
-| 21 | SLA performance is calculated | ✅ app/trust/report.py _calculate_sla() |
-| 22 | CSV/BRSR-style report works | ✅ app/trust/report.py + /api/v1/report/csv |
-| 23 | Docker images build | ✅ 6 Dockerfiles present |
-| 24 | Kubernetes manifests deploy | ✅ k8s/ — all manifests present |
-| 25 | RBAC works | ✅ greenshift-dispatcher ServiceAccount + Role |
-| 26 | End-to-end Kubernetes test passes | 🔲 Requires live cluster |
-| 27 | README is complete | ✅ Full 12-step setup guide |
+| 10 | Human Approval Gate works | ✅ app/approval/service.py + PENDING_APPROVAL / APPROVED / DECLINED states |
+| 11 | Kubernetes Job is created | ✅ app/dispatch/dispatcher.py (only for APPROVED jobs after selected_start) |
+| 12 | Kubernetes Pod actually runs | 🔲 Requires live cluster |
+| 13 | Kubernetes workload completes | 🔲 Requires live cluster |
+| 14 | Kubernetes failures are detected | ✅ DispatchError + ApiException handling |
+| 15 | Job status is tracked | ✅ status_tracker.py + refresh_job_status() |
+| 16 | Audit ledger is created | ✅ trust/ledger.py SHA-256 chain |
+| 17 | Audit tampering is detected | ✅ verify_chain() — all 4 tamper checks |
+| 18 | Dashboard works | ✅ app/dashboard/main.py (Streamlit 10 tabs) |
+| 19 | Baseline comparison works | ✅ baseline_* fields in ScheduleDecisionORM |
+| 20 | Carbon avoided is calculated | ✅ carbon_avoided in scheduler output |
+| 21 | Cost difference is calculated | ✅ cost_difference in scheduler output |
+| 22 | SLA performance is calculated | ✅ app/trust/report.py _calculate_sla() |
+| 23 | CSV/BRSR-style report works | ✅ app/trust/report.py + /api/v1/report/csv |
+| 24 | Docker images build | ✅ 6 Dockerfiles present |
+| 25 | Kubernetes manifests deploy | ✅ k8s/ — all manifests present |
+| 26 | RBAC works | ✅ greenshift-dispatcher ServiceAccount + Role |
+| 27 | End-to-end Kubernetes test passes | 🔲 Requires live cluster |
+| 28 | README is complete | ✅ Full 12-step setup guide |
 
 ---
 
-## New Modules Added (2026-08-18 Phase 7)
+## Modules Added (Human Approval Gate)
 
 | File | Purpose |
 |---|---|
-| `app/ingest/csv_carbon_loader.py` | CSV-based carbon intensity loader (primary data source) |
-| `app/ingest/csv_tariff_loader.py` | CSV-based tariff loader with INR→USD auto-conversion |
-| `app/ingest/data_sources.py` | Priority resolver: CSV → API → Mock |
-| `app/trust/report.py` | BRSR-style sustainability report generator + SLA tracking |
-| `app/api/routers/report.py` | Report API endpoints (JSON, CSV, Markdown) |
-| `docs/CSV_DATA_FORMAT.md` | CSV format specification for user-provided data |
-| `tests/test_new_modules.py` | 20 new tests covering all new modules |
+| `app/approval/service.py` | Approval service implementing approve, decline, pending query, idempotency & audit logging |
+| `app/api/routers/approval.py` | REST API endpoints for `/approval/{job_id}/approve`, `/decline`, `/approvals/pending` |
+| `alembic/versions/002_add_approvals_table.py` | Database migration for `approvals` table with foreign keys & indexes |
+| `tests/test_approval.py` | 15 targeted tests covering the entire approval gate lifecycle and edge cases |
 
 ---
 

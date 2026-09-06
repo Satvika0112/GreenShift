@@ -33,7 +33,16 @@ class Settings(BaseSettings):
     # ─── Database ─────────────────────────────────────────────────
     database_url: str = Field(
         default="sqlite:///./greenshift.db",
+        description="Database connection URL (PostgreSQL in production, SQLite in local dev)",
     )
+    postgres_db: str = Field(default="greenshift")
+    postgres_user: str = Field(default="greenshift")
+    postgres_password: str = Field(default="greenshift_secret_pwd")
+    postgres_host: str = Field(default="localhost")
+    postgres_port: int = Field(default=5432)
+    db_pool_size: int = Field(default=10)
+    db_max_overflow: int = Field(default=20)
+    db_pool_recycle_seconds: int = Field(default=1800)
 
     # ─── Kubernetes ───────────────────────────────────────────────
     k8s_namespace: str = Field(default="greenshift")

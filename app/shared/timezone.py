@@ -305,6 +305,18 @@ def utc_to_region_time(
     return dt_local, tz_abbr
 
 
+def to_regional_time(
+    dt_utc: datetime,
+    region: Optional[str] = None,
+    timezone_name: Optional[str] = None,
+) -> datetime:
+    """
+    Convert a UTC datetime to a regional local datetime object.
+    """
+    dt_local, _ = utc_to_region_time(dt_utc, region=region, timezone_name=timezone_name)
+    return dt_local
+
+
 def get_current_time_for_region(
     region: Optional[str] = None,
     timezone_name: Optional[str] = None,

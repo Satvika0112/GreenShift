@@ -1,8 +1,27 @@
 # GreenShift — Local Development / Demonstration Docker Compose
-# Runs all 5 GreenShift Agents + Dashboard
+# Runs PostgreSQL (Permanent Store), Redis (Carbon API Cache), 5 GreenShift Agents + Dashboard
 
 services:
-  # ─── Redis Shared Cache (Carbon API) ─────────────────────────
+  # ─── PostgreSQL Database (System-of-Record) ──────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: greenshift-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-greenshift}
+      POSTGRES_USER: ${POSTGRES_USER:-greenshift}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-greenshift_secret_pwd}
+    ports:
+      - "5432:5432"
+    volumes:
+      - greenshift-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-greenshift} -d ${POSTGRES_DB:-greenshift}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ─── Redis Shared Cache (Carbon API Telemetry) ───────────────
   redis:
     image: redis:7-alpine
     container_name: greenshift-redis
@@ -25,7 +44,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=sqlite:////data/greenshift.db
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-greenshift}:${POSTGRES_PASSWORD:-greenshift_secret_pwd}@postgres:5432/${POSTGRES_DB:-greenshift}
       - REDIS_URL=redis://redis:6379/0
       - CARBON_CACHE_TTL_SECONDS=900
       - LOG_LEVEL=INFO
@@ -39,6 +58,8 @@ services:
     volumes:
       - greenshift-data:/data
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -59,7 +80,7 @@ services:
       - "8501:8501"
     environment:
       - GREENSHIFT_API_URL=http://api:8000
-      - DATABASE_URL=sqlite:////data/greenshift.db
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-greenshift}:${POSTGRES_PASSWORD:-greenshift_secret_pwd}@postgres:5432/${POSTGRES_DB:-greenshift}
       - REDIS_URL=redis://redis:6379/0
       - CARBON_CACHE_TTL_SECONDS=900
       - LOG_LEVEL=INFO
@@ -71,6 +92,8 @@ services:
     volumes:
       - greenshift-data:/data
     depends_on:
+      postgres:
+        condition: service_healthy
       api:
         condition: service_healthy
     restart: unless-stopped
@@ -83,7 +106,7 @@ services:
     image: greenshift/ingest:latest
     container_name: greenshift-ingest
     environment:
-      - DATABASE_URL=sqlite:////data/greenshift.db
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-greenshift}:${POSTGRES_PASSWORD:-greenshift_secret_pwd}@postgres:5432/${POSTGRES_DB:-greenshift}
       - REDIS_URL=redis://redis:6379/0
       - CARBON_CACHE_TTL_SECONDS=900
       - LOG_LEVEL=INFO
@@ -95,6 +118,10 @@ services:
     volumes:
       - greenshift-data:/data
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       api:
         condition: service_healthy
     restart: unless-stopped
@@ -107,7 +134,7 @@ services:
     image: greenshift/scheduler:latest
     container_name: greenshift-scheduler
     environment:
-      - DATABASE_URL=sqlite:////data/greenshift.db
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-greenshift}:${POSTGRES_PASSWORD:-greenshift_secret_pwd}@postgres:5432/${POSTGRES_DB:-greenshift}
       - REDIS_URL=redis://redis:6379/0
       - CARBON_CACHE_TTL_SECONDS=900
       - LOG_LEVEL=INFO
@@ -119,6 +146,10 @@ services:
     volumes:
       - greenshift-data:/data
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       api:
         condition: service_healthy
     restart: unless-stopped
@@ -131,7 +162,7 @@ services:
     image: greenshift/dispatcher:latest
     container_name: greenshift-dispatcher
     environment:
-      - DATABASE_URL=sqlite:////data/greenshift.db
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-greenshift}:${POSTGRES_PASSWORD:-greenshift_secret_pwd}@postgres:5432/${POSTGRES_DB:-greenshift}
       - LOG_LEVEL=INFO
       - K8S_IN_CLUSTER=false
       - K8S_NAMESPACE=greenshift
@@ -146,6 +177,8 @@ services:
       - "host.docker.internal:host-gateway"
       - "desktop-control-plane:host-gateway"
     depends_on:
+      postgres:
+        condition: service_healthy
       api:
         condition: service_healthy
     restart: unless-stopped
@@ -158,16 +191,19 @@ services:
     image: greenshift/trust:latest
     container_name: greenshift-trust
     environment:
-      - DATABASE_URL=sqlite:////data/greenshift.db
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-greenshift}:${POSTGRES_PASSWORD:-greenshift_secret_pwd}@postgres:5432/${POSTGRES_DB:-greenshift}
       - LOG_LEVEL=INFO
     env_file:
       - .env
     volumes:
       - greenshift-data:/data
     depends_on:
+      postgres:
+        condition: service_healthy
       api:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
+  greenshift-pgdata:
   greenshift-data:

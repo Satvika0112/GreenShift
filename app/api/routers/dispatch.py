@@ -24,10 +24,10 @@ def trigger_dispatch(job_id: str, db: Session = Depends(get_db)):
     job = get_job(db, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    if job.status != JobStatus.SCHEDULED:
+    if job.status != JobStatus.APPROVED:
         raise HTTPException(
             status_code=400,
-            detail=f"Job {job_id} is in status {job.status} — only SCHEDULED jobs can be dispatched",
+            detail=f"Job {job_id} is in status {job.status} — only APPROVED jobs can be dispatched",
         )
     try:
         execution = dispatch_job(db, job)
@@ -43,6 +43,7 @@ def trigger_dispatch(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/dispatch/{job_id}/status")
+@router.get("/execution/{job_id}")
 def get_dispatch_status(job_id: str, db: Session = Depends(get_db)):
     """Get the current Kubernetes execution status for a job."""
     job = get_job(db, job_id)
@@ -59,6 +60,7 @@ def get_dispatch_status(job_id: str, db: Session = Depends(get_db)):
 
     return {
         "job_id": job_id,
+        "execution_id": execution.id,
         "kubernetes_job_name": execution.kubernetes_job_name,
         "namespace": execution.kubernetes_namespace,
         "pod_name": execution.pod_name,
@@ -68,6 +70,8 @@ def get_dispatch_status(job_id: str, db: Session = Depends(get_db)):
         "k8s_status": execution.k8s_status,
         "gs_status": execution.gs_status,
         "error_message": execution.error_message,
+        "created_at": execution.created_at.isoformat() if execution.created_at else None,
+        "updated_at": execution.updated_at.isoformat() if execution.updated_at else None,
     }
 
 

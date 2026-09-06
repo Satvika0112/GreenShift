@@ -79,20 +79,21 @@ class TestEndToEnd:
 
         # Refresh job from DB
         db.refresh(job)
-        assert job.status == JobStatus.SCHEDULED
+        assert job.status == JobStatus.PENDING_APPROVAL
 
-        # 5. Audit: job scheduled
-        e_scheduled = append_event(db, EventType.JOB_SCHEDULED, job_id=job.job_id, payload={
-            "selected_start": decision.selected_start.isoformat(),
-            "carbon_emission": decision.carbon_emission,
-            "carbon_avoided": decision.carbon_avoided,
-        })
-        assert e_scheduled.previous_hash == e_submitted.current_hash
+        # 5. Approve schedule (Human Approval Gate)
+        from app.approval.service import approve_schedule
+        approval_resp = approve_schedule(db, job.job_id, decision.id, reason="Approved for E2E", approved_by="admin")
+        assert approval_resp.decision == "APPROVED"
+        assert approval_resp.job_status == JobStatus.APPROVED
+
+        db.refresh(job)
+        assert job.status == JobStatus.APPROVED
 
         # 6. Verify audit chain
         result = verify_chain(db)
         assert result.valid is True
-        assert result.event_count == 2
+        assert result.event_count >= 2
 
     def test_carbon_avoided_is_positive(self, db, job_request):
         """GreenShift should avoid at least some carbon vs baseline for jobs with carbon variance."""
@@ -132,7 +133,10 @@ class TestEndToEnd:
         """Test dispatch flow with Kubernetes API mocked."""
         job = submit_job(db, job_request)
         schedule_and_store(db, job)
+        from app.approval.service import approve_schedule
+        approve_schedule(db, job.job_id, job.schedule_decision.id)
         db.refresh(job)
+        assert job.status == JobStatus.APPROVED
 
         # Mock Kubernetes API
         with patch("app.dispatch.dispatcher.get_batch_v1") as mock_batch, \

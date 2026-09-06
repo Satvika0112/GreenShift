@@ -36,10 +36,10 @@ class DispatchError(Exception):
 
 def dispatch_job(db: Session, job: JobORM) -> KubernetesExecutionORM:
     """
-    Create a Kubernetes Job for a scheduled GreenShift job.
+    Create a Kubernetes Job for an approved GreenShift job.
 
     Preconditions:
-        - job.status == SCHEDULED
+        - job.status == APPROVED
         - job.schedule_decision is not None
 
     Args:
@@ -50,8 +50,13 @@ def dispatch_job(db: Session, job: JobORM) -> KubernetesExecutionORM:
         KubernetesExecutionORM record
 
     Raises:
-        DispatchError: If the Kubernetes Job cannot be created.
+        DispatchError: If the Kubernetes Job cannot be created or job is not APPROVED.
     """
+    if job.status != JobStatus.APPROVED:
+        raise DispatchError(
+            f"Job {job.job_id} requires approval before Kubernetes dispatch (current status: {job.status})"
+        )
+
     decision: Optional[ScheduleDecisionORM] = job.schedule_decision
     if decision is None:
         raise DispatchError(f"Job {job.job_id} has no schedule decision")
@@ -103,11 +108,13 @@ def dispatch_job(db: Session, job: JobORM) -> KubernetesExecutionORM:
 
     # Update job status
     job.status = JobStatus.QUEUED
+    job.updated_at = now
     db.commit()
 
-    # Record audit event
+    # Record audit events
     try:
-        from app.trust.service import record_k8s_job_created
+        from app.trust.service import record_dispatch_authorized, record_k8s_job_created
+        record_dispatch_authorized(db, job.job_id, decision.id, now.isoformat())
         record_k8s_job_created(db, job.job_id, k8s_name, namespace)
     except Exception as exc:
         logger.warning("Audit record failed for job %s creation: %s", job.job_id, exc)

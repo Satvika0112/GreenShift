@@ -46,6 +46,13 @@ LOCK_PREFIX = "greenshift:carbon:lock:"
 STALE_BACKUP_TTL_SECONDS = 7 * 24 * 3600
 
 
+def record_redis_failure() -> None:
+    """Record a failure and trip the circuit breaker."""
+    global _redis_client, _last_redis_failure_time
+    _last_redis_failure_time = time.time()
+    _redis_client = None
+
+
 def get_redis_client(redis_url: Optional[str] = None) -> Optional[Any]:
     """
     Get or initialize a thread-safe Redis client instance with offline circuit breaker.
@@ -75,7 +82,7 @@ def get_redis_client(redis_url: Optional[str] = None) -> Optional[Any]:
         _redis_client_url = url
         return _redis_client
     except Exception as exc:
-        _last_redis_failure_time = time.time()
+        record_redis_failure()
         logger.warning("Failed to initialize Redis client for url %s: %s", url, exc)
         return None
 
@@ -95,7 +102,7 @@ def is_redis_available(client: Optional[Any] = None) -> bool:
             _last_redis_failure_time = 0.0
         return ok
     except Exception as exc:
-        _last_redis_failure_time = time.time()
+        record_redis_failure()
         logger.debug("Redis ping failed: %s", exc)
         return False
 
@@ -224,6 +231,7 @@ def get_cached_carbon_data(
         return points
 
     except Exception as exc:
+        record_redis_failure()
         logger.warning("Carbon cache unavailable — bypassing cache: %s", exc)
         return None
 
@@ -264,6 +272,7 @@ def set_cached_carbon_data(
         logger.info("Carbon cache SET | region=%s | points=%d | ttl=%ds", canonical_region, len(points), ttl)
         return True
     except Exception as exc:
+        record_redis_failure()
         logger.warning("Failed to write carbon cache to Redis for %s: %s", canonical_region, exc)
         return False
 
@@ -307,6 +316,7 @@ def get_stale_carbon_data(
         logger.warning("Carbon API failed — using stale fallback | region=%s | age=%.1fs", canonical_region, age_seconds)
         return points, age_seconds
     except Exception as exc:
+        record_redis_failure()
         logger.warning("Error reading stale carbon cache from Redis: %s", exc)
         return None
 
@@ -334,6 +344,7 @@ def acquire_carbon_refresh_lock(
         acquired = r.set(lock_key, "locked", nx=True, ex=timeout_seconds)
         return bool(acquired)
     except Exception as exc:
+        record_redis_failure()
         logger.debug("Error acquiring carbon refresh lock: %s", exc)
         return True
 
@@ -352,6 +363,7 @@ def release_carbon_refresh_lock(
     try:
         r.delete(lock_key)
     except Exception as exc:
+        record_redis_failure()
         logger.debug("Error releasing carbon refresh lock: %s", exc)
 
 

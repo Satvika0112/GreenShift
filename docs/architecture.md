@@ -22,6 +22,11 @@ External Inputs (Electricity Maps API, Tariff CSV)
 └──────┬───────┘
        │
        ▼
+┌─────────────────────────┐
+│  HUMAN APPROVAL GATE    │  Operator Validation: Approve / Decline
+└──────┬──────────────────┘
+       │
+       ▼
 ┌──────────────┐
 │  3. DISPATCH │  Kubernetes batch/v1 Job Orchestrator
 └──────┬───────┘
@@ -53,17 +58,26 @@ External Inputs (Electricity Maps API, Tariff CSV)
 - **Purpose**: Core mathematical scheduling intelligence.
 - **Scheduling Algorithm**: Budget-aware greedy search over candidate start slots $s \in [t_{\text{now}}, t_{\text{deadline}} - t_{\text{runtime}}]$.
 - **Objective Function**:
-  $$\min_{s} \left( \alpha \cdot \text{Carbon}(s) + (1-\alpha) \cdot \text{Cost}(s) \right)$$
+  $$\min_{s} \left( \text{Cost}(s) \right) \quad \text{with Carbon tie-breaking}$$
   subject to:
   $$\text{Carbon}(s) \le \text{Team Budget Remaining}$$
 - **Baseline Computation**: Evaluates the immediate execution slot ($t_{\text{now}}$) as the baseline to quantify avoided carbon ($\text{kg CO}_2$) and cost savings ($\$$).
-- **Audit**: Emits `JOB_SCHEDULED` event to Trust ledger.
+- **Audit**: Emits `SCHEDULE_PROPOSED` and `JOB_SCHEDULED` events to Trust ledger.
+- **State Transition**: Transitions job status to `PENDING_APPROVAL`.
+
+### HUMAN APPROVAL GATE
+- **Purpose**: Strict human-in-the-loop governance before dispatch.
+- **Operations**:
+  - `APPROVE`: Transitions job from `PENDING_APPROVAL` $\to$ `APPROVED`, emits `APPROVAL_GRANTED` audit event.
+  - `DECLINE`: Transitions job from `PENDING_APPROVAL` $\to$ `DECLINED` (not failed), emits `APPROVAL_DECLINED` audit event.
+- **Security Invariant**: No Kubernetes workload is dispatched unless explicitly in `APPROVED` status and `selected_start \le t_{\text{now}}`.
 
 ### AGENT 3 — DISPATCH
 - **Purpose**: Workload execution and lifecycle tracking.
+- **Gate Check**: Validates `job.status == APPROVED` and `selected_start <= utcnow()`.
 - **Kubernetes Integration**: Constructs native `batch/v1` Job manifests with non-root security contexts, resource requests/limits, and metadata labels (`greenshift-job-id`, `greenshift-team-id`).
-- **Lifecycle Transitions**: `QUEUED` $\to$ `RUNNING` $\to$ `COMPLETED` / `FAILED`.
-- **Audit**: Emits `K8S_JOB_CREATED`, `K8S_JOB_STARTED`, `K8S_JOB_COMPLETED`, and `K8S_JOB_FAILED` events.
+- **Lifecycle Transitions**: `APPROVED` $\to$ `QUEUED` $\to$ `RUNNING` $\to$ `COMPLETED` / `FAILED`.
+- **Audit**: Emits `DISPATCH_AUTHORIZED`, `K8S_JOB_CREATED`, `K8S_JOB_STARTED`, `K8S_JOB_COMPLETED`, and `K8S_JOB_FAILED` events.
 
 ### AGENT 4 — TRUST
 - **Purpose**: Non-repudiation and cryptographic auditability.

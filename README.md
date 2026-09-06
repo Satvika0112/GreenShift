@@ -28,7 +28,10 @@ DECIDE AGENT (Hard Constraints: Budget, Deadline, SLA, Resources -> Cost Optimiz
 BASELINE & IMPACT CALCULATOR (Emissions, Cost USD & Native INR, Avoided %, Delay, SLA Compliance)
   │
   ▼
-DISPATCH AGENT
+HUMAN APPROVAL GATE (Explicit Operator Decision: Approve / Decline)
+  │
+  ▼
+DISPATCH AGENT (Wait until selected_start UTC -> Kubernetes batch/v1 Jobs)
   │
   ▼
 KUBERNETES CLUSTER (batch/v1 Jobs, Labels, Resource Limits)
@@ -37,7 +40,7 @@ KUBERNETES CLUSTER (batch/v1 Jobs, Labels, Resource Limits)
 TRUST AGENT (SHA-256 Tamper-Evident Hash Chain Audit Ledger)
   │
   ▼
-PRESENT AGENT / DASHBOARD (9 Target Tabs: Overview, Jobs, Carbon, Cost, Regional Data, Kubernetes, Impact, Audit, Export)
+PRESENT AGENT / DASHBOARD (10 Target Tabs: Overview, Jobs, Approvals, Carbon, Cost, Regional Data, Kubernetes, Impact, Audit, Export)
 ```
 
 ---
@@ -121,7 +124,25 @@ Evaluates quantitative savings comparing immediate execution against GreenShift 
 
 ---
 
-## 5. Kubernetes State Collector
+## 5. Human Approval Gate
+
+**Security Rule:** *"No Kubernetes workload is dispatched without explicit human approval."*
+
+When the DECIDE Agent generates a schedule decision:
+1. The decision is persisted to PostgreSQL and the job enters `PENDING_APPROVAL` status.
+2. An audit event `SCHEDULE_PROPOSED` is written to the SHA-256 trust ledger.
+3. The job remains in `PENDING_APPROVAL` until an authorized operator explicitly Approves or Declines via the API or Streamlit Dashboard.
+4. **If Approved (`POST /api/v1/approval/{job_id}/approve`):**
+   - Job transitions to `APPROVED` and audit event `APPROVAL_GRANTED` is recorded.
+   - The Dispatcher holds the job until its `selected_start` time arrives (in UTC).
+   - Once `selected_start <= utcnow()`, the job transitions to `QUEUED`, creates the `batch/v1` Kubernetes Job, emits `DISPATCH_AUTHORIZED`, and proceeds to `RUNNING` -> `COMPLETED`.
+5. **If Declined (`POST /api/v1/approval/{job_id}/decline`):**
+   - Job transitions to `DECLINED` and audit event `APPROVAL_DECLINED` is recorded with reason.
+   - The job is permanently prevented from dispatching to Kubernetes (treated as a valid operator decision, not a technical failure).
+
+---
+
+## 6. Kubernetes State Collector
 
 Queries the Kubernetes API (or provides healthy simulated telemetry when running locally without a cluster) to supply real-time cluster health:
 - Total, allocatable, used, and free CPU cores
@@ -131,21 +152,22 @@ Queries the Kubernetes API (or provides healthy simulated telemetry when running
 
 ---
 
-## 6. PRESENT Agent / Streamlit Dashboard (9 Tabs)
+## 7. PRESENT Agent / Streamlit Dashboard (10 Tabs)
 
 1. 📊 **Overview**: High-level KPIs, job pipeline status, regional data status, cluster health, and SHA-256 audit badge.
 2. 📋 **Jobs**: 560 Workloads dataset table, filters, search, and scheduling actions.
-3. 🌿 **Carbon**: Forecast intensity curves per region from Electricity Maps.
-4. ⚡ **Electricity Cost**: Hourly Time-of-Day tariff curves in INR (₹) and USD ($).
-5. 🌍 **Regional Data**: Common schema dataset inventory for Telangana, Gujarat, Himachal Pradesh, and West Bengal.
-6. ☸️ **Kubernetes**: Real-time cluster state, node inventory, and resource gauges.
-7. 📈 **Baseline vs GreenShift Impact**: Side-by-side comparative charts, avoided metrics, and SLA status.
-8. 🔐 **Audit**: SHA-256 tamper-evident hash-chain validator and audit stream.
-9. 📥 **Export**: CSV dataset downloads and BRSR-compliant ESG sustainability reports.
+3. ✋ **Pending Approvals**: Dedicated gate review interface showing proposed schedule details, UTC & local times, carbon/cost estimates, and one-click ✅ Approve / ❌ Decline actions.
+4. 🌿 **Carbon (Live API)**: Electricity Maps telemetry curves, zone mapping, carbon intensity vs ToD heatmaps.
+5. ⚡ **Cost (Tariffs)**: Regional Time-of-Day electricity pricing curves, peak/solar/night blocks.
+6. 🗺️ **Regional Data**: Indian regional profiles (IN-TG, IN-GJ, IN-HP, IN-WB), plans, voltages, seasons.
+7. ☸️ **Kubernetes**: Node capacity, allocatable resources, pod placement, and job manifests.
+8. 📈 **Impact**: Baseline vs GreenShift avoided carbon and cost, delay trade-offs, SLA compliance.
+9. 🔒 **Audit & Trust**: Cryptographic SHA-256 hash-chain ledger verification and block inspector.
+10. 📄 **Export / BRSR**: ESG/BRSR sustainability reports in JSON, CSV, and Markdown formats.
 
 ---
 
-## 7. Local Run Instructions
+## 8. Local Run Instructions
 
 Follow these exact steps to run and verify the entire GreenShift platform with Docker Compose and your local Kubernetes cluster:
 

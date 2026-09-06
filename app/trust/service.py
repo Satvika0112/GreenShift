@@ -59,6 +59,97 @@ def record_job_scheduled(
     append_event(db, EventType.JOB_SCHEDULED, job_id=job_id, payload=payload)
 
 
+def record_schedule_proposed(
+    db: Session,
+    job_id: str,
+    schedule_decision_id: int,
+    selected_start: str,
+    carbon_emission: float,
+    electricity_cost: float,
+    region_id: Optional[str] = None,
+    tariff_plan: Optional[str] = None,
+    deadline: Optional[str] = None,
+) -> None:
+    """Record a SCHEDULE_PROPOSED audit event awaiting human approval."""
+    payload = {
+        "schedule_decision_id": schedule_decision_id,
+        "selected_start": selected_start,
+        "carbon_emission_kg": carbon_emission,
+        "electricity_cost_usd": electricity_cost,
+    }
+    if region_id:
+        payload["region_id"] = region_id
+    if tariff_plan:
+        payload["tariff_plan"] = tariff_plan
+    if deadline:
+        payload["deadline"] = deadline
+
+    append_event(db, EventType.SCHEDULE_PROPOSED, job_id=job_id, payload=payload)
+
+
+def record_approval_granted(
+    db: Session,
+    job_id: str,
+    schedule_decision_id: int,
+    decision: str = "APPROVED",
+    approved_by: Optional[str] = "admin",
+    reason: Optional[str] = None,
+    timestamp: Optional[str] = None,
+) -> None:
+    """Record an APPROVAL_GRANTED audit event."""
+    from app.shared.utils import utcnow
+    ts = timestamp or utcnow().isoformat()
+    payload = {
+        "job_id": job_id,
+        "schedule_decision_id": schedule_decision_id,
+        "decision": decision,
+        "approved_by": approved_by or "admin",
+        "reason": reason or "Schedule approved",
+        "timestamp": ts,
+    }
+    append_event(db, EventType.APPROVAL_GRANTED, job_id=job_id, payload=payload)
+
+
+def record_approval_declined(
+    db: Session,
+    job_id: str,
+    schedule_decision_id: int,
+    decision: str = "DECLINED",
+    approved_by: Optional[str] = "admin",
+    reason: Optional[str] = None,
+    timestamp: Optional[str] = None,
+) -> None:
+    """Record an APPROVAL_DECLINED audit event."""
+    from app.shared.utils import utcnow
+    ts = timestamp or utcnow().isoformat()
+    payload = {
+        "job_id": job_id,
+        "schedule_decision_id": schedule_decision_id,
+        "decision": decision,
+        "approved_by": approved_by or "admin",
+        "reason": reason or "Schedule declined",
+        "timestamp": ts,
+    }
+    append_event(db, EventType.APPROVAL_DECLINED, job_id=job_id, payload=payload)
+
+
+def record_dispatch_authorized(
+    db: Session,
+    job_id: str,
+    schedule_decision_id: int,
+    authorized_at: Optional[str] = None,
+) -> None:
+    """Record a DISPATCH_AUTHORIZED audit event."""
+    from app.shared.utils import utcnow
+    ts = authorized_at or utcnow().isoformat()
+    payload = {
+        "job_id": job_id,
+        "schedule_decision_id": schedule_decision_id,
+        "authorized_at": ts,
+    }
+    append_event(db, EventType.DISPATCH_AUTHORIZED, job_id=job_id, payload=payload)
+
+
 def record_k8s_job_created(
     db: Session,
     job_id: str,

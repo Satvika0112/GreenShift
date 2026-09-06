@@ -216,6 +216,38 @@ def fetch_data_sources_status() -> dict:
         return {}
 
 
+@st.cache_data(ttl=REFRESH_INTERVAL)
+def fetch_pending_approvals() -> list:
+    try:
+        r = httpx.get(f"{API_URL}/api/v1/approvals/pending", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
+def approve_job_api(job_id: str, schedule_id: int, reason: str = "Schedule acceptable", approved_by: str = "operator") -> dict:
+    payload = {
+        "schedule_id": schedule_id,
+        "reason": reason,
+        "approved_by": approved_by,
+    }
+    r = httpx.post(f"{API_URL}/api/v1/approval/{job_id}/approve", json=payload, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+def decline_job_api(job_id: str, schedule_id: int, reason: str = "Window declined", approved_by: str = "operator") -> dict:
+    payload = {
+        "schedule_id": schedule_id,
+        "reason": reason,
+        "approved_by": approved_by,
+    }
+    r = httpx.post(f"{API_URL}/api/v1/approval/{job_id}/decline", json=payload, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Header
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,7 +291,7 @@ with st.sidebar:
                 try:
                     r = httpx.post(f"{API_URL}/api/v1/schedule/{action_job_id}", timeout=30)
                     r.raise_for_status()
-                    st.success("Scheduled!")
+                    st.success("Scheduled (Pending Approval)!")
                     st.cache_data.clear()
                     st.rerun()
                 except Exception as exc:
@@ -278,12 +310,13 @@ with st.sidebar:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main Navigation — 9 Target Architecture Tabs
+# Main Navigation — 10 Target Architecture Tabs
 # ─────────────────────────────────────────────────────────────────────────────
 
 tabs = st.tabs([
     "📊 Overview",
     "📋 Jobs",
+    "✋ Pending Approvals",
     "🌿 Carbon",
     "⚡ Electricity Cost",
     "🌍 Regional Data",
@@ -300,7 +333,17 @@ with tabs[0]:
     audit_res = fetch_audit_verify()
     k8s_state = fetch_kubernetes_state()
 
-    counts = {"SUBMITTED": 0, "SCHEDULED": 0, "QUEUED": 0, "RUNNING": 0, "COMPLETED": 0, "FAILED": 0}
+    counts = {
+        "SUBMITTED": 0,
+        "SCHEDULED": 0,
+        "PENDING_APPROVAL": 0,
+        "APPROVED": 0,
+        "DECLINED": 0,
+        "QUEUED": 0,
+        "RUNNING": 0,
+        "COMPLETED": 0,
+        "FAILED": 0,
+    }
     for j in all_jobs:
         s = j.get("status", "SUBMITTED")
         if s in counts:
@@ -308,11 +351,11 @@ with tabs[0]:
 
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("📬 Total Workloads", len(all_jobs))
-    m2.metric("📅 Scheduled", counts["SCHEDULED"])
-    m3.metric("⏳ Queued", counts["QUEUED"])
-    m4.metric("🏃 Running", counts["RUNNING"])
-    m5.metric("✅ Completed", counts["COMPLETED"])
-    m6.metric("❌ Failed", counts["FAILED"])
+    m2.metric("✋ Pending Approval", counts["PENDING_APPROVAL"])
+    m3.metric("✅ Approved", counts["APPROVED"])
+    m4.metric("⏳ Queued", counts["QUEUED"])
+    m5.metric("🏃 Running", counts["RUNNING"])
+    m6.metric("🏁 Completed", counts["COMPLETED"])
 
     st.divider()
 
@@ -406,8 +449,91 @@ with tabs[1]:
         st.dataframe(df[cols_to_show], use_container_width=True, hide_index=True)
 
 
-# ── 3. CARBON ────────────────────────────────────────────────────────────────
+# ── 3. PENDING APPROVALS ─────────────────────────────────────────────────────
 with tabs[2]:
+    st.markdown("### ✋ Human Approval Gate — Proposed Schedules")
+    st.caption("A job must NEVER be dispatched to Kubernetes until an authorized user explicitly approves the proposed schedule.")
+
+    pending_list = fetch_pending_approvals()
+
+    if not pending_list:
+        st.info("✅ No workloads currently pending approval. When jobs are scheduled, their proposed execution windows will appear here for review.")
+    else:
+        st.write(f"**Found {len(pending_list)} workload(s) awaiting approval:**")
+        
+        for item in pending_list:
+            job_id = item.get("job_id")
+            sched_id = item.get("schedule_id")
+            workload_name = item.get("workload_name") or job_id
+            region = item.get("region", "IN-TG")
+            tz_name = item.get("timezone", "Asia/Kolkata")
+            start_utc = item.get("selected_start_utc", "")
+            start_local = item.get("selected_start_local", "")
+            end_utc = item.get("selected_end_utc", "")
+            end_local = item.get("selected_end_local", "")
+            deadline_utc = item.get("deadline_utc", "")
+            deadline_local = item.get("deadline_local", "")
+            carbon_kg = item.get("carbon_emission_kg", 0.0)
+            carbon_intensity = item.get("carbon_intensity", 0.0)
+            cost_usd = item.get("electricity_cost_usd", 0.0)
+            runtime_mins = item.get("runtime_minutes", 0)
+            power_kw = item.get("power_kw", 0.0)
+            status_val = item.get("status", "PENDING_APPROVAL")
+
+            with st.container():
+                st.markdown(f"#### 🏷️ `{job_id}` — {workload_name}")
+                col_info1, col_info2, col_info3 = st.columns(3)
+
+                with col_info1:
+                    st.markdown(f"**Team:** `{item.get('team_id')}`")
+                    st.markdown(f"**Proposed Region:** `{region}`")
+                    st.markdown(f"**IANA Timezone:** `{tz_name}`")
+                    st.markdown(f"**Current Status:** `<span class='blue-badge'>{status_val}</span>`", unsafe_allow_html=True)
+
+                with col_info2:
+                    st.markdown(f"**Start (UTC):** `{start_utc}`")
+                    st.markdown(f"**Start (Local):** `{start_local}`")
+                    st.markdown(f"**End (UTC):** `{end_utc}`")
+                    st.markdown(f"**End (Local):** `{end_local}`")
+                    st.markdown(f"**Deadline (UTC):** `{deadline_utc}`")
+                    st.markdown(f"**Deadline (Local):** `{deadline_local}`")
+
+                with col_info3:
+                    st.markdown(f"**Runtime:** `{runtime_mins} mins` | **Power:** `{power_kw} kW`")
+                    st.markdown(f"**Carbon Estimate:** `{carbon_kg:.4f} kg CO₂` ({carbon_intensity:.1f} gCO₂/kWh)")
+                    st.markdown(f"**Electricity Cost:** `${cost_usd:.4f}`")
+                    if item.get("tariff_plan"):
+                        st.markdown(f"**Tariff Plan:** `{item.get('tariff_plan')}`")
+
+                # Action Controls
+                act_col1, act_col2 = st.columns([1, 2])
+                with act_col1:
+                    if st.button("✅ APPROVE", key=f"btn_approve_{job_id}_{sched_id}"):
+                        try:
+                            res = approve_job_api(job_id=job_id, schedule_id=sched_id, reason="Approved via Dashboard", approved_by="dashboard_operator")
+                            st.success(f"Job {job_id} APPROVED successfully! Status: APPROVED (Will dispatch at {start_utc} UTC)")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Approval failed: {exc}")
+
+                with act_col2:
+                    decline_reason = st.text_input("Reason for decline", placeholder="e.g. Inconvenient execution window", key=f"text_decline_{job_id}_{sched_id}")
+                    if st.button("❌ DECLINE", key=f"btn_decline_{job_id}_{sched_id}"):
+                        try:
+                            res = decline_job_api(job_id=job_id, schedule_id=sched_id, reason=decline_reason or "Declined via Dashboard", approved_by="dashboard_operator")
+                            st.warning(f"Job {job_id} DECLINED. Status: DECLINED (Workload will not dispatch)")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Decline failed: {exc}")
+
+                st.divider()
+
+
+
+# ── 4. CARBON ────────────────────────────────────────────────────────────────
+with tabs[3]:
     st.markdown("### 🌿 Carbon Intensity & Multi-Level Data Resilience")
     col_reg, col_stat = st.columns([4, 6])
     with col_reg:
@@ -462,8 +588,8 @@ with tabs[2]:
         st.info(f"No carbon data available for {sel_region}.")
 
 
-# ── 4. ELECTRICITY COST ──────────────────────────────────────────────────────
-with tabs[3]:
+# ── 5. ELECTRICITY COST ──────────────────────────────────────────────────────
+with tabs[4]:
     st.markdown("### ⚡ Electricity Cost & Time-of-Day Tariffs")
     st.info("📊 **Tariff Data Source**: Master ToD Regional Tariff Dataset (`master_tod_tariff_all_regions.csv`)")
 
@@ -528,8 +654,8 @@ with tabs[3]:
         st.info("No tariff data found for selected region.")
 
 
-# ── 5. REGIONAL DATA ─────────────────────────────────────────────────────────
-with tabs[4]:
+# ── 6. REGIONAL DATA ─────────────────────────────────────────────────────────
+with tabs[5]:
     st.markdown("### 🌍 Regional Data Layer — Master ToD Tariff Dataset")
     st.markdown("**Single Source of Truth**: `data/master_tod_tariff_all_regions.csv` across all 10 supported regional grids.")
     reg_inv = fetch_regional_inventory()
@@ -549,8 +675,8 @@ with tabs[4]:
         st.caption("All tariffs load from `data/master_tod_tariff_all_regions.csv` with automatic UTC-to-local timezone conversion across India, US, Sweden, and Australia.")
 
 
-# ── 6. KUBERNETES ────────────────────────────────────────────────────────────
-with tabs[5]:
+# ── 7. KUBERNETES ────────────────────────────────────────────────────────────
+with tabs[6]:
     st.markdown("### ☸️ Kubernetes State Collector & Node Telemetry")
     k8s = fetch_kubernetes_state()
     k1, k2, k3, k4 = st.columns(4)
@@ -607,10 +733,10 @@ with tabs[5]:
         st.info("No workloads found.")
 
 
-# ── 7. BASELINE VS GREENSHIFT IMPACT ─────────────────────────────────────────
-with tabs[6]:
+# ── 8. BASELINE VS GREENSHIFT IMPACT ─────────────────────────────────────────
+with tabs[7]:
     st.markdown("### 📈 Baseline vs GreenShift Impact Analysis")
-    target_job_id = st.selectbox("Select Scheduled Job", [j["job_id"] for j in all_jobs if j.get("status") in ("SCHEDULED", "QUEUED", "RUNNING", "COMPLETED")], key="impact_job_select")
+    target_job_id = st.selectbox("Select Scheduled Job", [j["job_id"] for j in all_jobs if j.get("status") in ("SCHEDULED", "APPROVED", "QUEUED", "RUNNING", "COMPLETED")], key="impact_job_select")
 
     if target_job_id:
         job_info = fetch_job_detail(target_job_id)
@@ -676,8 +802,8 @@ with tabs[6]:
         st.info("No scheduled jobs found.")
 
 
-# ── 8. AUDIT ─────────────────────────────────────────────────────────────────
-with tabs[7]:
+# ── 9. AUDIT ─────────────────────────────────────────────────────────────────
+with tabs[8]:
     st.markdown("### 🔐 Tamper-Evident SHA-256 Audit Ledger")
     aud = fetch_audit_verify()
     if aud.get("valid"):
@@ -691,8 +817,8 @@ with tabs[7]:
         st.dataframe(df_ev[["sequence", "event_type", "job_id", "timestamp", "current_hash", "previous_hash"]], use_container_width=True, hide_index=True)
 
 
-# ── 9. EXPORT ────────────────────────────────────────────────────────────────
-with tabs[8]:
+# ── 10. EXPORT ───────────────────────────────────────────────────────────────
+with tabs[9]:
     st.markdown("### 📥 Export & BRSR ESG Reports")
     st.caption("Generate verifiable audit records and CSV exports for sustainability reporting.")
 

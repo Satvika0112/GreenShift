@@ -185,6 +185,57 @@ def get_job_detail(job_id: str, db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/jobs/{job_id}/history")
+def get_job_history(job_id: str, db: Session = Depends(get_db)):
+    """Get the complete operational lifecycle history and audit trail for a job."""
+    job = get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    from app.trust.ledger import get_job_audit
+    audit_trail = get_job_audit(db, job_id)
+
+    detail = get_job_detail(job_id, db)
+    detail["audit_events"] = [e.model_dump() for e in audit_trail]
+    return detail
+
+
+@router.get("/analytics/carbon/{region}")
+def get_carbon_analytics(
+    region: str,
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    """Retrieve historical carbon intensity observations from PostgreSQL for analytics."""
+    from app.shared.models import CarbonDataPointORM
+    from app.ingest.regional_registry import resolve_region_id
+
+    canonical_region = resolve_region_id(region)
+    records = (
+        db.query(CarbonDataPointORM)
+        .filter(CarbonDataPointORM.region == canonical_region)
+        .order_by(CarbonDataPointORM.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "region": canonical_region,
+        "count": len(records),
+        "history": [
+            {
+                "id": r.id,
+                "timestamp_utc": r.timestamp.isoformat() if r.timestamp.tzinfo else r.timestamp.replace(tzinfo=timezone.utc).isoformat(),
+                "carbon_intensity": r.carbon_gco2_kwh,
+                "source": r.source,
+                "is_fallback": r.is_fallback,
+                "created_at": r.fetched_at.isoformat() if r.fetched_at else None,
+            }
+            for r in records
+        ],
+    }
+
+
 # ─── Data sources status endpoint ─────────────────────────────────────────────
 
 @router.get("/data-sources/status", response_model=dict)

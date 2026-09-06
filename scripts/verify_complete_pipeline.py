@@ -57,8 +57,11 @@ from app.dispatch.job_builder import build_kubernetes_job
 from app.trust.ledger import append_event, verify_chain
 
 
+TOTAL_STEPS = 15
+
+
 def print_step(step_num: int, title: str):
-    print(f"\n[{step_num:02d}/13] [STEP] {title}")
+    print(f"\n[{step_num:02d}/{TOTAL_STEPS:02d}] [STEP] {title}")
 
 
 def main():
@@ -67,7 +70,7 @@ def main():
     print("=" * 75)
 
     passed = 0
-    total_steps = 13
+    total_steps = TOTAL_STEPS
 
     # 1. 560 Workloads Dataset
     print_step(1, "Verify 560 Workloads Dataset")
@@ -262,8 +265,96 @@ def main():
     print(f"  [OK] All API endpoints verified: /regional/inventory, /regional/tariffs, /kubernetes/state, /data-sources/status")
     passed += 1
 
+    # 14. Human Approval Gate — Scenario A: Approve & Dispatch
+    print_step(14, "Human Approval Gate — Scenario A (PENDING_APPROVAL -> APPROVED -> Dispatch)")
+    from app.approval.service import approve_schedule, decline_schedule, get_pending_approvals
+    from app.dispatch.dispatcher import dispatch_job, DispatchError
+    from unittest.mock import patch, MagicMock
+    from kubernetes.client.rest import ApiException
+
+    app_req = JobSubmitRequest(
+        team_id="DATA-ENGINEERING",
+        deadline=now + timedelta(hours=12),
+        runtime_minutes=30,
+        power_kw=3.0,
+        region="IN-GJ",
+        container_image="greenshift/etl:v2",
+        cpu_request="500m",
+        memory_request="1Gi",
+    )
+    job_a = submit_job(db, app_req)
+    dec_a = schedule_and_store(db, job_a, record_audit=True)
+    db.refresh(job_a)
+    assert job_a.status == "PENDING_APPROVAL"
+    print(f"  [OK] Job {job_a.job_id} scheduled -> Status is PENDING_APPROVAL")
+
+    # Verify cannot dispatch in PENDING_APPROVAL
+    try:
+        dispatch_job(db, job_a)
+        assert False, "Should not dispatch unapproved job"
+    except DispatchError:
+        print(f"  [OK] Dispatcher blocked unapproved job {job_a.job_id} as expected")
+
+    # Approve schedule
+    app_res = approve_schedule(db, job_a.job_id, dec_a.id, reason="Optimal off-peak window", approved_by="lead_operator")
+    db.refresh(job_a)
+    assert job_a.status == "APPROVED"
+    assert app_res.decision == "APPROVED"
+    print(f"  [OK] Job {job_a.job_id} approved -> Status is APPROVED (decision_id={app_res.id})")
+
+    # Dispatch approved job
+    with patch("app.dispatch.dispatcher.get_batch_v1") as mock_batch:
+        mock_client = MagicMock()
+        mock_client.read_namespaced_job.side_effect = ApiException(status=404)
+        mock_batch.return_value = mock_client
+        exec_a = dispatch_job(db, job_a)
+        db.refresh(job_a)
+        assert job_a.status == "QUEUED"
+        assert exec_a.gs_status == "QUEUED"
+        print(f"  [OK] Approved job {job_a.job_id} successfully dispatched -> Status is QUEUED | K8s Job: {exec_a.kubernetes_job_name}")
+    passed += 1
+
+    # 15. Human Approval Gate — Scenario B: Decline & Dispatch Prevention
+    print_step(15, "Human Approval Gate — Scenario B (PENDING_APPROVAL -> DECLINED -> Stop)")
+    dec_req = JobSubmitRequest(
+        team_id="ANALYTICS",
+        deadline=now + timedelta(hours=8),
+        runtime_minutes=20,
+        power_kw=1.5,
+        region="IN-WB",
+        container_image="greenshift/analytics:v1",
+        cpu_request="250m",
+        memory_request="512Mi",
+    )
+    job_b = submit_job(db, dec_req)
+    dec_b = schedule_and_store(db, job_b, record_audit=True)
+    db.refresh(job_b)
+    assert job_b.status == "PENDING_APPROVAL"
+
+    # Decline schedule
+    dec_res = decline_schedule(db, job_b.job_id, dec_b.id, reason="Execution window conflicts with planned maintenance", approved_by="ops_manager")
+    db.refresh(job_b)
+    assert job_b.status == "DECLINED"
+    assert dec_res.decision == "DECLINED"
+    assert job_b.status != "FAILED"
+    print(f"  [OK] Job {job_b.job_id} declined -> Status is DECLINED (Not FAILED) | Reason: '{dec_res.reason}'")
+
+    # Verify cannot dispatch declined job
+    try:
+        dispatch_job(db, job_b)
+        assert False, "Should not dispatch declined job"
+    except DispatchError:
+        print(f"  [OK] Dispatcher blocked DECLINED job {job_b.job_id} — zero Kubernetes workloads created")
+
+    # Verify audit chain integrity with approval events
+    audit_chain = verify_chain(db)
+    assert audit_chain.valid is True
+    print(f"  [OK] Trust Ledger SHA-256 chain remains 100% valid ({audit_chain.event_count} records verified)")
+    passed += 1
+
     db.close()
 
+    total_steps = 15
     print("\n" + "=" * 75)
     print(f"  ALL {passed}/{total_steps} TARGET ARCHITECTURE PIPELINE STEPS PASSED SUCCESSFULLY!")
     print("=" * 75)

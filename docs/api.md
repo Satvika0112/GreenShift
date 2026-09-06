@@ -107,10 +107,97 @@ The GreenShift REST API is built with FastAPI and runs on port 8000. Interactive
 
 ---
 
+## 3.1. Human Approval Gate Endpoints
+
+GreenShift enforces a Human Approval Gate before any Kubernetes dispatch. Jobs in `PENDING_APPROVAL` status must be approved by an authorized user.
+
+### List Pending Approvals
+`GET /api/v1/approvals/pending`
+
+**Response**:
+```json
+[
+  {
+    "job_id": "JOB-9F8A1B2C",
+    "team_id": "ml-platform",
+    "status": "PENDING_APPROVAL",
+    "region": "IN-TG",
+    "iana_timezone": "Asia/Kolkata",
+    "deadline": "2026-08-19T14:00:00Z",
+    "runtime_minutes": 20,
+    "power_kw": 4.0,
+    "container_image": "greenshift/sample-workload:latest",
+    "schedule_decision_id": 42,
+    "selected_start": "2026-08-19T03:00:00Z",
+    "selected_start_local": "2026-08-19 08:30:00 IST",
+    "selected_end": "2026-08-19T03:20:00Z",
+    "carbon_emission": 0.2806,
+    "electricity_cost": 0.085,
+    "created_at": "2026-08-18T20:31:00Z"
+  }
+]
+```
+
+### Approve Proposed Schedule
+`POST /api/v1/approval/{job_id}/approve`
+
+**Request Body**:
+```json
+{
+  "schedule_id": 42,
+  "reason": "Window satisfies operational SLAs"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+  "id": 1,
+  "job_id": "JOB-9F8A1B2C",
+  "schedule_decision_id": 42,
+  "decision": "APPROVED",
+  "job_status": "APPROVED",
+  "reason": "Window satisfies operational SLAs",
+  "approved_by": "operator",
+  "created_at": "2026-08-18T20:35:00Z"
+}
+```
+
+### Decline Proposed Schedule
+`POST /api/v1/approval/{job_id}/decline`
+
+**Request Body**:
+```json
+{
+  "schedule_id": 42,
+  "reason": "Execution window is inconvenient"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+  "id": 2,
+  "job_id": "JOB-9F8A1B2C",
+  "schedule_decision_id": 42,
+  "decision": "DECLINED",
+  "job_status": "DECLINED",
+  "reason": "Execution window is inconvenient",
+  "approved_by": "operator",
+  "created_at": "2026-08-18T20:35:00Z"
+}
+```
+
+### Get Job Approval History
+`GET /api/v1/approval/{job_id}`
+
+---
+
 ## 4. Dispatch Endpoints (Agent 3)
 
 ### Trigger Dispatch
 `POST /api/v1/dispatch/{job_id}`
+*Note: Requires `APPROVED` status and `selected_start <= utcnow()`.*
 
 ### Query Execution Status
 `GET /api/v1/dispatch/{job_id}/status`

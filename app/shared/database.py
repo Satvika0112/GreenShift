@@ -1,15 +1,16 @@
 """
-GreenShift — Database engine and session factory.
+GreenShift — Database engine, connection pooling, and session factory.
 
 Uses DATABASE_URL from environment.
-Supports SQLite (local dev) and PostgreSQL (production).
+Supports PostgreSQL (production) with connection pooling and SQLite (local dev/testing).
 """
 
+import os
 import time
 import logging
-from typing import Generator
+from typing import Generator, Optional
 
-from sqlalchemy import create_engine, text, inspect, event
+from sqlalchemy import create_engine, text, inspect, event, Engine
 from sqlalchemy.orm import sessionmaker, Session
 
 from app.shared.config import settings
@@ -18,36 +19,85 @@ from app.shared.models import Base
 logger = logging.getLogger(__name__)
 
 
-engine = create_engine(
-    settings.database_url,
-    # SQLite-specific: allow multi-threaded use and set timeout
-    connect_args={"check_same_thread": False, "timeout": 30.0}
-    if settings.database_url.startswith("sqlite")
-    else {},
-    echo=settings.log_level == "DEBUG",
-)
+def build_engine(database_url: Optional[str] = None) -> Engine:
+    """
+    Construct a SQLAlchemy Engine configured for the target database dialect.
+    Applies production-grade connection pooling for PostgreSQL and WAL settings for SQLite.
+    """
+    url = database_url or settings.database_url
+
+    if url.startswith("sqlite"):
+        eng = create_engine(
+            url,
+            connect_args={"check_same_thread": False, "timeout": 30.0},
+            echo=settings.log_level == "DEBUG",
+        )
+
+        @event.listens_for(eng, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.execute("PRAGMA busy_timeout=30000")
+            finally:
+                cursor.close()
+
+        return eng
+
+    # PostgreSQL configuration
+    pool_size = getattr(settings, "db_pool_size", 10)
+    max_overflow = getattr(settings, "db_max_overflow", 20)
+    pool_recycle = getattr(settings, "db_pool_recycle_seconds", 1800)
+
+    eng = create_engine(
+        url,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_pre_ping=True,
+        pool_recycle=pool_recycle,
+        echo=settings.log_level == "DEBUG",
+    )
+    return eng
 
 
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    if settings.database_url.startswith("sqlite"):
-        cursor = dbapi_connection.cursor()
-        try:
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.execute("PRAGMA busy_timeout=30000")
-        finally:
-            cursor.close()
-
-
+engine: Engine = build_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def run_alembic_migrations(db_url: Optional[str] = None) -> bool:
+    """
+    Run Alembic database migrations programmatically to upgrade schema to head.
+    Returns True if migrations executed successfully, False otherwise.
+    """
+    try:
+        from alembic.config import Config
+        from alembic import command
+
+        alembic_ini_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "alembic.ini")
+        if not os.path.exists(alembic_ini_path):
+            alembic_ini_path = "alembic.ini"
+
+        if os.path.exists(alembic_ini_path):
+            alembic_cfg = Config(alembic_ini_path)
+            if db_url or settings.database_url:
+                alembic_cfg.set_main_option("sqlalchemy.url", db_url or settings.database_url)
+            command.upgrade(alembic_cfg, "head")
+            logger.info("Alembic database migrations applied successfully to head")
+            return True
+        else:
+            logger.debug("alembic.ini not found; skipping programmatic alembic upgrade")
+            return False
+    except Exception as exc:
+        logger.warning("Alembic upgrade encountered notice or error: %s", exc)
+        return False
 
 
 def run_schema_migrations() -> None:
     """
     Safely add new nullable columns to existing tables without dropping data.
 
-    This is a lightweight migration for columns added after the initial schema.
+    This is a lightweight fallback migration for columns added after the initial schema.
     For each expected new column, we check if it exists and add it if not.
     Works on SQLite and PostgreSQL. Column names are quoted to handle SQL keywords.
     """
@@ -55,7 +105,11 @@ def run_schema_migrations() -> None:
 
     # Define new columns as (table, column, sql_type_sqlite, sql_type_pg)
     migrations = [
-        # jobs table — real dataset fields
+        # jobs table — real dataset fields & timestamps
+        ("jobs", "workload_name",       "VARCHAR",   "VARCHAR"),
+        ("jobs", "timezone",            "VARCHAR",   "VARCHAR"),
+        ("jobs", "created_at",          "DATETIME",  "TIMESTAMP"),
+        ("jobs", "updated_at",          "DATETIME",  "TIMESTAMP"),
         ("jobs", "job_type",            "VARCHAR",   "VARCHAR"),
         ("jobs", "priority",            "VARCHAR",   "VARCHAR"),
         ("jobs", "earliest_start_time", "DATETIME",  "TIMESTAMP"),
@@ -63,6 +117,7 @@ def run_schema_migrations() -> None:
         ("jobs", "deferrable",          "BOOLEAN",   "BOOLEAN"),
         ("jobs", "tariff_plan",         "VARCHAR",   "VARCHAR"),
         # schedule_decisions table — tariff & regional impact fields
+        ("schedule_decisions", "optimization_score",     "FLOAT",   "DOUBLE PRECISION"),
         ("schedule_decisions", "tariff_inr_per_kwh",     "FLOAT",   "DOUBLE PRECISION"),
         ("schedule_decisions", "tariff_category",        "VARCHAR", "VARCHAR"),
         ("schedule_decisions", "region_id",              "VARCHAR", "VARCHAR"),
@@ -137,10 +192,14 @@ def run_schema_migrations() -> None:
 
 
 def init_db(max_retries: int = 15, delay_seconds: float = 2.0) -> None:
-    """Create all tables, then run schema migrations. Retries with backoff."""
+    """
+    Initialize database schema with retries and exponential backoff.
+    Creates all tables, applies Alembic migrations when configured, and runs fallback schema updates.
+    """
     for attempt in range(1, max_retries + 1):
         try:
             Base.metadata.create_all(bind=engine)
+            run_alembic_migrations()
             run_schema_migrations()
             logger.info("Database tables initialized and migrated successfully")
             return

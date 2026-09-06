@@ -1,0 +1,328 @@
+"""
+GreenShift — Human Approval Gate Service.
+
+Enforces server-side validation and audit ledger recording before Kubernetes dispatch.
+No workload can transition to dispatch eligibility without explicit human approval.
+"""
+
+import logging
+from typing import List, Optional, Tuple
+
+from sqlalchemy.orm import Session
+
+from app.shared.models import (
+    ApprovalORM,
+    ApprovalResponse,
+    JobORM,
+    JobStatus,
+    PendingApprovalItem,
+    ScheduleDecisionORM,
+)
+from app.shared.timezone import to_regional_time
+from app.shared.utils import utcnow
+from app.trust.service import (
+    record_approval_granted,
+    record_approval_declined,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class ApprovalValidationError(ValueError):
+    """Raised when an approval request fails validation (e.g. wrong status or mismatched schedule)."""
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class ApprovalNotFoundError(ValueError):
+    """Raised when the job or schedule decision does not exist."""
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.status_code = 404
+
+
+def validate_approval_request(
+    db: Session,
+    job_id: str,
+    schedule_id: int,
+    target_decision: str,
+) -> Tuple[JobORM, ScheduleDecisionORM]:
+    """
+    Validate that:
+      1. Job exists.
+      2. Schedule decision exists.
+      3. Schedule decision belongs to this job.
+      4. Job status is valid for approval (PENDING_APPROVAL, or idempotent already in target status).
+
+    Returns (job, schedule_decision).
+    """
+    job = db.get(JobORM, job_id)
+    if job is None:
+        raise ApprovalNotFoundError(f"Job '{job_id}' not found")
+
+    sd = db.get(ScheduleDecisionORM, schedule_id)
+    if sd is None:
+        raise ApprovalNotFoundError(f"Schedule decision with ID {schedule_id} not found")
+
+    if sd.job_id != job_id:
+        raise ApprovalValidationError(
+            f"Schedule decision {schedule_id} belongs to job '{sd.job_id}', not '{job_id}'",
+            status_code=400,
+        )
+
+    return job, sd
+
+
+def approve_schedule(
+    db: Session,
+    job_id: str,
+    schedule_id: int,
+    reason: Optional[str] = None,
+    approved_by: Optional[str] = "admin",
+) -> ApprovalResponse:
+    """
+    Approve a proposed schedule for a job.
+
+    Transitions job status: PENDING_APPROVAL -> APPROVED.
+    Idempotent: If already APPROVED for this schedule, returns the existing approval.
+    """
+    job, sd = validate_approval_request(db, job_id, schedule_id, "APPROVED")
+
+    # Idempotency check: if already approved for this schedule, return existing
+    existing_approval = (
+        db.query(ApprovalORM)
+        .filter(
+            ApprovalORM.job_id == job_id,
+            ApprovalORM.schedule_decision_id == schedule_id,
+            ApprovalORM.decision == "APPROVED",
+        )
+        .order_by(ApprovalORM.created_at.desc())
+        .first()
+    )
+    if job.status == JobStatus.APPROVED and existing_approval:
+        logger.info("Job %s is already approved for schedule %d — returning existing approval", job_id, schedule_id)
+        return ApprovalResponse(
+            id=existing_approval.id,
+            job_id=job.job_id,
+            schedule_decision_id=sd.id,
+            decision="APPROVED",
+            job_status=job.status,
+            reason=existing_approval.reason,
+            approved_by=existing_approval.approved_by,
+            created_at=existing_approval.created_at,
+            updated_at=existing_approval.updated_at,
+        )
+
+    # Valid status check
+    if job.status != JobStatus.PENDING_APPROVAL and job.status != JobStatus.APPROVED:
+        raise ApprovalValidationError(
+            f"Cannot approve job '{job_id}' in status '{job.status}'. Only PENDING_APPROVAL jobs can be approved.",
+            status_code=400,
+        )
+
+    now = utcnow()
+    approval = ApprovalORM(
+        job_id=job.job_id,
+        schedule_decision_id=sd.id,
+        decision="APPROVED",
+        reason=reason or "Schedule acceptable",
+        approved_by=approved_by or "admin",
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(approval)
+
+    job.status = JobStatus.APPROVED
+    job.updated_at = now
+    db.commit()
+    db.refresh(approval)
+    db.refresh(job)
+
+    # Record audit event in hash-chain ledger
+    try:
+        record_approval_granted(
+            db=db,
+            job_id=job.job_id,
+            schedule_decision_id=sd.id,
+            decision="APPROVED",
+            approved_by=approved_by or "admin",
+            reason=approval.reason,
+            timestamp=now.isoformat(),
+        )
+    except Exception as exc:
+        logger.warning("Audit record failed for job %s approval: %s", job.job_id, exc)
+
+    logger.info(
+        "Job %s schedule %d APPROVED by %s (selected_start: %s UTC)",
+        job_id,
+        schedule_id,
+        approved_by,
+        sd.selected_start.isoformat(),
+    )
+
+    return ApprovalResponse(
+        id=approval.id,
+        job_id=job.job_id,
+        schedule_decision_id=sd.id,
+        decision="APPROVED",
+        job_status=job.status,
+        reason=approval.reason,
+        approved_by=approval.approved_by,
+        created_at=approval.created_at,
+        updated_at=approval.updated_at,
+    )
+
+
+def decline_schedule(
+    db: Session,
+    job_id: str,
+    schedule_id: int,
+    reason: Optional[str] = None,
+    approved_by: Optional[str] = "admin",
+) -> ApprovalResponse:
+    """
+    Decline a proposed schedule for a job.
+
+    Transitions job status: PENDING_APPROVAL -> DECLINED.
+    DECLINED is a business decision, not a technical failure.
+    No Kubernetes job will be dispatched.
+    """
+    job, sd = validate_approval_request(db, job_id, schedule_id, "DECLINED")
+
+    # Idempotency check
+    existing_decline = (
+        db.query(ApprovalORM)
+        .filter(
+            ApprovalORM.job_id == job_id,
+            ApprovalORM.schedule_decision_id == schedule_id,
+            ApprovalORM.decision == "DECLINED",
+        )
+        .order_by(ApprovalORM.created_at.desc())
+        .first()
+    )
+    if job.status == JobStatus.DECLINED and existing_decline:
+        logger.info("Job %s is already declined for schedule %d — returning existing decline", job_id, schedule_id)
+        return ApprovalResponse(
+            id=existing_decline.id,
+            job_id=job.job_id,
+            schedule_decision_id=sd.id,
+            decision="DECLINED",
+            job_status=job.status,
+            reason=existing_decline.reason,
+            approved_by=existing_decline.approved_by,
+            created_at=existing_decline.created_at,
+            updated_at=existing_decline.updated_at,
+        )
+
+    if job.status != JobStatus.PENDING_APPROVAL and job.status != JobStatus.DECLINED:
+        raise ApprovalValidationError(
+            f"Cannot decline job '{job_id}' in status '{job.status}'. Only PENDING_APPROVAL jobs can be declined.",
+            status_code=400,
+        )
+
+    now = utcnow()
+    approval = ApprovalORM(
+        job_id=job.job_id,
+        schedule_decision_id=sd.id,
+        decision="DECLINED",
+        reason=reason or "Execution window declined by operator",
+        approved_by=approved_by or "admin",
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(approval)
+
+    job.status = JobStatus.DECLINED
+    job.updated_at = now
+    db.commit()
+    db.refresh(approval)
+    db.refresh(job)
+
+    # Record audit event
+    try:
+        record_approval_declined(
+            db=db,
+            job_id=job.job_id,
+            schedule_decision_id=sd.id,
+            decision="DECLINED",
+            approved_by=approved_by or "admin",
+            reason=approval.reason,
+            timestamp=now.isoformat(),
+        )
+    except Exception as exc:
+        logger.warning("Audit record failed for job %s decline: %s", job.job_id, exc)
+
+    logger.info("Job %s schedule %d DECLINED by %s (reason: %s)", job_id, schedule_id, approved_by, approval.reason)
+
+    return ApprovalResponse(
+        id=approval.id,
+        job_id=job.job_id,
+        schedule_decision_id=sd.id,
+        decision="DECLINED",
+        job_status=job.status,
+        reason=approval.reason,
+        approved_by=approval.approved_by,
+        created_at=approval.created_at,
+        updated_at=approval.updated_at,
+    )
+
+
+def get_job_approvals(db: Session, job_id: str) -> List[ApprovalORM]:
+    """Retrieve all approval/decline history for a specific job."""
+    return (
+        db.query(ApprovalORM)
+        .filter(ApprovalORM.job_id == job_id)
+        .order_by(ApprovalORM.created_at.desc())
+        .all()
+    )
+
+
+def get_pending_approvals(db: Session) -> List[PendingApprovalItem]:
+    """
+    Retrieve all jobs currently awaiting human approval (status == PENDING_APPROVAL)
+    with their schedule decisions and converted local/UTC timestamps.
+    """
+    jobs = (
+        db.query(JobORM)
+        .join(JobORM.schedule_decision)
+        .filter(JobORM.status == JobStatus.PENDING_APPROVAL)
+        .order_by(JobORM.submitted_at.desc())
+        .all()
+    )
+
+    items: List[PendingApprovalItem] = []
+    for j in jobs:
+        sd = j.schedule_decision
+        if not sd:
+            continue
+
+        start_local = to_regional_time(sd.selected_start, region=j.region, timezone_name=j.timezone)
+        end_local = to_regional_time(sd.selected_end, region=j.region, timezone_name=j.timezone)
+        deadline_local = to_regional_time(j.deadline, region=j.region, timezone_name=j.timezone)
+
+        items.append(
+            PendingApprovalItem(
+                job_id=j.job_id,
+                workload_name=j.workload_name,
+                team_id=j.team_id,
+                region=j.region,
+                timezone=j.timezone or "Asia/Kolkata",
+                schedule_id=sd.id,
+                selected_start_utc=sd.selected_start,
+                selected_start_local=start_local,
+                selected_end_utc=sd.selected_end,
+                selected_end_local=end_local,
+                runtime_minutes=j.runtime_minutes,
+                power_kw=j.power_kw,
+                carbon_intensity=sd.carbon_intensity,
+                carbon_emission_kg=sd.carbon_emission,
+                electricity_cost_usd=sd.electricity_cost,
+                deadline_utc=j.deadline,
+                deadline_local=deadline_local,
+                status=j.status,
+                tariff_plan=sd.tariff_plan,
+            )
+        )
+
+    return items

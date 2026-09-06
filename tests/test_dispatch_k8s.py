@@ -235,7 +235,7 @@ class TestDispatcherIdempotencyAndFlow:
             container_image="greenshift/sample-workload:latest",
             cpu_request="200m",
             memory_request="128Mi",
-            status=JobStatus.SCHEDULED,
+            status=JobStatus.APPROVED,
         )
         decision = ScheduleDecisionORM(
             job_id="JOB-IDEM-001",
@@ -273,7 +273,7 @@ class TestDispatcherIdempotencyAndFlow:
             power_kw=1.0,
             region="IN-SO",
             container_image="greenshift/sample-workload:latest",
-            status=JobStatus.SCHEDULED,
+            status=JobStatus.APPROVED,
         )
         db.add(job)
         db.commit()

@@ -77,9 +77,17 @@ try:
 except ImportError:
     logger.warning("Dashboard router not yet implemented")
 
+# Human Approval Gate
+try:
+    from app.api.routers import approval as approval_router
+    app.include_router(approval_router.router, prefix="/api/v1", tags=["Approval"])
+except ImportError:
+    logger.warning("Approval router not yet implemented")
+
 # BRSR Report + Data Sources
 try:
     from app.api.routers import report as report_router
     app.include_router(report_router.router, prefix="/api/v1", tags=["Report"])
 except ImportError:
     logger.warning("Report router not yet implemented")
+

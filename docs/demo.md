@@ -84,22 +84,34 @@ curl -X POST http://localhost:8000/api/v1/jobs \
   }'
 ```
 
-### Step 2: Trigger Scheduling
+### Step 2: Trigger Scheduling (Enters PENDING_APPROVAL)
 ```bash
 curl -X POST http://localhost:8000/api/v1/schedule/{JOB_ID}
 ```
+*The job enters `PENDING_APPROVAL` status and is held until explicitly approved.*
 
-### Step 3: Trigger Dispatch
+### Step 3: Approve Proposed Schedule (Human Approval Gate)
+```bash
+curl -X POST http://localhost:8000/api/v1/approvals/{JOB_ID}/approve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schedule_id": 1,
+    "reason": "Off-peak low-carbon window approved"
+  }'
+```
+*Transitions status to `APPROVED`. If declined via `/decline`, the job stops and is never dispatched.*
+
+### Step 4: Trigger Dispatch (Authorized only for APPROVED jobs)
 ```bash
 curl -X POST http://localhost:8000/api/v1/dispatch/{JOB_ID}
 ```
 
-### Step 4: Verify Audit Chain
+### Step 5: Verify Audit Chain
 ```bash
 curl http://localhost:8000/api/v1/trust/verify
 ```
 
-### Step 5: Export BRSR Report
+### Step 6: Export BRSR Report
 ```bash
 curl http://localhost:8000/api/v1/report/csv -o report.csv
 ```

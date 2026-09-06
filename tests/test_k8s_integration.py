@@ -58,6 +58,8 @@ class TestLiveKubernetes:
         )
         job = submit_job(db, req)
         schedule_and_store(db, job)
+        from app.approval.service import approve_schedule
+        approve_schedule(db, job.job_id, job.schedule_decision.id)
         db.refresh(job)
 
         execution = dispatch_job(db, job)
@@ -72,6 +74,7 @@ class TestLiveKubernetes:
         )
         assert k8s_job is not None
         assert k8s_job.metadata.labels.get("greenshift-job-id") == job.job_id
+        assert k8s_job.metadata.labels.get("greenshift-team-id") == job.team_id
 
     def test_kubernetes_job_labels(self, db):
         """Dispatched Job must have correct GreenShift labels."""
@@ -85,6 +88,8 @@ class TestLiveKubernetes:
         )
         job = submit_job(db, req)
         schedule_and_store(db, job)
+        from app.approval.service import approve_schedule
+        approve_schedule(db, job.job_id, job.schedule_decision.id)
         db.refresh(job)
 
         execution = dispatch_job(db, job)

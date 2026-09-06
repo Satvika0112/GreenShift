@@ -124,14 +124,19 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
         )
         db.add(orm)
 
-    # Update job status
-    job.status = JobStatus.SCHEDULED
+    # Update job status to PENDING_APPROVAL (Human Approval Gate)
+    job.status = JobStatus.PENDING_APPROVAL
+    job.updated_at = now
     db.commit()
 
-    # Record audit event if requested
+    saved_sd = existing_sd or orm
+    db.refresh(saved_sd)
+    decision.id = saved_sd.id
+
+    # Record audit events if requested
     if record_audit:
         try:
-            from app.trust.service import record_job_scheduled
+            from app.trust.service import record_job_scheduled, record_schedule_proposed
             record_job_scheduled(
                 db=db,
                 job_id=decision.job_id,
@@ -140,11 +145,25 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
                 carbon_avoided=decision.carbon_avoided,
                 budget_remaining=decision.budget_remaining,
             )
+            # Add schedule proposed event with decision id
+            sd_record = db.query(ScheduleDecisionORM).filter(ScheduleDecisionORM.job_id == decision.job_id).first()
+            if sd_record:
+                record_schedule_proposed(
+                    db=db,
+                    job_id=decision.job_id,
+                    schedule_decision_id=sd_record.id,
+                    selected_start=decision.selected_start.isoformat(),
+                    carbon_emission=decision.carbon_emission,
+                    electricity_cost=decision.electricity_cost,
+                    region_id=decision.region_id,
+                    tariff_plan=decision.tariff_plan,
+                    deadline=job.deadline.isoformat() if job.deadline else None,
+                )
         except Exception as exc:
             logger.warning("Audit record failed for job %s scheduling: %s", decision.job_id, exc)
 
     logger.info(
-        "Scheduled job %s → start=%s | carbon=%.4fkg | cost=$%.4f | avoided=%.4fkg",
+        "Scheduled job %s → PENDING_APPROVAL | start=%s | carbon=%.4fkg | cost=$%.4f | avoided=%.4fkg",
         decision.job_id,
         decision.selected_start.isoformat(),
         decision.carbon_emission,
