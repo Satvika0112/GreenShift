@@ -23,7 +23,7 @@ from app.decide.scheduler import (
 )
 from app.decide.service import schedule_and_store
 from app.ingest.jobs import submit_job
-from app.shared.auth import create_access_token
+from app.shared.auth import create_access_token, hash_password
 from app.shared.database import get_db, build_engine, run_alembic_migrations
 from app.shared.models import (
     Base,
@@ -34,6 +34,8 @@ from app.shared.models import (
     ScheduleDecision,
     ScheduleDecisionORM,
     TariffDataPoint,
+    UserORM,
+    UserRole,
 )
 from app.shared.utils import utcnow
 
@@ -222,7 +224,21 @@ class TestDatabaseAndAPIExplainabilityIntegration:
     def test_api_schedule_endpoint_exposes_explainability(self, db, now_utc):
         """Verify POST /api/v1/schedule/{job_id} returns all explainability fields."""
         client = TestClient(app)
-        token = create_access_token(user_id=1, username="admin_user", role="ADMIN")
+        user = db.query(UserORM).filter(UserORM.username == "admin_user").first()
+        if not user:
+            user = UserORM(
+                username="admin_user",
+                email="admin_user@greenshift.io",
+                hashed_password=hash_password("adminpass123"),
+                role=UserRole.ADMIN,
+                team_id="team_alpha",
+                is_active=True,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+        token = create_access_token(user_id=user.id, username=user.username, role=user.role.value if hasattr(user.role, 'value') else user.role)
         headers = {"Authorization": f"Bearer {token}"}
 
         # Submit job
@@ -255,7 +271,21 @@ class TestDatabaseAndAPIExplainabilityIntegration:
     def test_api_pending_approvals_exposes_explainability(self, db, now_utc):
         """Verify GET /api/v1/approvals/pending exposes explainability attributes."""
         client = TestClient(app)
-        token = create_access_token(user_id=1, username="admin_user", role="ADMIN")
+        user = db.query(UserORM).filter(UserORM.username == "admin_user").first()
+        if not user:
+            user = UserORM(
+                username="admin_user",
+                email="admin_user@greenshift.io",
+                hashed_password=hash_password("adminpass123"),
+                role=UserRole.ADMIN,
+                team_id="team_alpha",
+                is_active=True,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+        token = create_access_token(user_id=user.id, username=user.username, role=user.role.value if hasattr(user.role, 'value') else user.role)
         headers = {"Authorization": f"Bearer {token}"}
 
         # Submit & schedule job

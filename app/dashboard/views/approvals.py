@@ -55,25 +55,24 @@ def render_approvals_view() -> None:
                 reason = item.get("reason", "Lowest carbon intensity window")
 
                 st.markdown(
-                    f"""
-                    <div class="gs-card" style="margin-bottom: 16px;">
-                        <div class="gs-card-header">
-                            <div>
-                                <div class="gs-card-title">Job: <code>{job_id}</code></div>
-                                <div class="gs-card-subtitle">Team: <strong>{team_id}</strong> | Region: <strong>{region}</strong> | Runtime: <strong>{runtime} min</strong></div>
-                            </div>
-                            <div>{render_status_badge("PENDING_APPROVAL")}</div>
-                        </div>
-                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; font-size: 0.85rem;">
-                            <div>Proposed Start: <strong style="color: #00E599;">{str(start_time)[:16]} UTC</strong></div>
-                            <div>Carbon: <strong>{carbon_intensity:.1f} gCO₂/kWh</strong></div>
-                            <div>Cost: <strong>${cost_usd:.4f}</strong></div>
-                            <div>Emissions: <strong>{carbon_emission:.4f} kg</strong></div>
-                        </div>
-                        <div style="font-size: 0.82rem; color: #94A3B8; background: #041315; padding: 10px 14px; border-radius: 6px; margin-bottom: 14px;">
-                            <strong>Scheduler Reason:</strong> {reason}
-                        </div>
-                    """,
+                    f'<div class="gs-card" style="margin-bottom: 12px;">'
+                    f'<div class="gs-card-header">'
+                    f'<div>'
+                    f'<div class="gs-card-title">Job: <code>{job_id}</code></div>'
+                    f'<div class="gs-card-subtitle">Team: <strong>{team_id}</strong> | Region: <strong>{region}</strong> | Runtime: <strong>{runtime} min</strong></div>'
+                    f'</div>'
+                    f'<div>{render_status_badge("PENDING_APPROVAL")}</div>'
+                    f'</div>'
+                    f'<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; font-size: 0.85rem;">'
+                    f'<div>Proposed Start: <strong style="color: #00E599;">{str(start_time)[:16]} UTC</strong></div>'
+                    f'<div>Carbon: <strong>{carbon_intensity:.1f} gCO₂/kWh</strong></div>'
+                    f'<div>Cost: <strong>${cost_usd:.4f}</strong></div>'
+                    f'<div>Emissions: <strong>{carbon_emission:.4f} kg</strong></div>'
+                    f'</div>'
+                    f'<div style="font-size: 0.82rem; color: #94A3B8; background: #041315; padding: 10px 14px; border-radius: 6px;">'
+                    f'<strong>Scheduler Reason:</strong> {reason}'
+                    f'</div>'
+                    f'</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -104,7 +103,7 @@ def render_approvals_view() -> None:
                         except Exception as exc:
                             st.error(f"Decline failed: {exc}")
 
-                st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown('<div style="margin-bottom: 20px;"></div>', unsafe_allow_html=True)
 
     with tab_declined:
         if not declined_list:

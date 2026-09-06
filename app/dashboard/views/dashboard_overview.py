@@ -42,7 +42,6 @@ def render_dashboard_overview(active_region: str = "IN-TG") -> None:
     )
 
     # 2. Top Metric Cards Grid
-    st.markdown('<div style="margin-bottom: 20px;">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(render_metric_card("Total Workloads", f"{total_jobs:,}", f"{completed_jobs} completed", accent=True), unsafe_allow_html=True)
@@ -52,22 +51,18 @@ def render_dashboard_overview(active_region: str = "IN-TG") -> None:
         st.markdown(render_metric_card("Carbon Avoided", f"{carbon_avoided_kg:,.2f} kg", f"{carbon_reduction_pct}% reduction vs baseline", accent=True), unsafe_allow_html=True)
     with c4:
         st.markdown(render_metric_card("Electricity Cost Saved", f"${cost_saved_usd:,.2f}", "ToD tariff optimized", accent=True), unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
 
     # 3. Middle Section: Carbon Intensity Curve + Jobs Distribution
     col_curve, col_status = st.columns([1.5, 1], gap="medium")
 
     with col_curve:
         st.markdown(
-            f"""
-            <div class="gs-card">
-                <div class="gs-card-header">
-                    <div>
-                        <div class="gs-card-title">🌿 Carbon Intensity Forecast</div>
-                        <div class="gs-card-subtitle">Live regional telemetry for {active_region} (Electricity Maps)</div>
-                    </div>
-                </div>
-            """,
+            f'<div class="gs-card-header" style="margin-bottom: 8px;">'
+            f'<div>'
+            f'<div class="gs-card-title">🌿 Carbon Intensity Forecast</div>'
+            f'<div class="gs-card-subtitle">Live regional telemetry for {active_region} (Electricity Maps)</div>'
+            f'</div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -99,19 +94,14 @@ def render_dashboard_overview(active_region: str = "IN-TG") -> None:
         else:
             st.info(f"Connecting to carbon telemetry feed for {active_region}...")
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
     with col_status:
         st.markdown(
-            """
-            <div class="gs-card">
-                <div class="gs-card-header">
-                    <div>
-                        <div class="gs-card-title">📊 Workload Status Distribution</div>
-                        <div class="gs-card-subtitle">Real-time lifecycle state counts</div>
-                    </div>
-                </div>
-            """,
+            '<div class="gs-card-header" style="margin-bottom: 8px;">'
+            '<div>'
+            '<div class="gs-card-title">📊 Workload Status Distribution</div>'
+            '<div class="gs-card-subtitle">Real-time lifecycle state counts</div>'
+            '</div>'
+            '</div>',
             unsafe_allow_html=True,
         )
 
@@ -127,34 +117,32 @@ def render_dashboard_overview(active_region: str = "IN-TG") -> None:
             ("FAILED", jobs_summary.get("FAILED", 0)),
         ]
 
+        status_rows_html = []
         for s_code, s_count in status_items:
             if s_count > 0 or s_code in ("PENDING_APPROVAL", "APPROVED", "RUNNING", "COMPLETED"):
-                st.markdown(
-                    f"""
-                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #0E383C;">
-                        <div>{render_status_badge(s_code)}</div>
-                        <div style="font-weight: 700; color: #FFFFFF; font-family: 'JetBrains Mono', monospace;">{s_count}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
+                status_rows_html.append(
+                    f'<div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #0E383C;">'
+                    f'<div>{render_status_badge(s_code)}</div>'
+                    f'<div style="font-weight: 700; color: #FFFFFF; font-family: \'JetBrains Mono\', monospace;">{s_count}</div>'
+                    f'</div>'
                 )
 
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="gs-card" style="padding: 12px 16px;">{"".join(status_rows_html)}</div>',
+            unsafe_allow_html=True,
+        )
 
     # 4. Lower Section: Platform Health Summary + Recent Activity Audit
     col_health, col_audit = st.columns([1, 1.2], gap="medium")
 
     with col_health:
         st.markdown(
-            """
-            <div class="gs-card">
-                <div class="gs-card-header">
-                    <div>
-                        <div class="gs-card-title">🩺 Platform Health & Dependencies</div>
-                        <div class="gs-card-subtitle">Real-time health status probe (/health)</div>
-                    </div>
-                </div>
-            """,
+            '<div class="gs-card-header" style="margin-bottom: 8px;">'
+            '<div>'
+            '<div class="gs-card-title">🩺 Platform Health & Dependencies</div>'
+            '<div class="gs-card-subtitle">Real-time health status probe (/health)</div>'
+            '</div>'
+            '</div>',
             unsafe_allow_html=True,
         )
 
@@ -173,41 +161,37 @@ def render_dashboard_overview(active_region: str = "IN-TG") -> None:
         st.markdown(render_health_card("Kubernetes Cluster", k8s_st, "Batch workload dispatcher & state collector", "☸️"), unsafe_allow_html=True)
         st.markdown(render_health_card("Carbon Telemetry API", carbon_st, "Electricity Maps multi-tier resilience hierarchy", "🌿"), unsafe_allow_html=True)
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
     with col_audit:
         st.markdown(
-            """
-            <div class="gs-card">
-                <div class="gs-card-header">
-                    <div>
-                        <div class="gs-card-title">🔐 Recent Tamper-Evident Activity</div>
-                        <div class="gs-card-subtitle">Cryptographic SHA-256 trust ledger feed</div>
-                    </div>
-                </div>
-            """,
+            '<div class="gs-card-header" style="margin-bottom: 8px;">'
+            '<div>'
+            '<div class="gs-card-title">🔐 Recent Tamper-Evident Activity</div>'
+            '<div class="gs-card-subtitle">Cryptographic SHA-256 trust ledger feed</div>'
+            '</div>'
+            '</div>',
             unsafe_allow_html=True,
         )
 
-        audit_events = fetch_audit_events(limit=8)
+        audit_events = fetch_audit_events(limit=6)
         if audit_events:
+            audit_rows_html = []
             for ev in audit_events:
                 ev_type = ev.get("event_type", "EVENT")
                 ts = ev.get("timestamp", "")[:19].replace("T", " ")
                 job_id = ev.get("job_id", "")
-                st.markdown(
-                    f"""
-                    <div style="padding: 8px 0; border-bottom: 1px solid #0E383C; font-size: 0.82rem;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;">
-                            <span style="color: #00E599; font-weight: 600; font-family: 'JetBrains Mono', monospace;">{ev_type}</span>
-                            <span style="color: #64748B; font-size: 0.75rem;">{ts}</span>
-                        </div>
-                        <div style="color: #94A3B8;">Job: <code style="color: #E2E8F0;">{job_id}</code> | Seq: #{ev.get('sequence', 0)}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
+                audit_rows_html.append(
+                    f'<div style="padding: 8px 0; border-bottom: 1px solid #0E383C; font-size: 0.82rem;">'
+                    f'<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;">'
+                    f'<span style="color: #00E599; font-weight: 600; font-family: \'JetBrains Mono\', monospace;">{ev_type}</span>'
+                    f'<span style="color: #64748B; font-size: 0.75rem;">{ts}</span>'
+                    f'</div>'
+                    f'<div style="color: #94A3B8;">Job: <code style="color: #E2E8F0;">{job_id}</code> | Seq: #{ev.get("sequence", 0)}</div>'
+                    f'</div>'
                 )
+            st.markdown(
+                f'<div class="gs-card" style="padding: 12px 16px;">{"".join(audit_rows_html)}</div>',
+                unsafe_allow_html=True,
+            )
         else:
             st.caption("No audit events recorded yet.")
 
-        st.markdown("</div>", unsafe_allow_html=True)

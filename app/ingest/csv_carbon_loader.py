@@ -200,13 +200,28 @@ def get_carbon_from_csv(
     if not all_data:
         return []
 
-    # Try exact match, then case-insensitive, then prefix match
+    # Try exact match, case-insensitive, alias resolution, then prefix match
     region_upper = region.upper()
     matched_key = None
     for key in all_data:
         if key.upper() == region_upper:
             matched_key = key
             break
+
+    if matched_key is None:
+        try:
+            from app.ingest.regional_registry import resolve_region_id
+            target_canonical = resolve_region_id(region)
+            for key in all_data:
+                try:
+                    if resolve_region_id(key) == target_canonical:
+                        matched_key = key
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     if matched_key is None:
         for key in all_data:
             if key.upper().startswith(region_upper) or region_upper.startswith(key.upper()):

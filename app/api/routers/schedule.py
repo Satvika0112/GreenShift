@@ -3,26 +3,44 @@ Agent 2 — DECIDE
 FastAPI router for schedule endpoints.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.decide.service import schedule_and_store
 from app.ingest.jobs import get_job
 from app.shared.database import get_db
-from app.shared.models import JobStatus
+from app.shared.auth import get_current_user, require_roles
+from app.shared.models import JobStatus, UserORM, UserRole
+from app.shared.utils import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
 
 @router.post("/schedule/{job_id}")
-def trigger_schedule(job_id: str, db: Session = Depends(get_db)):
+def trigger_schedule(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR)),
+):
     """
     Manually trigger scheduling for a specific job.
     Normally scheduling is triggered automatically by the DECIDE background loop.
+    Enforces RBAC: ADMIN, TEAM_LEAD (own team only), OPERATOR.
     """
     job = get_job(db, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    user_role_val = current_user.role.value if isinstance(current_user.role, UserRole) else str(current_user.role)
+    if user_role_val == "TEAM_LEAD" and current_user.team_id:
+        if job.team_id and job.team_id != current_user.team_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Team lead for team '{current_user.team_id}' cannot schedule jobs for team '{job.team_id}'",
+            )
+
     if job.status not in (JobStatus.SUBMITTED,):
         raise HTTPException(
             status_code=400,
@@ -32,6 +50,11 @@ def trigger_schedule(job_id: str, db: Session = Depends(get_db)):
         decision = schedule_and_store(db, job)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error calculating schedule for job {job_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while calculating the workload schedule.")
 
     from app.shared.timezone import format_dual_time
 
@@ -72,3 +95,4 @@ def trigger_schedule(job_id: str, db: Session = Depends(get_db)):
             "selected_end": format_dual_time(decision.selected_end, region=decision.region_id),
         },
     }
+

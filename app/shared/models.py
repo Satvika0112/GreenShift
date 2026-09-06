@@ -8,10 +8,11 @@ Every agent imports from here. Do NOT redefine models in individual agent module
 from __future__ import annotations
 
 import enum
+import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -82,6 +83,11 @@ class EventType(str, enum.Enum):
     CARBON_CACHE_STALE   = "CARBON_CACHE_STALE"
     CARBON_CSV_USED      = "CARBON_CSV_USED"
     CARBON_FALLBACK_USED = "CARBON_FALLBACK_USED"
+    # ── Security & Authentication Events ──
+    AUTH_LOGIN_SUCCESS   = "AUTH_LOGIN_SUCCESS"
+    AUTH_LOGIN_FAILURE   = "AUTH_LOGIN_FAILURE"
+    AUTH_ACCESS_DENIED   = "AUTH_ACCESS_DENIED"
+    AUTH_USER_REGISTERED = "AUTH_USER_REGISTERED"
 
 
 class UserRole(str, enum.Enum):
@@ -359,6 +365,15 @@ class AuditEventORM(Base):
     payload_json  = Column(Text, nullable=False)         # serialised event payload
     sequence      = Column(Integer, nullable=False, unique=True, index=True)  # monotonically increasing and globally unique
 
+    @property
+    def payload(self) -> dict:
+        if not self.payload_json:
+            return {}
+        try:
+            return json.loads(self.payload_json)
+        except Exception:
+            return {}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLAlchemy ORM — CarbonDataPoint
@@ -495,24 +510,97 @@ class JobSubmitRequest(BaseModel):
     """API request body for POST /api/v1/jobs"""
 
     # Core fields (required)
-    team_id:          str   = Field(..., description="Team identifier")
+    team_id:          str   = Field(..., min_length=1, max_length=100, description="Team identifier")
     deadline:         datetime = Field(..., description="Latest allowed start+runtime end time (UTC)")
-    runtime_minutes:  int   = Field(..., gt=0, description="Expected runtime in minutes")
-    power_kw:         float = Field(..., gt=0, description="Average power draw in kW")
-    region:           str   = Field(..., description="Grid region code, e.g. IN-TG, IN-GJ, IN-HP, IN-WB")
-    container_image:  str   = Field(..., description="Docker image to run as Kubernetes Job")
+    runtime_minutes:  int   = Field(..., gt=0, le=10080, description="Expected runtime in minutes (max 7 days = 10080 mins)")
+    power_kw:         float = Field(..., gt=0, le=100000.0, description="Average power draw in kW (max 100 MW)")
+    region:           str   = Field(..., min_length=2, max_length=50, description="Grid region code, e.g. IN-TG, IN-GJ, IN-HP, IN-WB")
+    container_image:  str   = Field(..., min_length=1, max_length=255, description="Docker image to run as Kubernetes Job")
     cpu_request:      str   = Field(default="500m", description="Kubernetes CPU request")
     memory_request:   str   = Field(default="512Mi", description="Kubernetes memory request")
-    carbon_budget_kg: Optional[float] = Field(None, description="Max carbon budget in kg CO2")
+    carbon_budget_kg: Optional[float] = Field(None, ge=0.0, description="Max carbon budget in kg CO2")
     submit_time:         Optional[datetime] = Field(None, description="Original submit timestamp from workload dataset")
-    job_id:              Optional[str]      = Field(None, description="Preserve original job ID from CSV")
-    job_type:            Optional[str]      = Field(None, description="Workload type, e.g. DATA_PROCESSING")
+    job_id:              Optional[str]      = Field(None, max_length=100, description="Preserve original job ID from CSV")
+    job_type:            Optional[str]      = Field(None, max_length=100, description="Workload type, e.g. DATA_PROCESSING")
     priority:            Optional[str]      = Field(None, description="CRITICAL/HIGH/MEDIUM/LOW")
     earliest_start_time: Optional[datetime] = Field(None, description="Job cannot start before this time")
-    energy_kwh:          Optional[float]    = Field(None, description="Pre-computed energy consumption (kWh)")
+    energy_kwh:          Optional[float]    = Field(None, ge=0.0, description="Pre-computed energy consumption (kWh)")
     deferrable:          Optional[bool]     = Field(None, description="True = can be shifted for carbon savings")
-    tariff_plan:         Optional[str]      = Field(None, description="Explicit tariff plan override")
-    timezone:            Optional[str]      = Field(None, description="Optional IANA timezone name, e.g. Asia/Kolkata, America/New_York")
+    tariff_plan:         Optional[str]      = Field(None, max_length=100, description="Explicit tariff plan override")
+    timezone:            Optional[str]      = Field(None, max_length=100, description="Optional IANA timezone name, e.g. Asia/Kolkata, America/New_York")
+
+    @field_validator("region")
+    @classmethod
+    def validate_region(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Region cannot be empty")
+        cleaned = v.strip().upper()
+        from app.ingest.regional_registry import get_region_config
+        try:
+            cfg = get_region_config(cleaned)
+            return cfg.region_id
+        except Exception as exc:
+            raise ValueError(f"Unsupported or invalid region '{v}'. Must be a recognized grid zone (e.g. IN-TG, IN-GJ, IN-HP, IN-WB, US-CA, SE).") from exc
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        cleaned = v.strip().upper()
+        allowed = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
+        if cleaned not in allowed:
+            raise ValueError(f"Invalid priority '{v}'. Allowed values: {', '.join(sorted(allowed))}")
+        return cleaned
+
+    @field_validator("cpu_request")
+    @classmethod
+    def validate_cpu_request(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("cpu_request cannot be empty")
+        s = v.strip().lower()
+        try:
+            if s.endswith("m"):
+                millicores = float(s[:-1])
+                if millicores <= 0:
+                    raise ValueError("cpu_request must be positive")
+                if millicores > 256000:
+                    raise ValueError("cpu_request exceeds maximum limit (256 cores)")
+            else:
+                cores = float(s)
+                if cores <= 0:
+                    raise ValueError("cpu_request must be positive")
+                if cores > 256:
+                    raise ValueError("cpu_request exceeds maximum limit (256 cores)")
+        except ValueError as exc:
+            if "must be positive" in str(exc) or "exceeds" in str(exc):
+                raise
+            raise ValueError(f"Invalid cpu_request format '{v}'. Expected format: '500m', '2', '1.5'") from exc
+        return v.strip()
+
+    @field_validator("memory_request")
+    @classmethod
+    def validate_memory_request(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("memory_request cannot be empty")
+        s = v.strip()
+        import re
+        match = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]*)$", s)
+        if not match:
+            raise ValueError(f"Invalid memory_request format '{v}'. Expected format: '512Mi', '4Gi', '1024Ki'")
+        num_str, unit = match.groups()
+        num = float(num_str)
+        if num <= 0:
+            raise ValueError("memory_request must be positive")
+        unit_lower = unit.lower()
+        valid_units = {"", "b", "k", "ki", "m", "mi", "g", "gi", "t", "ti"}
+        if unit_lower not in valid_units:
+            raise ValueError(f"Invalid memory unit '{unit}'. Allowed: Ki, Mi, Gi, Ti")
+        mult = {"": 1/(1024**3), "b": 1/(1024**3), "k": 1/(1024**2), "ki": 1/(1024**2), "m": 1/1024, "mi": 1/1024, "g": 1.0, "gi": 1.0, "t": 1024.0, "ti": 1024.0}
+        gib = num * mult.get(unit_lower, 1.0)
+        if gib > 2048:
+            raise ValueError("memory_request exceeds maximum limit (2048 GiB)")
+        return v.strip()
 
 
 class JobSubmitResponse(BaseModel):

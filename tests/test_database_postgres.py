@@ -36,7 +36,10 @@ from app.shared.models import (
     TariffDataPointORM,
     RegionalTariffORM,
     EventType,
+    UserORM,
+    UserRole,
 )
+from app.shared.auth import create_access_token, hash_password
 from app.trust.ledger import append_event, verify_chain, GENESIS_HASH
 
 
@@ -380,6 +383,24 @@ class TestDatabaseArchitecture:
         client = TestClient(app)
 
         try:
+            # Create user and token for authentication
+            user = db_session.query(UserORM).filter(UserORM.username == "db_test_admin").first()
+            if not user:
+                user = UserORM(
+                    username="db_test_admin",
+                    email="db_admin@greenshift.io",
+                    hashed_password=hash_password("adminpass123"),
+                    role=UserRole.ADMIN,
+                    team_id="API-TEST-TEAM",
+                    is_active=True,
+                )
+                db_session.add(user)
+                db_session.commit()
+                db_session.refresh(user)
+
+            token = create_access_token(user_id=user.id, username=user.username, role=user.role.value if hasattr(user.role, 'value') else user.role)
+            headers = {"Authorization": f"Bearer {token}"}
+
             # 1. Submit job via API
             now = datetime.now(timezone.utc)
             deadline = now + timedelta(hours=8)
@@ -393,18 +414,18 @@ class TestDatabaseArchitecture:
                 "cpu_request": "500m",
                 "memory_request": "512Mi",
             }
-            res_submit = client.post("/api/v1/jobs", json=payload)
+            res_submit = client.post("/api/v1/jobs", json=payload, headers=headers)
             assert res_submit.status_code == 201
             job_id = res_submit.json()["job_id"]
 
             # 2. Get job detail
-            res_get = client.get(f"/api/v1/jobs/{job_id}")
+            res_get = client.get(f"/api/v1/jobs/{job_id}", headers=headers)
             assert res_get.status_code == 200
             assert res_get.json()["job_id"] == job_id
             assert res_get.json()["team_id"] == "API-TEST-TEAM"
 
             # 3. Get job history with audit trail
-            res_hist = client.get(f"/api/v1/jobs/{job_id}/history")
+            res_hist = client.get(f"/api/v1/jobs/{job_id}/history", headers=headers)
             assert res_hist.status_code == 200
             assert "audit_events" in res_hist.json()
             assert len(res_hist.json()["audit_events"]) >= 1
@@ -420,7 +441,7 @@ class TestDatabaseArchitecture:
             db_session.add(obs)
             db_session.commit()
 
-            res_analytics = client.get("/api/v1/analytics/carbon/IN-TG")
+            res_analytics = client.get("/api/v1/analytics/carbon/IN-TG", headers=headers)
             assert res_analytics.status_code == 200
             assert res_analytics.json()["region"] == "IN-TG"
             assert len(res_analytics.json()["history"]) >= 1

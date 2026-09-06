@@ -39,67 +39,59 @@ def render_metrics_view() -> None:
         with col_m1:
             # Scheduler Metrics
             st.markdown(
-                f"""
-                <div class="gs-card">
-                    <div class="gs-card-title" style="margin-bottom: 12px;">⚙️ Scheduler Engine Metrics</div>
-                    <div style="font-size: 0.85rem; color: #94A3B8; line-height: 1.8;">
-                        • <strong>Total Evaluated Requests:</strong> <span style="color: #FFFFFF;">{sch.get('scheduling_requests', 0)}</span><br>
-                        • <strong>Successful Optimizations:</strong> <span style="color: #00E599;">{sch.get('successful_schedules', 0)}</span><br>
-                        • <strong>Infeasible Rejections:</strong> <span style="color: #EF4444;">{sch.get('infeasible_schedules', 0)}</span><br>
-                        • <strong>Average Optimization Latency:</strong> <span style="color: #06B6D4;">{sch.get('average_scheduling_time_ms', 0.0):.2f} ms</span><br>
-                        • <strong>Total Computation Time:</strong> <span style="color: #FFFFFF;">{sch.get('total_scheduling_time_seconds', 0.0):.4f}s</span>
-                    </div>
-                </div>
-                """,
+                f'<div class="gs-card">'
+                f'<div class="gs-card-title" style="margin-bottom: 12px;">⚙️ Scheduler Engine Metrics</div>'
+                f'<div style="font-size: 0.85rem; color: #94A3B8; line-height: 1.8;">'
+                f'• <strong>Total Evaluated Requests:</strong> <span style="color: #FFFFFF;">{sch.get("scheduling_requests", 0)}</span><br>'
+                f'• <strong>Successful Optimizations:</strong> <span style="color: #00E599;">{sch.get("successful_schedules", 0)}</span><br>'
+                f'• <strong>Infeasible Rejections:</strong> <span style="color: #EF4444;">{sch.get("infeasible_schedules", 0)}</span><br>'
+                f'• <strong>Average Optimization Latency:</strong> <span style="color: #06B6D4;">{sch.get("average_scheduling_time_ms", 0.0):.2f} ms</span><br>'
+                f'• <strong>Total Computation Time:</strong> <span style="color: #FFFFFF;">{sch.get("total_scheduling_time_seconds", 0.0):.4f}s</span>'
+                f'</div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
             # Approvals Metrics
             st.markdown(
-                f"""
-                <div class="gs-card">
-                    <div class="gs-card-title" style="margin-bottom: 12px;">🛡️ Approval Gate Metrics</div>
-                    <div style="font-size: 0.85rem; color: #94A3B8; line-height: 1.8;">
-                        • <strong>Pending Workloads:</strong> <span style="color: #F59E0B;">{appr.get('pending_approvals', 0)}</span><br>
-                        • <strong>Approvals Granted:</strong> <span style="color: #00E599;">{appr.get('approvals', 0)}</span><br>
-                        • <strong>Schedules Declined:</strong> <span style="color: #EF4444;">{appr.get('declines', 0)}</span>
-                    </div>
-                </div>
-                """,
+                f'<div class="gs-card">'
+                f'<div class="gs-card-title" style="margin-bottom: 12px;">🛡️ Approval Gate Metrics</div>'
+                f'<div style="font-size: 0.85rem; color: #94A3B8; line-height: 1.8;">'
+                f'• <strong>Pending Workloads:</strong> <span style="color: #F59E0B;">{appr.get("pending_approvals", 0)}</span><br>'
+                f'• <strong>Approvals Granted:</strong> <span style="color: #00E599;">{appr.get("approvals", 0)}</span><br>'
+                f'• <strong>Schedules Declined:</strong> <span style="color: #EF4444;">{appr.get("declines", 0)}</span>'
+                f'</div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
         with col_m2:
             # Carbon API & Cache Metrics
             st.markdown(
-                f"""
-                <div class="gs-card">
-                    <div class="gs-card-title" style="margin-bottom: 12px;">🌿 Carbon Telemetry & Cache Metrics</div>
-                    <div style="font-size: 0.85rem; color: #94A3B8; line-height: 1.8;">
-                        • <strong>Cache Hits:</strong> <span style="color: #00E599;">{carbon.get('cache_hits', 0)}</span><br>
-                        • <strong>Cache Misses:</strong> <span style="color: #94A3B8;">{carbon.get('cache_misses', 0)}</span><br>
-                        • <strong>Hit Ratio:</strong> <span style="color: #00E599;">{carbon.get('cache_hit_ratio_pct', 0.0):.1f}%</span><br>
-                        • <strong>Redis Outages / Degraded Events:</strong> <span style="color: #F59E0B;">{carbon.get('redis_unavailable_events', 0)}</span><br>
-                        • <strong>Fallback Invocations (CSV/Baseline):</strong> <span style="color: #06B6D4;">{carbon.get('api_fallback_usage', 0)}</span>
-                    </div>
-                </div>
-                """,
+                f'<div class="gs-card">'
+                f'<div class="gs-card-title" style="margin-bottom: 12px;">🌿 Carbon Telemetry & Cache Metrics</div>'
+                f'<div style="font-size: 0.85rem; color: #94A3B8; line-height: 1.8;">'
+                f'• <strong>Cache Hits:</strong> <span style="color: #00E599;">{carbon.get("cache_hits", 0)}</span><br>'
+                f'• <strong>Cache Misses:</strong> <span style="color: #94A3B8;">{carbon.get("cache_misses", 0)}</span><br>'
+                f'• <strong>Hit Ratio:</strong> <span style="color: #00E599;">{carbon.get("cache_hit_ratio_pct", 0.0):.1f}%</span><br>'
+                f'• <strong>Redis Outages / Degraded Events:</strong> <span style="color: #F59E0B;">{carbon.get("redis_unavailable_events", 0)}</span><br>'
+                f'• <strong>Fallback Invocations (CSV/Baseline):</strong> <span style="color: #06B6D4;">{carbon.get("api_fallback_usage", 0)}</span>'
+                f'</div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
             # Dispatch Metrics
             st.markdown(
-                f"""
-                <div class="gs-card">
-                    <div class="gs-card-title" style="margin-bottom: 12px;">☸️ Kubernetes Dispatch Metrics</div>
-                    <div style="font-size: 0.85rem; color: #94A3B8; line-height: 1.8;">
-                        • <strong>Dispatch Attempts:</strong> <span style="color: #FFFFFF;">{disp.get('dispatch_attempts', 0)}</span><br>
-                        • <strong>Successful Pod Dispatches:</strong> <span style="color: #00E599;">{disp.get('successful_dispatches', 0)}</span><br>
-                        • <strong>Blocked by Policy / Unapproved:</strong> <span style="color: #F59E0B;">{disp.get('blocked_dispatches', 0)}</span><br>
-                        • <strong>Execution Failures:</strong> <span style="color: #EF4444;">{disp.get('failed_dispatches', 0)}</span>
-                    </div>
-                </div>
-                """,
+                f'<div class="gs-card">'
+                f'<div class="gs-card-title" style="margin-bottom: 12px;">☸️ Kubernetes Dispatch Metrics</div>'
+                f'<div style="font-size: 0.85rem; color: #94A3B8; line-height: 1.8;">'
+                f'• <strong>Dispatch Attempts:</strong> <span style="color: #FFFFFF;">{disp.get("dispatch_attempts", 0)}</span><br>'
+                f'• <strong>Successful Pod Dispatches:</strong> <span style="color: #00E599;">{disp.get("successful_dispatches", 0)}</span><br>'
+                f'• <strong>Blocked by Policy / Unapproved:</strong> <span style="color: #F59E0B;">{disp.get("blocked_dispatches", 0)}</span><br>'
+                f'• <strong>Execution Failures:</strong> <span style="color: #EF4444;">{disp.get("failed_dispatches", 0)}</span>'
+                f'</div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 

@@ -2,12 +2,21 @@
 GreenShift — Application settings loaded from environment variables / .env file.
 """
 
-from typing import Optional
+from typing import Optional, List
 from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
+
+# Insecure default values that must NEVER be allowed in production
+DEV_INSECURE_JWT_SECRETS = {
+    "greenshift_jwt_super_secret_key_change_in_production_2026",
+    "greenshift-dev-insecure-jwt-secret-do-not-use-in-production",
+    "secret",
+    "changeme",
+    "default",
+}
 
 
 class Settings(BaseSettings):
@@ -37,7 +46,10 @@ class Settings(BaseSettings):
     )
     postgres_db: str = Field(default="greenshift")
     postgres_user: str = Field(default="greenshift")
-    postgres_password: str = Field(default="greenshift_secret_pwd")
+    postgres_password: str = Field(
+        default="",
+        description="PostgreSQL password. Must be configured via POSTGRES_PASSWORD in production.",
+    )
     postgres_host: str = Field(default="localhost")
     postgres_port: int = Field(default=5432)
     db_pool_size: int = Field(default=10)
@@ -64,13 +76,35 @@ class Settings(BaseSettings):
     log_level: str    = Field(default="INFO")
     api_host: str     = Field(default="0.0.0.0")
     api_port: int     = Field(default=8000)
-    environment: str  = Field(default="development")
+    environment: str  = Field(
+        default="development",
+        description="Application environment: 'development', 'testing', or 'production'",
+    )
     jwt_secret_key: str = Field(
-        default="greenshift_jwt_super_secret_key_change_in_production_2026",
-        description="Secret key used for signing JWT access tokens",
+        default="greenshift-dev-insecure-jwt-secret-do-not-use-in-production",
+        description="Secret key used for signing JWT access tokens (set via JWT_SECRET_KEY in production)",
     )
     jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
     jwt_expire_minutes: int = Field(default=1440, description="JWT token validity in minutes (24 hours)")
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://localhost:8000,http://localhost:8501,http://127.0.0.1:3000,http://127.0.0.1:8000,http://127.0.0.1:8501",
+        description="Comma-separated list of allowed CORS origins for API clients (configured via CORS_ORIGINS)",
+    )
+    internal_service_key: Optional[str] = Field(
+        default=None,
+        description="Optional shared secret key for authenticating internal service-to-service calls (configured via INTERNAL_SERVICE_KEY)",
+    )
+    enable_hsts: bool = Field(
+        default=False,
+        description="Explicitly enable Strict-Transport-Security headers (automatically enabled in production/HTTPS)",
+    )
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Return parsed list of allowed CORS origins."""
+        if not self.cors_origins:
+            return []
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     # ─── Cache & Redis ────────────────────────────────────────────
     cache_ttl_seconds: int = Field(default=300)
@@ -162,4 +196,40 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_security_config(cfg: Optional[Settings] = None) -> None:
+    """
+    Validate application security configuration and secrets.
+    Fails fast if production environment is detected with missing or insecure secrets.
+    """
+    if cfg is None:
+        cfg = settings
+
+    env = (cfg.environment or "").strip().lower()
+
+    if env == "production":
+        # 1. Validate JWT Secret Key
+        if not cfg.jwt_secret_key or cfg.jwt_secret_key in DEV_INSECURE_JWT_SECRETS:
+            raise ValueError(
+                "CRITICAL SECURITY ERROR: JWT_SECRET_KEY must be set to a cryptographically "
+                "secure random secret in production (cannot be empty or default dev secret)."
+            )
+        if len(cfg.jwt_secret_key) < 32:
+            raise ValueError(
+                "CRITICAL SECURITY ERROR: JWT_SECRET_KEY must be at least 32 characters long in production."
+            )
+
+        # 2. Validate Database Password if PostgreSQL is used
+        if cfg.database_url.startswith("postgres") or cfg.postgres_host not in ("localhost", "127.0.0.1"):
+            if not cfg.postgres_password or cfg.postgres_password == "greenshift_secret_pwd":
+                raise ValueError(
+                    "CRITICAL SECURITY ERROR: POSTGRES_PASSWORD must be explicitly configured in production."
+                )
+
+        # 3. Validate CORS
+        if "*" in cfg.cors_origins_list:
+            raise ValueError(
+                "CRITICAL SECURITY ERROR: Wildcard CORS origin ('*') is forbidden in production."
+            )
 

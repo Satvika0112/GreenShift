@@ -51,9 +51,6 @@ subjects:
   - kind: ServiceAccount
     name: greenshift-dispatcher
     namespace: greenshift
-  - kind: ServiceAccount
-    name: default
-    namespace: greenshift
 roleRef:
   kind: Role
   name: greenshift-dispatcher-role

@@ -6,7 +6,7 @@ FastAPI router — all ingest endpoints.
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.ingest.jobs import submit_job, get_job, list_jobs, update_job_status
@@ -18,14 +18,20 @@ from app.ingest.service import (
     get_ingest_status,
 )
 from app.shared.database import get_db
+from app.shared.rate_limiter import limiter
+from app.shared.auth import get_current_user, require_roles
 from app.shared.models import (
     JobSubmitRequest,
     JobSubmitResponse,
     JobStatus,
     CarbonDataPoint,
     TariffDataPoint,
+    UserORM,
+    UserRole,
 )
-from app.shared.utils import utcnow
+from app.shared.utils import utcnow, get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -33,37 +39,65 @@ router = APIRouter()
 # ─── Job endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/jobs", response_model=JobSubmitResponse, status_code=201)
-def submit_new_job(request: JobSubmitRequest, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def submit_new_job(
+    request: Request,
+    body: JobSubmitRequest,
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR)),
+):
     """Submit a new deferrable compute job."""
     from app.shared.timezone import normalize_to_utc
-    req_tz = getattr(request, "timezone", None)
-    normalized_deadline = normalize_to_utc(request.deadline, region=request.region, timezone_name=req_tz)
-    if normalized_deadline <= utcnow():
-        raise HTTPException(status_code=400, detail="Deadline must be in the future")
-    request.deadline = normalized_deadline
-    job = ingest_job(db, request)
-    return JobSubmitResponse(
-        job_id=job.job_id,
-        status=job.status,
-        submitted_at=job.submitted_at,
-    )
+    try:
+        user_role_val = current_user.role.value if isinstance(current_user.role, UserRole) else str(current_user.role)
+        if user_role_val == "TEAM_LEAD" and current_user.team_id:
+            if body.team_id and body.team_id != current_user.team_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Team lead for team '{current_user.team_id}' cannot submit jobs for team '{body.team_id}'",
+                )
+        req_tz = getattr(body, "timezone", None)
+        normalized_deadline = normalize_to_utc(body.deadline, region=body.region, timezone_name=req_tz)
+        if normalized_deadline <= utcnow():
+            raise HTTPException(status_code=400, detail="Deadline must be in the future")
+        body.deadline = normalized_deadline
+        job = ingest_job(db, body)
+        return JobSubmitResponse(
+            job_id=job.job_id,
+            status=job.status,
+            submitted_at=job.submitted_at,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Error submitting job: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while ingesting the workload.")
 
 
 @router.post("/jobs/bulk-load", response_model=dict)
+@limiter.limit("20/minute")
 def bulk_load_jobs_from_csv(
+    request: Request,
     csv_path: Optional[str] = Query(None, description="Optional path to job CSV"),
     db: Session = Depends(get_db),
+    current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.OPERATOR)),
 ):
     """
     Bulk-load jobs from the configured or specified workload CSV file into the database.
     """
-    count, errors = load_csv_jobs_to_db(db, csv_path=csv_path)
-    return {
-        "status": "success" if count > 0 or not errors else "partial",
-        "jobs_loaded": count,
-        "errors_count": len(errors),
-        "errors": errors[:50],  # cap to top 50 error messages
-    }
+    try:
+        count, errors = load_csv_jobs_to_db(db, csv_path=csv_path)
+        return {
+            "status": "success" if count > 0 or not errors else "partial",
+            "jobs_loaded": count,
+            "errors_count": len(errors),
+            "errors": errors[:50],  # cap to top 50 error messages
+        }
+    except Exception as exc:
+        logger.error(f"Error in bulk loading jobs: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while bulk-loading jobs.")
 
 
 @router.get("/jobs", response_model=List[dict])
@@ -72,49 +106,58 @@ def list_all_jobs(
     status: Optional[JobStatus] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
 ):
     """List jobs, optionally filtered by team_id and/or status."""
-    jobs = list_jobs(db, team_id=team_id, status=status, limit=limit)
-    res = []
-    for j in jobs:
-        item = {
-            "job_id": j.job_id,
-            "team_id": j.team_id,
-            "job_type": j.job_type,
-            "priority": j.priority,
-            "status": j.status,
-            "submitted_at": j.submitted_at.isoformat(),
-            "earliest_start_time": j.earliest_start_time.isoformat() if j.earliest_start_time else None,
-            "deadline": j.deadline.isoformat(),
-            "runtime_minutes": j.runtime_minutes,
-            "power_kw": j.power_kw,
-            "energy_kwh": j.energy_kwh,
-            "deferrable": j.deferrable,
-            "region": j.region,
-            "container_image": j.container_image,
-            "cpu_request": j.cpu_request,
-            "memory_request": j.memory_request,
-            "carbon_budget_kg": j.carbon_budget_kg,
-            "selected_start": j.schedule_decision.selected_start.isoformat() if j.schedule_decision else None,
-            "selected_end": j.schedule_decision.selected_end.isoformat() if j.schedule_decision else None,
-            "carbon_intensity": j.schedule_decision.carbon_intensity if j.schedule_decision else None,
-            "carbon_emission": j.schedule_decision.carbon_emission if j.schedule_decision else None,
-            "electricity_cost": j.schedule_decision.electricity_cost if j.schedule_decision else None,
-            "native_cost": getattr(j.schedule_decision, "native_cost", None) if j.schedule_decision else None,
-            "currency": getattr(j.schedule_decision, "currency", "USD") if j.schedule_decision else "USD",
-            "kubernetes_job_name": j.kubernetes_execution.kubernetes_job_name if j.kubernetes_execution else None,
-            "kubernetes_namespace": j.kubernetes_execution.kubernetes_namespace if j.kubernetes_execution else None,
-            "k8s_status": j.kubernetes_execution.k8s_status if j.kubernetes_execution else None,
-            "pod_name": j.kubernetes_execution.pod_name if j.kubernetes_execution else None,
-            "actual_start": j.kubernetes_execution.actual_start.isoformat() if j.kubernetes_execution and j.kubernetes_execution.actual_start else None,
-            "actual_end": j.kubernetes_execution.actual_end.isoformat() if j.kubernetes_execution and j.kubernetes_execution.actual_end else None,
-        }
-        res.append(item)
-    return res
+    try:
+        jobs = list_jobs(db, team_id=team_id, status=status, limit=limit)
+        res = []
+        for j in jobs:
+            item = {
+                "job_id": j.job_id,
+                "team_id": j.team_id,
+                "job_type": j.job_type,
+                "priority": j.priority,
+                "status": j.status,
+                "submitted_at": j.submitted_at.isoformat(),
+                "earliest_start_time": j.earliest_start_time.isoformat() if j.earliest_start_time else None,
+                "deadline": j.deadline.isoformat(),
+                "runtime_minutes": j.runtime_minutes,
+                "power_kw": j.power_kw,
+                "energy_kwh": j.energy_kwh,
+                "deferrable": j.deferrable,
+                "region": j.region,
+                "container_image": j.container_image,
+                "cpu_request": j.cpu_request,
+                "memory_request": j.memory_request,
+                "carbon_budget_kg": j.carbon_budget_kg,
+                "selected_start": j.schedule_decision.selected_start.isoformat() if j.schedule_decision else None,
+                "selected_end": j.schedule_decision.selected_end.isoformat() if j.schedule_decision else None,
+                "carbon_intensity": j.schedule_decision.carbon_intensity if j.schedule_decision else None,
+                "carbon_emission": j.schedule_decision.carbon_emission if j.schedule_decision else None,
+                "electricity_cost": j.schedule_decision.electricity_cost if j.schedule_decision else None,
+                "native_cost": getattr(j.schedule_decision, "native_cost", None) if j.schedule_decision else None,
+                "currency": getattr(j.schedule_decision, "currency", "USD") if j.schedule_decision else "USD",
+                "kubernetes_job_name": j.kubernetes_execution.kubernetes_job_name if j.kubernetes_execution else None,
+                "kubernetes_namespace": j.kubernetes_execution.kubernetes_namespace if j.kubernetes_execution else None,
+                "k8s_status": j.kubernetes_execution.k8s_status if j.kubernetes_execution else None,
+                "pod_name": j.kubernetes_execution.pod_name if j.kubernetes_execution else None,
+                "actual_start": j.kubernetes_execution.actual_start.isoformat() if j.kubernetes_execution and j.kubernetes_execution.actual_start else None,
+                "actual_end": j.kubernetes_execution.actual_end.isoformat() if j.kubernetes_execution and j.kubernetes_execution.actual_end else None,
+            }
+            res.append(item)
+        return res
+    except Exception as exc:
+        logger.error(f"Error listing jobs: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while listing jobs.")
 
 
 @router.get("/jobs/{job_id}")
-def get_job_detail(job_id: str, db: Session = Depends(get_db)):
+def get_job_detail(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
     """Get full details for a specific job."""
     job = get_job(db, job_id)
     if job is None:
@@ -194,7 +237,11 @@ def get_job_detail(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/jobs/{job_id}/history")
-def get_job_history(job_id: str, db: Session = Depends(get_db)):
+def get_job_history(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
     """Get the complete operational lifecycle history and audit trail for a job."""
     job = get_job(db, job_id)
     if job is None:
@@ -203,7 +250,7 @@ def get_job_history(job_id: str, db: Session = Depends(get_db)):
     from app.trust.ledger import get_job_audit
     audit_trail = get_job_audit(db, job_id)
 
-    detail = get_job_detail(job_id, db)
+    detail = get_job_detail(job_id, db, current_user=current_user)
     detail["audit_events"] = [e.model_dump() for e in audit_trail]
     return detail
 
@@ -213,6 +260,7 @@ def get_carbon_analytics(
     region: str,
     limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
 ):
     """Retrieve historical carbon intensity observations from PostgreSQL for analytics."""
     from app.shared.models import CarbonDataPointORM
@@ -247,7 +295,10 @@ def get_carbon_analytics(
 # ─── Data sources status endpoint ─────────────────────────────────────────────
 
 @router.get("/data-sources/status", response_model=dict)
-def get_status(db: Session = Depends(get_db)):
+def get_status(
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
     """Return status of all configured data sources without exposing secrets."""
     return get_ingest_status(db)
 
@@ -552,19 +603,25 @@ def run_dynamic_arrival_simulation_endpoint(
     csv_path: Optional[str] = Query(None, description="Custom dataset path"),
     start_time: Optional[datetime] = Query(None, description="Simulation clock start time (UTC)"),
     db: Session = Depends(get_db),
+    current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR)),
 ):
     """
     Execute a dynamic workload arrival simulation run, releasing jobs chronologically
     by submit_time into the existing ingestion and decide pipeline.
     """
     from app.arrival.simulator import DynamicArrivalSimulator, SimulationConfig
-    config = SimulationConfig(
-        dataset_path=csv_path or "data/greenshift_workloads_final.csv",
-        simulation_speed=speed,
-        max_jobs=max_jobs,
-        simulation_start_time=start_time,
-        auto_schedule=True,
-    )
-    simulator = DynamicArrivalSimulator(config=config, db=db)
-    summary = simulator.run(db=db)
-    return summary.model_dump(mode="json")
+    try:
+        config = SimulationConfig(
+            dataset_path=csv_path or "data/greenshift_workloads_final.csv",
+            simulation_speed=speed,
+            max_jobs=max_jobs,
+            simulation_start_time=start_time,
+            auto_schedule=True,
+        )
+        simulator = DynamicArrivalSimulator(config=config, db=db)
+        summary = simulator.run(db=db)
+        return summary.model_dump(mode="json")
+    except Exception as exc:
+        logger.error(f"Error running simulation: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred during arrival simulation execution.")
+

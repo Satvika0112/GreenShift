@@ -5,7 +5,6 @@ Two-column enterprise layout connecting to real JWT authentication backend.
 
 import streamlit as st
 from app.dashboard.api_client import login_user_api
-from app.shared.auth import create_access_token
 
 
 def render_login_view() -> None:
@@ -47,11 +46,10 @@ def render_login_view() -> None:
 
     with col_form:
         st.markdown(
-            """
-            <div class="gs-card" style="padding: 32px 28px; margin-top: 20px;">
-                <h2 style="font-size: 1.4rem; font-weight: 700; color: #FFFFFF; margin-bottom: 6px;">Sign In</h2>
-                <p style="font-size: 0.85rem; color: #94A3B8; margin-bottom: 24px;">Authenticate to access enterprise workload controls</p>
-            """,
+            '<div style="padding: 12px 0 8px 0;">'
+            '<h2 style="font-size: 1.4rem; font-weight: 700; color: #FFFFFF; margin-bottom: 6px;">Sign In</h2>'
+            '<p style="font-size: 0.85rem; color: #94A3B8; margin-bottom: 18px;">Authenticate to access enterprise workload controls</p>'
+            '</div>',
             unsafe_allow_html=True,
         )
 
@@ -60,11 +58,11 @@ def render_login_view() -> None:
             persona_mode = st.selectbox(
                 "Select Quick Role Persona or Use Custom Credentials",
                 [
-                    "ADMIN — platform_admin (Full Access)",
-                    "TEAM_LEAD — lead_alpha (Team Alpha)",
-                    "TEAM_LEAD — lead_beta (Team Beta)",
-                    "OPERATOR — ops_manager (Execution & Dispatch)",
-                    "VIEWER — auditor (Read-Only)",
+                    "ADMIN — admin (Full Access)",
+                    "TEAM_LEAD — lead_a (Team A)",
+                    "TEAM_LEAD — lead_b (Team B)",
+                    "OPERATOR — operator (Execution & Dispatch)",
+                    "VIEWER — viewer (Read-Only)",
                     "Custom Username/Password",
                 ],
             )
@@ -75,67 +73,44 @@ def render_login_view() -> None:
             if persona_mode.startswith("ADMIN"):
                 username_input = "admin"
                 password_input = "admin123"
-                role_val = "ADMIN"
-                team_val = None
-            elif "lead_alpha" in persona_mode:
-                username_input = "lead_alpha"
-                password_input = "leadpass123"
-                role_val = "TEAM_LEAD"
-                team_val = "team_alpha"
-            elif "lead_beta" in persona_mode:
-                username_input = "lead_beta"
-                password_input = "betapass123"
-                role_val = "TEAM_LEAD"
-                team_val = "team_beta"
+            elif "lead_a" in persona_mode:
+                username_input = "lead_a"
+                password_input = "lead123"
+            elif "lead_b" in persona_mode:
+                username_input = "lead_b"
+                password_input = "lead123"
             elif "OPERATOR" in persona_mode:
                 username_input = "operator"
-                password_input = "opspass123"
-                role_val = "OPERATOR"
-                team_val = "team_alpha"
+                password_input = "operator123"
             elif "VIEWER" in persona_mode:
                 username_input = "viewer"
-                password_input = "viewpass123"
-                role_val = "VIEWER"
-                team_val = None
+                password_input = "viewer123"
             else:
                 username_input = st.text_input("Username or Email", placeholder="user@enterprise.io")
                 password_input = st.text_input("Password", type="password", placeholder="••••••••")
-                role_val = "VIEWER"
-                team_val = None
 
             submit_btn = st.form_submit_button("Sign in", use_container_width=True, type="primary")
 
             if submit_btn:
-                try:
-                    # Attempt real backend auth login
-                    auth_res = None
+                if not username_input or not password_input:
+                    st.error("Please provide both username/email and password.")
+                else:
                     try:
+                        # Authenticate exclusively through backend API
                         auth_res = login_user_api(username_input, password_input)
-                    except Exception:
-                        # Fallback for dev persona token generation
-                        pass
 
-                    if auth_res and "access_token" in auth_res:
-                        st.session_state["auth_token"] = auth_res["access_token"]
-                        st.session_state["user_role"] = auth_res.get("role", role_val)
-                        st.session_state["username"] = auth_res.get("username", username_input)
-                        st.session_state["team_id"] = auth_res.get("team_id", team_val)
-                    else:
-                        token = create_access_token(
-                            user_id=1,
-                            username=username_input,
-                            role=role_val,
-                            team_id=team_val,
-                        )
-                        st.session_state["auth_token"] = token
-                        st.session_state["user_role"] = role_val
-                        st.session_state["username"] = username_input
-                        st.session_state["team_id"] = team_val
+                        if auth_res and "access_token" in auth_res:
+                            user_data = auth_res.get("user", {})
+                            st.session_state["auth_token"] = auth_res["access_token"]
+                            st.session_state["user_role"] = user_data.get("role", "VIEWER")
+                            st.session_state["username"] = user_data.get("username", username_input)
+                            st.session_state["team_id"] = user_data.get("team_id", None)
+                            st.session_state["is_authenticated"] = True
+                            st.success(f"Welcome, {st.session_state['username']} ({st.session_state['user_role']})!")
+                            st.rerun()
+                        else:
+                            st.error("Authentication failed: No access token returned.")
+                    except Exception as exc:
+                        st.error(f"Authentication failed: {exc}")
 
-                    st.session_state["is_authenticated"] = True
-                    st.success(f"Welcome, {username_input} ({role_val})!")
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"Authentication failed: {exc}")
 
-        st.markdown("</div>", unsafe_allow_html=True)

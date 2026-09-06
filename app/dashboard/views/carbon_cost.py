@@ -45,15 +45,12 @@ def render_carbon_cost_view(active_region: str = "IN-TG") -> None:
 
     with col_c1:
         st.markdown(
-            f"""
-            <div class="gs-card">
-                <div class="gs-card-header">
-                    <div>
-                        <div class="gs-card-title">🌿 24-48h Carbon Intensity Trend</div>
-                        <div class="gs-card-subtitle">{active_region} grid emissions (gCO₂/kWh)</div>
-                    </div>
-                </div>
-            """,
+            f'<div class="gs-card-header" style="margin-bottom: 8px;">'
+            f'<div>'
+            f'<div class="gs-card-title">🌿 24-48h Carbon Intensity Trend</div>'
+            f'<div class="gs-card-subtitle">{active_region} grid emissions (gCO₂/kWh)</div>'
+            f'</div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -82,19 +79,14 @@ def render_carbon_cost_view(active_region: str = "IN-TG") -> None:
         else:
             st.info("Loading carbon forecast data...")
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
     with col_c2:
         st.markdown(
-            f"""
-            <div class="gs-card">
-                <div class="gs-card-header">
-                    <div>
-                        <div class="gs-card-title">⚡ Time-of-Day (ToD) Tariff Curve</div>
-                        <div class="gs-card-subtitle">{active_region} standardized pricing ($/kWh)</div>
-                    </div>
-                </div>
-            """,
+            f'<div class="gs-card-header" style="margin-bottom: 8px;">'
+            f'<div>'
+            f'<div class="gs-card-title">⚡ Time-of-Day (ToD) Tariff Curve</div>'
+            f'<div class="gs-card-subtitle">{active_region} standardized pricing ($/kWh)</div>'
+            f'</div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -121,8 +113,6 @@ def render_carbon_cost_view(active_region: str = "IN-TG") -> None:
             st.plotly_chart(fig_t, use_container_width=True, config={"displayModeBar": False})
         else:
             st.info("Loading regional tariff data...")
-
-        st.markdown("</div>", unsafe_allow_html=True)
 
     # Data Source Resilience Health Cards
     render_section_header("🛡️ Multi-Level Resilience Data Source Health", "Operational status across the carbon telemetry fallback hierarchy")

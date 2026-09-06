@@ -104,16 +104,14 @@ def render_system_health_view() -> None:
 
     # Readiness Policy Guide
     st.markdown(
-        """
-        <div class="gs-card" style="margin-top: 16px;">
-            <div style="font-weight: 700; color: #FFFFFF; font-size: 1.0rem; margin-bottom: 8px;">🛡️ Production Readiness Behavior Rules:</div>
-            <div style="font-size: 0.85rem; color: #94A3B8; line-height: 1.6;">
-                • <strong>Database Down:</strong> Returns <code>HTTP 503 (not_ready)</code> to immediately withdraw instance from Kubernetes load balancing.<br>
-                • <strong>Redis Offline:</strong> Returns <code>HTTP 200 (ready / overall_state: degraded)</code>; requests safely bypass cache.<br>
-                • <strong>Kubernetes API Offline:</strong> Returns <code>HTTP 200 (ready / overall_state: degraded)</code>; local mock dispatch enabled.<br>
-                • <strong>Carbon API Down:</strong> Returns <code>HTTP 200 (ready / carbon_data: fallback)</code>; historical CSV or diurnal curve activated.
-            </div>
-        </div>
-        """,
+        '<div class="gs-card" style="margin-top: 16px;">'
+        '<div style="font-weight: 700; color: #FFFFFF; font-size: 1.0rem; margin-bottom: 8px;">🛡️ Production Readiness Behavior Rules:</div>'
+        '<div style="font-size: 0.85rem; color: #94A3B8; line-height: 1.6;">'
+        '• <strong>Database Down:</strong> Returns <code>HTTP 503 (not_ready)</code> to immediately withdraw instance from Kubernetes load balancing.<br>'
+        '• <strong>Redis Offline:</strong> Returns <code>HTTP 200 (ready / overall_state: degraded)</code>; requests safely bypass cache.<br>'
+        '• <strong>Kubernetes API Offline:</strong> Returns <code>HTTP 200 (ready / overall_state: degraded)</code>; local mock dispatch enabled.<br>'
+        '• <strong>Carbon API Down:</strong> Returns <code>HTTP 200 (ready / carbon_data: fallback)</code>; historical CSV or diurnal curve activated.'
+        '</div>'
+        '</div>',
         unsafe_allow_html=True,
     )

@@ -47,16 +47,13 @@ def render_job_monitoring_view() -> None:
         current_status = job_info.get("status", "SUBMITTED")
 
         st.markdown(
-            f"""
-            <div class="gs-card">
-                <div class="gs-card-header">
-                    <div>
-                        <div class="gs-card-title">{job_info.get('workload_name', selected_id)}</div>
-                        <div class="gs-card-subtitle">Job ID: <code>{selected_id}</code> | Team: {job_info.get('team_id')} | Region: {job_info.get('region')}</div>
-                    </div>
-                    <div>{render_status_badge(current_status)}</div>
-                </div>
-            """,
+            f'<div class="gs-card-header" style="margin-bottom: 12px;">'
+            f'<div>'
+            f'<div class="gs-card-title">{job_info.get("workload_name", selected_id)}</div>'
+            f'<div class="gs-card-subtitle">Job ID: <code>{selected_id}</code> | Team: {job_info.get("team_id")} | Region: {job_info.get("region")}</div>'
+            f'</div>'
+            f'<div>{render_status_badge(current_status)}</div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -117,5 +114,3 @@ def render_job_monitoring_view() -> None:
                         st.rerun()
                 except Exception as exc:
                     st.error(f"Dispatch Blocked / Failed: {exc}")
-
-        st.markdown("</div>", unsafe_allow_html=True)

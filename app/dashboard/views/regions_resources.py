@@ -43,20 +43,18 @@ def render_regions_resources_view() -> None:
         with c:
             j_cnt = region_job_counts.get(reg["id"], 0)
             st.markdown(
-                f"""
-                <div class="gs-card" style="margin-bottom: 14px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-                        <span style="font-weight: 700; color: #FFFFFF; font-size: 1.05rem;">{reg['name']}</span>
-                        <span class="gs-badge green-badge">{reg['status']}</span>
-                    </div>
-                    <div style="font-size: 0.8rem; color: #94A3B8; margin-bottom: 10px;">Zone: <code>{reg['zone']}</code> | Currency: {reg['currency']}</div>
-                    <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #0E383C; padding-top: 8px; font-size: 0.82rem;">
-                        <div>⚡ Carbon: <strong style="color: #00E599;">{reg['intensity']} gCO₂/kWh</strong></div>
-                        <div>Workloads: <strong style="color: #FFFFFF;">{j_cnt}</strong></div>
-                    </div>
-                    <div style="font-size: 0.78rem; color: #64748B; margin-top: 4px;">Tariff: {reg['rate']}</div>
-                </div>
-                """,
+                f'<div class="gs-card" style="margin-bottom: 14px;">'
+                f'<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">'
+                f'<span style="font-weight: 700; color: #FFFFFF; font-size: 1.05rem;">{reg["name"]}</span>'
+                f'<span class="gs-badge green-badge">{reg["status"]}</span>'
+                f'</div>'
+                f'<div style="font-size: 0.8rem; color: #94A3B8; margin-bottom: 10px;">Zone: <code>{reg["zone"]}</code> | Currency: {reg["currency"]}</div>'
+                f'<div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #0E383C; padding-top: 8px; font-size: 0.82rem;">'
+                f'<div>⚡ Carbon: <strong style="color: #00E599;">{reg["intensity"]} gCO₂/kWh</strong></div>'
+                f'<div>Workloads: <strong style="color: #FFFFFF;">{j_cnt}</strong></div>'
+                f'</div>'
+                f'<div style="font-size: 0.78rem; color: #64748B; margin-top: 4px;">Tariff: {reg["rate"]}</div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 

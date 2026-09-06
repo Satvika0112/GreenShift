@@ -344,7 +344,10 @@ spec:
             - name: POSTGRES_USER
               value: greenshift
             - name: POSTGRES_PASSWORD
-              value: greenshift
+              valueFrom:
+                secretKeyRef:
+                  name: greenshift-db-secrets
+                  key: postgres-password
           resources:
             requests:
               cpu: "200m"

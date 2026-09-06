@@ -309,6 +309,77 @@ def record_carbon_provenance(
     append_event(db, etype, job_id=job_id, payload=payload)
 
 
+def record_login_success(
+    db: Session,
+    username: str,
+    role: str,
+    team_id: Optional[str] = None,
+    ip_address: Optional[str] = None,
+) -> None:
+    """Record an AUTH_LOGIN_SUCCESS audit event without sensitive credentials."""
+    payload = {
+        "username": username,
+        "role": role,
+    }
+    if team_id:
+        payload["team_id"] = team_id
+    if ip_address:
+        payload["ip_address"] = ip_address
+    append_event(db, EventType.AUTH_LOGIN_SUCCESS, payload=payload)
+
+
+def record_login_failure(
+    db: Session,
+    username_attempted: str,
+    reason: str = "Invalid credentials",
+    ip_address: Optional[str] = None,
+) -> None:
+    """Record an AUTH_LOGIN_FAILURE audit event without logging password attempts."""
+    payload = {
+        "username_attempted": username_attempted,
+        "reason": reason,
+    }
+    if ip_address:
+        payload["ip_address"] = ip_address
+    append_event(db, EventType.AUTH_LOGIN_FAILURE, payload=payload)
+
+
+def record_access_denied(
+    db: Session,
+    username: str,
+    role: str,
+    endpoint: str,
+    reason: str,
+    team_id: Optional[str] = None,
+) -> None:
+    """Record an AUTH_ACCESS_DENIED audit event."""
+    payload = {
+        "username": username,
+        "role": role,
+        "endpoint": endpoint,
+        "reason": reason,
+    }
+    if team_id:
+        payload["team_id"] = team_id
+    append_event(db, EventType.AUTH_ACCESS_DENIED, payload=payload)
+
+
+def record_user_registered(
+    db: Session,
+    username: str,
+    role: str,
+    team_id: Optional[str] = None,
+) -> None:
+    """Record an AUTH_USER_REGISTERED audit event without password hash."""
+    payload = {
+        "username": username,
+        "role": role,
+    }
+    if team_id:
+        payload["team_id"] = team_id
+    append_event(db, EventType.AUTH_USER_REGISTERED, payload=payload)
+
+
 def run_trust_loop() -> None:
     """
     Long-running background process for the TRUST agent.

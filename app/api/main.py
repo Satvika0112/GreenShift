@@ -1,16 +1,31 @@
-"""
-GreenShift — FastAPI Application Entry Point
-"""
-
-from fastapi import FastAPI
+import re
+import uuid
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-import logging
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
-from app.shared.config import settings
+from app.shared.config import settings, validate_security_config
 from app.shared.database import init_db
+from app.shared.rate_limiter import limiter
 from app.shared.utils import get_logger
 
 logger = get_logger(__name__)
+
+# Request ID regex validation pattern (alphanumeric, hyphens, underscores, dots, 1-128 chars)
+REQUEST_ID_REGEX = re.compile(r"^[a-zA-Z0-9_\-\.]{1,128}$")
+
+# Content Security Policy tailored for API & interactive documentation (Swagger UI / ReDoc)
+API_CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; "
+    "font-src 'self' https://cdn.jsdelivr.net data:; "
+    "frame-ancestors 'none'; "
+    "object-src 'none';"
+)
 
 app = FastAPI(
     title="GreenShift API",
@@ -20,18 +35,72 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# Rate Limiter Configuration
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+# Secure CORS Configuration: Explicit origins loaded from settings, no wildcard with credentials
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_and_request_tracing_middleware(request: Request, call_next):
+    """
+    Middleware providing Request ID generation & propagation, logging integration,
+    and enterprise security response headers.
+    """
+    # 1. Request ID Handling
+    incoming_id = request.headers.get("x-request-id") or request.headers.get("X-Request-ID")
+    if incoming_id and REQUEST_ID_REGEX.match(incoming_id.strip()):
+        request_id = incoming_id.strip()
+    else:
+        request_id = str(uuid.uuid4())
+
+    request.state.request_id = request_id
+
+    # 2. Process Request
+    response: Response = await call_next(request)
+
+    # 3. Echo Request ID in Response
+    response.headers["X-Request-ID"] = request_id
+
+    # 4. Security Headers (No obsolete X-XSS-Protection)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+
+    if "Content-Security-Policy" not in response.headers:
+        response.headers["Content-Security-Policy"] = API_CSP_POLICY
+
+    # Cache-Control: prevent caching of sensitive API data
+    path = request.url.path
+    if path.startswith("/api/") or path.startswith("/auth"):
+        if "Cache-Control" not in response.headers:
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+
+    # Strict-Transport-Security (HSTS)
+    is_https = (
+        request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto", "").lower() == "https"
+    )
+    if is_https or settings.environment == "production" or getattr(settings, "enable_hsts", False):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+    return response
 
 
 @app.on_event("startup")
 async def startup_event():
     logger.info("GreenShift API starting up")
+    # Fail fast if security configuration is invalid (e.g. missing production secrets)
+    validate_security_config(settings)
     init_db()
     try:
         from app.shared.database import SessionLocal

@@ -11,7 +11,7 @@ from app.dashboard.components import render_section_header, render_metric_card, 
 
 def render_audit_trust_view() -> None:
     """Render the SHA-256 tamper-evident audit ledger and chain verification view."""
-    render_section_header("🔐 Audit & Cryptographic Trust Ledger", "Immutable SHA-256 blockchain-style provenance verification and tamper-evident event log")
+    render_section_header("🔐 Audit & Cryptographic Trust Ledger", "Tamper-evident SHA-256 hash-linked audit chain and provenance verification")
 
     chain_status = fetch_audit_verify()
     events = fetch_audit_events(limit=100)
@@ -32,17 +32,15 @@ def render_audit_trust_view() -> None:
         st.markdown(render_metric_card("Zero Data Leaks", "ENFORCED", "Sensitive payloads sanitized", tag="PASS"), unsafe_allow_html=True)
 
     st.markdown(
-        f"""
-        <div class="gs-card">
-            <div style="display: flex; align-items: center; justify-content: space-between;">
-                <div>
-                    <div style="font-weight: 700; color: #FFFFFF; font-size: 1.05rem;">Chain Verification Status</div>
-                    <div style="font-size: 0.85rem; color: #94A3B8;">{msg}</div>
-                </div>
-                <div>{render_status_badge("HEALTHY" if is_valid else "FAILED")}</div>
-            </div>
-        </div>
-        """,
+        f'<div class="gs-card">'
+        f'<div style="display: flex; align-items: center; justify-content: space-between;">'
+        f'<div>'
+        f'<div style="font-weight: 700; color: #FFFFFF; font-size: 1.05rem;">Chain Verification Status</div>'
+        f'<div style="font-size: 0.85rem; color: #94A3B8;">{msg}</div>'
+        f'</div>'
+        f'<div>{render_status_badge("HEALTHY" if is_valid else "FAILED")}</div>'
+        f'</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 

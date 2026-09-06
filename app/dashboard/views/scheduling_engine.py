@@ -41,16 +41,13 @@ def render_scheduling_engine_view() -> None:
         dec = job_data.get("schedule_decision") or {}
 
         st.markdown(
-            f"""
-            <div class="gs-card">
-                <div class="gs-card-header">
-                    <div>
-                        <div class="gs-card-title">Optimal Execution Window</div>
-                        <div class="gs-card-subtitle">Workload: <code>{selected_job_id}</code> | Objective: <strong>CARBON_FIRST</strong></div>
-                    </div>
-                    <div>{render_status_badge(job_data.get('status', 'SCHEDULED'))}</div>
-                </div>
-            """,
+            f'<div class="gs-card-header" style="margin-bottom: 12px;">'
+            f'<div>'
+            f'<div class="gs-card-title">Optimal Execution Window</div>'
+            f'<div class="gs-card-subtitle">Workload: <code>{selected_job_id}</code> | Objective: <strong>CARBON_FIRST</strong></div>'
+            f'</div>'
+            f'<div>{render_status_badge(job_data.get("status", "SCHEDULED"))}</div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -73,16 +70,14 @@ def render_scheduling_engine_view() -> None:
         # Why this slot?
         st.markdown("#### 💡 Why this slot was selected:")
         st.markdown(
-            f"""
-            <div style="background: #041315; border: 1px solid #0E383C; border-left: 4px solid #00E599; padding: 14px 18px; border-radius: 8px; margin-bottom: 20px;">
-                <div style="color: #FFFFFF; font-weight: 600; margin-bottom: 6px;">✓ Primary Objective: {reason}</div>
-                <div style="font-size: 0.85rem; color: #94A3B8;">
-                    • Carbon intensity in this slot represents a significant reduction compared to baseline arrival.<br>
-                    • Hard deadline constraints satisfied.<br>
-                    • Sufficient cluster CPU & RAM capacity verified via Kubernetes collector.
-                </div>
-            </div>
-            """,
+            f'<div style="background: #041315; border: 1px solid #0E383C; border-left: 4px solid #00E599; padding: 14px 18px; border-radius: 8px; margin-bottom: 20px;">'
+            f'<div style="color: #FFFFFF; font-weight: 600; margin-bottom: 6px;">✓ Primary Objective: {reason}</div>'
+            f'<div style="font-size: 0.85rem; color: #94A3B8;">'
+            f'• Carbon intensity in this slot represents a significant reduction compared to baseline arrival.<br>'
+            f'• Hard deadline constraints satisfied.<br>'
+            f'• Sufficient cluster CPU & RAM capacity verified via Kubernetes collector.'
+            f'</div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -126,5 +121,3 @@ def render_scheduling_engine_view() -> None:
 
         df_slots = pd.DataFrame(slots_data)
         st.dataframe(df_slots, use_container_width=True, hide_index=True)
-
-        st.markdown("</div>", unsafe_allow_html=True)

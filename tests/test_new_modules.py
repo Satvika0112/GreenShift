@@ -230,6 +230,8 @@ class TestBrsrReport:
                 power_kw=0.5,
                 region="IN-WE",
                 container_image="greenshift/sample-workload:latest",
+                cpu_request="100m",
+                memory_request="64Mi",
             )
             job = submit_job(db, req)
             schedule_and_store(db, job)
@@ -248,6 +250,8 @@ class TestBrsrReport:
             power_kw=0.5,
             region="IN-WE",
             container_image="greenshift/sample-workload:latest",
+            cpu_request="100m",
+            memory_request="64Mi",
         )
         job = submit_job(db, req)
         schedule_and_store(db, job)
@@ -315,6 +319,8 @@ class TestBrsrReport:
             power_kw=2.0,         # 2 kW → 2 kWh
             region="IN-WE",
             container_image="greenshift/sample-workload:latest",
+            cpu_request="100m",
+            memory_request="64Mi",
         )
         job = submit_job(db, req)
         schedule_and_store(db, job)
@@ -332,6 +338,8 @@ class TestBrsrReport:
             power_kw=0.5,
             region="IN-WE",
             container_image="greenshift/sample-workload:latest",
+            cpu_request="100m",
+            memory_request="64Mi",
         )
         job = submit_job(db, req)
         schedule_and_store(db, job)

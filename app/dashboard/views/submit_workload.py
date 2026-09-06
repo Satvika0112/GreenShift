@@ -121,15 +121,12 @@ def render_submit_workload_view() -> None:
                 reason = sched_res.get("reason", "Lowest carbon intensity window found")
 
                 st.markdown(
-                    f"""
-                    <div class="gs-card">
-                        <div class="gs-card-header">
-                            <div>
-                                <div class="gs-card-title">Optimal Time Window: <span style="color: #00E599; margin-left: 6px;">{sel_start} → {sel_end} UTC</span></div>
-                                <div class="gs-card-subtitle">Region: {region} | Status: {dec_status}</div>
-                            </div>
-                        </div>
-                    """,
+                    f'<div class="gs-card-header" style="margin-bottom: 12px;">'
+                    f'<div>'
+                    f'<div class="gs-card-title">Optimal Time Window: <span style="color: #00E599; margin-left: 6px;">{sel_start} → {sel_end} UTC</span></div>'
+                    f'<div class="gs-card-subtitle">Region: {region} | Status: {dec_status}</div>'
+                    f'</div>'
+                    f'</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -142,13 +139,10 @@ def render_submit_workload_view() -> None:
                     st.markdown(render_metric_card("Carbon Avoided", f"{carbon_avoided:.4f} kg", "Saved vs immediate baseline", accent=True), unsafe_allow_html=True)
 
                 st.markdown(
-                    f"""
-                    <div style="margin-top: 16px; padding: 12px 16px; background: #041315; border-radius: 8px; border-left: 3px solid #00E599;">
-                        <span style="font-weight: 700; color: #FFFFFF;">Why this slot? </span>
-                        <span style="color: #94A3B8;">{reason}</span>
-                    </div>
-                    </div>
-                    """,
+                    f'<div style="margin-top: 16px; padding: 12px 16px; background: #041315; border-radius: 8px; border-left: 3px solid #00E599;">'
+                    f'<span style="font-weight: 700; color: #FFFFFF;">Why this slot? </span>'
+                    f'<span style="color: #94A3B8;">{reason}</span>'
+                    f'</div>',
                     unsafe_allow_html=True,
                 )
 

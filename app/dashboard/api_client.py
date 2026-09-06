@@ -17,8 +17,14 @@ DEFAULT_TIMEOUT = 12.0
 
 
 def get_auth_headers(token: Optional[str] = None) -> Dict[str, str]:
-    """Construct Authorization headers if bearer token provided."""
+    """Construct Authorization headers if bearer token provided or found in session state."""
     headers = {"Content-Type": "application/json"}
+    if not token:
+        try:
+            import streamlit as st
+            token = st.session_state.get("auth_token")
+        except Exception:
+            token = None
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
@@ -84,13 +90,14 @@ def fetch_users(token: Optional[str] = None) -> List[Dict[str, Any]]:
 # 2. Workloads & Ingest
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_jobs(status_filter: Optional[str] = None, limit: int = 1000) -> List[Dict[str, Any]]:
+def fetch_jobs(status_filter: Optional[str] = None, limit: int = 1000, token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch workload jobs with optional status filter."""
     try:
         params: Dict[str, Any] = {"limit": limit}
         if status_filter:
             params["status"] = status_filter
-        r = httpx.get(f"{API_URL}/api/v1/jobs", params=params, timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/jobs", params=params, headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json()
     except Exception as exc:
@@ -98,10 +105,11 @@ def fetch_jobs(status_filter: Optional[str] = None, limit: int = 1000) -> List[D
         return []
 
 
-def fetch_job_detail(job_id: str) -> Dict[str, Any]:
+def fetch_job_detail(job_id: str, token: Optional[str] = None) -> Dict[str, Any]:
     """Fetch complete workload details for a given job ID."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/jobs/{job_id}", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/jobs/{job_id}", headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json()
     except Exception as exc:
@@ -142,10 +150,11 @@ def schedule_job_api(
     return r.json()
 
 
-def fetch_schedule_decisions(limit: int = 100) -> List[Dict[str, Any]]:
+def fetch_schedule_decisions(limit: int = 100, token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Retrieve recent schedule optimization decisions."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/schedule/decisions", params={"limit": limit}, timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/schedule/decisions", params={"limit": limit}, headers=headers, timeout=DEFAULT_TIMEOUT)
         if r.status_code == 200:
             return r.json()
     except Exception:
@@ -157,10 +166,11 @@ def fetch_schedule_decisions(limit: int = 100) -> List[Dict[str, Any]]:
 # 4. Approvals Gate
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_pending_approvals() -> List[Dict[str, Any]]:
+def fetch_pending_approvals(token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch all workloads in PENDING_APPROVAL status with explainability metadata."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/approvals/pending", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/approvals/pending", headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json()
     except Exception as exc:
@@ -168,10 +178,11 @@ def fetch_pending_approvals() -> List[Dict[str, Any]]:
         return []
 
 
-def fetch_declined_approvals() -> List[Dict[str, Any]]:
+def fetch_declined_approvals(token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch history of declined workloads."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/approvals/declined", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/approvals/declined", headers=headers, timeout=DEFAULT_TIMEOUT)
         if r.status_code == 200:
             return r.json()
     except Exception:
@@ -235,10 +246,11 @@ def dispatch_job_api(job_id: str, token: Optional[str] = None) -> Dict[str, Any]
     return r.json()
 
 
-def fetch_dispatch_executions() -> List[Dict[str, Any]]:
+def fetch_dispatch_executions(token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Retrieve Kubernetes execution records."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/dispatch/executions", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/dispatch/executions", headers=headers, timeout=DEFAULT_TIMEOUT)
         if r.status_code == 200:
             return r.json()
     except Exception:
@@ -246,10 +258,11 @@ def fetch_dispatch_executions() -> List[Dict[str, Any]]:
     return []
 
 
-def fetch_kubernetes_state() -> Dict[str, Any]:
+def fetch_kubernetes_state(token: Optional[str] = None) -> Dict[str, Any]:
     """Fetch Kubernetes cluster capacity, available nodes, and free CPU/RAM/GPU."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/kubernetes/state", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/kubernetes/state", headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -260,20 +273,22 @@ def fetch_kubernetes_state() -> Dict[str, Any]:
 # 6. Carbon & Regional Telemetry
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_carbon_curve(region: str) -> List[Dict[str, Any]]:
+def fetch_carbon_curve(region: str, token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch 24-48h carbon intensity curve for region."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/carbon", params={"region": region}, timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/carbon", params={"region": region}, headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json().get("data", [])
     except Exception:
         return []
 
 
-def fetch_current_carbon(region: str) -> Dict[str, Any]:
+def fetch_current_carbon(region: str, token: Optional[str] = None) -> Dict[str, Any]:
     """Fetch latest current carbon reading for region."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/carbon/current", params={"region": region}, timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/carbon/current", params={"region": region}, headers=headers, timeout=DEFAULT_TIMEOUT)
         if r.status_code == 200:
             return r.json()
     except Exception:
@@ -281,10 +296,11 @@ def fetch_current_carbon(region: str) -> Dict[str, Any]:
     return {}
 
 
-def fetch_regional_inventory() -> List[Dict[str, Any]]:
+def fetch_regional_inventory(token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch regional tariff and grid zone inventory."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/regional/inventory", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/regional/inventory", headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         data = r.json()
         return data if isinstance(data, list) else data.get("data", [])
@@ -292,23 +308,25 @@ def fetch_regional_inventory() -> List[Dict[str, Any]]:
         return []
 
 
-def fetch_regional_tariffs(region: str, tariff_plan: Optional[str] = None) -> List[Dict[str, Any]]:
+def fetch_regional_tariffs(region: str, tariff_plan: Optional[str] = None, token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch ToD electricity tariff profile for region."""
     try:
         params = {"region": region}
         if tariff_plan:
             params["tariff_plan"] = tariff_plan
-        r = httpx.get(f"{API_URL}/api/v1/regional/tariffs", params=params, timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/regional/tariffs", params=params, headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json().get("data", [])
     except Exception:
         return []
 
 
-def fetch_data_sources_status() -> Dict[str, Any]:
+def fetch_data_sources_status(token: Optional[str] = None) -> Dict[str, Any]:
     """Fetch carbon and tariff resilience health and fallback states."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/data-sources/status", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/data-sources/status", headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -319,20 +337,22 @@ def fetch_data_sources_status() -> Dict[str, Any]:
 # 7. Dashboard Summary & Metrics
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_dashboard_summary() -> Dict[str, Any]:
+def fetch_dashboard_summary(token: Optional[str] = None) -> Dict[str, Any]:
     """Fetch aggregated job counts, carbon avoided, and cost savings."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/dashboard/summary", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/dashboard/summary", headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json()
     except Exception:
         return {}
 
 
-def fetch_metrics_summary() -> Dict[str, Any]:
+def fetch_metrics_summary(token: Optional[str] = None) -> Dict[str, Any]:
     """Fetch structured operational metrics JSON."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/metrics/summary", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/metrics/summary", headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -389,22 +409,26 @@ def fetch_system_live() -> Dict[str, Any]:
 # 9. Audit & Reports
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_audit_verify() -> Dict[str, Any]:
+def fetch_audit_verify(token: Optional[str] = None) -> Dict[str, Any]:
     """Verify SHA-256 tamper-evident audit ledger chain."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/audit/verify", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/trust/verify", headers=headers, timeout=DEFAULT_TIMEOUT)
         if r.status_code == 404:
-            r = httpx.get(f"{API_URL}/api/v1/audit/chain", timeout=DEFAULT_TIMEOUT)
+            r = httpx.get(f"{API_URL}/trust/verify", headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json()
     except Exception:
         return {"valid": False, "message": "Audit chain verification unreachable"}
 
 
-def fetch_audit_events(limit: int = 50) -> List[Dict[str, Any]]:
+def fetch_audit_events(limit: int = 50, token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch recent audit events."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/audit/events", params={"limit": limit}, timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/trust/events", params={"limit": limit}, headers=headers, timeout=DEFAULT_TIMEOUT)
+        if r.status_code == 404:
+            r = httpx.get(f"{API_URL}/trust/events", params={"limit": limit}, headers=headers, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         data = r.json()
         return data if isinstance(data, list) else data.get("events", [])
@@ -412,10 +436,13 @@ def fetch_audit_events(limit: int = 50) -> List[Dict[str, Any]]:
         return []
 
 
-def fetch_reports_brsr() -> Dict[str, Any]:
+def fetch_reports_brsr(token: Optional[str] = None) -> Dict[str, Any]:
     """Fetch BRSR sustainability report data."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/reports/brsr", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/report/summary", headers=headers, timeout=DEFAULT_TIMEOUT)
+        if r.status_code == 404:
+            r = httpx.get(f"{API_URL}/report/summary", headers=headers, timeout=DEFAULT_TIMEOUT)
         if r.status_code == 200:
             return r.json()
     except Exception:
@@ -423,12 +450,14 @@ def fetch_reports_brsr() -> Dict[str, Any]:
     return {}
 
 
-def fetch_reports_savings() -> Dict[str, Any]:
+def fetch_reports_savings(token: Optional[str] = None) -> Dict[str, Any]:
     """Fetch carbon and cost savings report data."""
     try:
-        r = httpx.get(f"{API_URL}/api/v1/reports/savings", timeout=DEFAULT_TIMEOUT)
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/report/summary", headers=headers, timeout=DEFAULT_TIMEOUT)
         if r.status_code == 200:
             return r.json()
     except Exception:
         pass
     return {}
+

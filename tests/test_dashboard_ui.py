@@ -160,13 +160,14 @@ def test_status_badge_rendering():
     assert "FAILED" in render_status_badge("FAILED")
 
 
-def test_fetch_pending_approvals_fields(db):
+def test_fetch_pending_approvals_fields(db, test_users):
     """Verify that fetch_pending_approvals API returns all required rich fields."""
     job = create_job_with_schedule(db, "JOB-UI-PENDING-01", "team_alpha", JobStatus.PENDING_APPROVAL)
 
     from fastapi.testclient import TestClient
     client = TestClient(app)
-    real_response = client.get("/api/v1/approvals/pending")
+    token = get_token(test_users["admin"])
+    real_response = client.get("/api/v1/approvals/pending", headers={"Authorization": f"Bearer {token}"})
     assert real_response.status_code == 200
     data = real_response.json()
     assert len(data) >= 1
@@ -304,3 +305,51 @@ def test_dispatch_job_api_enforces_backend_authorization(db, test_users):
             dispatch_job_api(job_declined.job_id, token=token_admin)
         assert "403" in str(exc.value)
         assert "has been declined and cannot be dispatched" in str(exc.value)
+
+
+def test_html_components_rendering_no_raw_tags():
+    """Verify that all reusable HTML components generate valid, unindented HTML with no raw or unbalanced tags."""
+    from app.dashboard.components import (
+        render_metric_card,
+        render_status_badge,
+        render_health_card,
+        render_execution_timeline,
+        render_decision_factor,
+        render_empty_state,
+    )
+
+    # 1. MetricCard
+    card_html = render_metric_card("Carbon Intensity", "420.5 gCO₂/kWh", "Grid forecast", accent=True, tag="OPTIMAL")
+    assert '<div class="gs-metric-card">' in card_html
+    assert '<div class="gs-metric-value gs-metric-accent">420.5 gCO₂/kWh</div>' in card_html
+    assert '<span class="gs-badge green-badge">OPTIMAL</span>' in card_html
+    assert not card_html.startswith("    ")
+    assert card_html.count("<div") == card_html.count("</div")
+
+    # 2. StatusBadge
+    for status in ["APPROVED", "COMPLETED", "HEALTHY", "READY", "PENDING_APPROVAL", "DECLINED", "FAILED", "QUEUED", "RUNNING"]:
+        badge = render_status_badge(status)
+        assert "<span" in badge and "</span>" in badge
+        assert not badge.startswith("    ")
+
+    # 3. HealthCard
+    health_html = render_health_card("PostgreSQL Database", "healthy", "SELECT 1 check OK", icon="🗄️")
+    assert '<div class="gs-card"' in health_html
+    assert "PostgreSQL Database" in health_html
+    assert not health_html.startswith("    ")
+    assert health_html.count("<div") == health_html.count("</div")
+
+    # 4. Timeline
+    timeline_html = render_execution_timeline("RUNNING")
+    assert '<div class="timeline-container">' in timeline_html
+    assert "timeline-step" in timeline_html
+    assert not timeline_html.startswith("    ")
+    assert timeline_html.count("<div") == timeline_html.count("</div")
+
+    # 5. DecisionFactor
+    factor_html = render_decision_factor("Carbon Weight", 85.0, "85%")
+    assert '<div class="factor-row">' in factor_html
+    assert 'style="width: 85.0%;"' in factor_html
+    assert not factor_html.startswith("    ")
+    assert factor_html.count("<div") == factor_html.count("</div")
+

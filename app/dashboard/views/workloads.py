@@ -78,46 +78,40 @@ def render_workloads_view() -> None:
         inspect_job_id = st.selectbox("Select Workload to Inspect", [j.get("job_id") for j in filtered_jobs])
         if inspect_job_id:
             job_detail = fetch_job_detail(inspect_job_id)
-            if job_detail:
-                st.markdown(
-                    f"""
-                    <div class="gs-card">
-                        <div class="gs-card-header">
-                            <div>
-                                <div class="gs-card-title">{job_detail.get('workload_name', inspect_job_id)}</div>
-                                <div class="gs-card-subtitle">ID: <code>{inspect_job_id}</code> | Team: {job_detail.get('team_id')} | Region: {job_detail.get('region')}</div>
-                            </div>
-                            <div>{render_status_badge(job_detail.get('status', ''))}</div>
-                        </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+            st.markdown(
+                f'<div class="gs-card-header" style="margin-bottom: 12px;">'
+                f'<div>'
+                f'<div class="gs-card-title">{job_detail.get("workload_name", inspect_job_id)}</div>'
+                f'<div class="gs-card-subtitle">ID: <code>{inspect_job_id}</code> | Team: {job_detail.get("team_id")} | Region: {job_detail.get("region")}</div>'
+                f'</div>'
+                f'<div>{render_status_badge(job_detail.get("status", ""))}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
-                # Lifecycle Timeline
-                st.markdown(render_execution_timeline(job_detail.get("status", "")), unsafe_allow_html=True)
+            # Lifecycle Timeline
+            st.markdown(render_execution_timeline(job_detail.get("status", "")), unsafe_allow_html=True)
 
-                col_spec, col_sched = st.columns(2)
-                with col_spec:
-                    st.markdown("#### ⚙️ Resource Specifications")
-                    st.markdown(f"- **CPU Request:** `{job_detail.get('cpu_request', '500m')}`")
-                    st.markdown(f"- **Memory Request:** `{job_detail.get('memory_request', '512Mi')}`")
-                    st.markdown(f"- **Power Demand:** `{job_detail.get('power_kw', 1.0)} kW`")
-                    st.markdown(f"- **Container Image:** `{job_detail.get('container_image', 'greenshift/job:v1')}`")
-                    st.markdown(f"- **Earliest Start:** `{job_detail.get('earliest_start_time', 'Immediate')}`")
-                    st.markdown(f"- **Deadline:** `{job_detail.get('deadline', 'N/A')}`")
+            col_spec, col_sched = st.columns(2)
+            with col_spec:
+                st.markdown("#### ⚙️ Resource Specifications")
+                st.markdown(f"- **CPU Request:** `{job_detail.get('cpu_request', '500m')}`")
+                st.markdown(f"- **Memory Request:** `{job_detail.get('memory_request', '512Mi')}`")
+                st.markdown(f"- **Power Demand:** `{job_detail.get('power_kw', 1.0)} kW`")
+                st.markdown(f"- **Container Image:** `{job_detail.get('container_image', 'greenshift/job:v1')}`")
+                st.markdown(f"- **Earliest Start:** `{job_detail.get('earliest_start_time', 'Immediate')}`")
+                st.markdown(f"- **Deadline:** `{job_detail.get('deadline', 'N/A')}`")
 
-                with col_sched:
-                    dec = job_detail.get("schedule_decision")
-                    st.markdown("#### 🌿 Scheduling Decision")
-                    if dec:
-                        st.markdown(f"- **Selected Window:** `{dec.get('selected_start', '')[:16]} → {dec.get('selected_end', '')[:16]}`")
-                        st.markdown(f"- **Carbon Intensity:** `{dec.get('carbon_intensity', 0.0)} gCO₂/kWh`")
-                        st.markdown(f"- **Electricity Cost:** `${dec.get('electricity_cost', 0.0):.4f}`")
-                        st.markdown(f"- **Carbon Avoided:** `{dec.get('carbon_avoided', 0.0):.4f} kg`")
-                        st.markdown(f"- **Optimization Reason:** *{dec.get('reason', 'N/A')}*")
-                    else:
-                        st.caption("No scheduling decision generated yet.")
-
-                st.markdown("</div>", unsafe_allow_html=True)
+            with col_sched:
+                dec = job_detail.get("schedule_decision")
+                st.markdown("#### 🌿 Scheduling Decision")
+                if dec:
+                    st.markdown(f"- **Selected Window:** `{dec.get('selected_start', '')[:16]} → {dec.get('selected_end', '')[:16]}`")
+                    st.markdown(f"- **Carbon Intensity:** `{dec.get('carbon_intensity', 0.0)} gCO₂/kWh`")
+                    st.markdown(f"- **Electricity Cost:** `${dec.get('electricity_cost', 0.0):.4f}`")
+                    st.markdown(f"- **Carbon Avoided:** `{dec.get('carbon_avoided', 0.0):.4f} kg`")
+                    st.markdown(f"- **Optimization Reason:** *{dec.get('reason', 'N/A')}*")
+                else:
+                    st.caption("No scheduling decision generated yet.")
     else:
         st.info("No workloads found matching the current search & filter criteria.")

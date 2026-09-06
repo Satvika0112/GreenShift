@@ -7,9 +7,10 @@ and FastAPI dependency extractors for role-based access control.
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Callable
+import secrets
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Header
 from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -144,9 +145,24 @@ def require_roles(*allowed_roles: UserRole) -> Callable:
     """Dependency factory enforcing role-based access control (RBAC)."""
     allowed_values = {r.value if isinstance(r, UserRole) else str(r) for r in allowed_roles}
 
-    def role_checker(current_user: UserORM = Depends(get_current_user)) -> UserORM:
+    def role_checker(
+        current_user: UserORM = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> UserORM:
         user_role_val = current_user.role.value if isinstance(current_user.role, UserRole) else str(current_user.role)
         if user_role_val not in allowed_values:
+            try:
+                from app.trust.service import record_access_denied
+                record_access_denied(
+                    db,
+                    username=current_user.username,
+                    role=user_role_val,
+                    endpoint="RBAC_CHECK",
+                    reason=f"Role '{user_role_val}' not in allowed roles: {list(allowed_values)}",
+                    team_id=current_user.team_id,
+                )
+            except Exception:
+                pass
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Operation not permitted for role '{user_role_val}'. Required: {list(allowed_values)}",
@@ -154,6 +170,38 @@ def require_roles(*allowed_roles: UserRole) -> Callable:
         return current_user
 
     return role_checker
+
+
+def verify_internal_service_token(token: Optional[str]) -> bool:
+    """
+    Validate a provided internal service token against the configured INTERNAL_SERVICE_KEY.
+    Uses constant-time comparison to prevent timing attacks.
+    """
+    configured_key = settings.internal_service_key
+    if not configured_key or not token:
+        return False
+    return secrets.compare_digest(token, configured_key)
+
+
+def require_internal_service_token(
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Service-Key"),
+) -> str:
+    """
+    FastAPI dependency for internal microservice-to-microservice authentication.
+    Requires a valid 'X-Internal-Service-Key' matching settings.internal_service_key.
+    """
+    if not settings.internal_service_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Internal service authentication is not enabled or configured",
+        )
+    if not x_internal_key or not verify_internal_service_token(x_internal_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing internal service token",
+            headers={"WWW-Authenticate": "Internal-Key"},
+        )
+    return x_internal_key
 
 
 def seed_default_users(db: Session) -> None:

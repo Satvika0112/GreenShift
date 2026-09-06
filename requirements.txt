@@ -32,9 +32,11 @@ python-dotenv==1.0.1
 # Async support
 anyio==4.3.0
 
-# Hashing / crypto / authentication
+# Hashing / crypto / authentication / rate limiting
 bcrypt>=4.0.0
 pyjwt>=2.8.0
+slowapi>=0.1.10
+limits>=2.3
 
 # Scheduling
 apscheduler==3.10.4

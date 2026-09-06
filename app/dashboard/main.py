@@ -26,7 +26,6 @@ from app.dashboard.api_client import (
     fetch_system_health,
 )
 from app.dashboard.components import render_status_badge, render_section_header
-from app.shared.auth import create_access_token
 
 # Import Views
 from app.dashboard.views.login import render_login_view
@@ -66,81 +65,99 @@ st.markdown(ENTERPRISE_CSS, unsafe_allow_html=True)
 # 2. Session State Initialization
 # ─────────────────────────────────────────────────────────────────────────────
 
+if "is_authenticated" not in st.session_state:
+    st.session_state["is_authenticated"] = False
 if "auth_token" not in st.session_state:
-    st.session_state["auth_token"] = create_access_token(user_id=1, username="admin", role="ADMIN")
+    st.session_state["auth_token"] = None
 if "user_role" not in st.session_state:
-    st.session_state["user_role"] = "ADMIN"
+    st.session_state["user_role"] = None
 if "username" not in st.session_state:
-    st.session_state["username"] = "admin"
+    st.session_state["username"] = None
 if "team_id" not in st.session_state:
     st.session_state["team_id"] = None
 if "active_region" not in st.session_state:
     st.session_state["active_region"] = "IN-TG"
-if "is_authenticated" not in st.session_state:
-    st.session_state["is_authenticated"] = True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Top Bar Header
+# 3. Authentication Check
 # ─────────────────────────────────────────────────────────────────────────────
 
-top_col_brand, top_col_reg, top_col_user, top_col_btn = st.columns([1.5, 1.2, 1.2, 0.6])
+if not st.session_state.get("is_authenticated") or not st.session_state.get("auth_token"):
+    render_login_view()
+    st.stop()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Top Bar Header (Authenticated)
+# ─────────────────────────────────────────────────────────────────────────────
+
+top_col_brand, top_col_reg, top_col_user, top_col_btn = st.columns([1.5, 1.2, 1.2, 0.8])
 
 with top_col_brand:
     st.markdown(
-        """
-        <div style="display: flex; align-items: center; gap: 10px; padding: 4px 0;">
-            <span style="font-size: 1.6rem;">🌿</span>
-            <div>
-                <div style="font-size: 1.15rem; font-weight: 800; color: #FFFFFF; letter-spacing: -0.02em;">GreenShift</div>
-                <div style="font-size: 0.72rem; color: #94A3B8; margin-top: -2px;">Enterprise Carbon-Aware Scheduler</div>
-            </div>
-        </div>
-        """,
+        '<div style="display: flex; align-items: center; gap: 10px; padding: 4px 0;">'
+        '<span style="font-size: 1.6rem;">🌿</span>'
+        '<div>'
+        '<div style="font-size: 1.15rem; font-weight: 800; color: #FFFFFF; letter-spacing: -0.02em;">GreenShift</div>'
+        '<div style="font-size: 0.72rem; color: #94A3B8; margin-top: -2px;">Enterprise Carbon-Aware Scheduler</div>'
+        '</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
 with top_col_reg:
     region_choices = ["IN-TG", "IN-GJ", "IN-HP", "IN-WB", "US-CA", "US-TX", "US-NY", "SE", "AU-SA-Large", "AU-SA-Small"]
-    sel_reg = st.selectbox("Active Grid Region", region_choices, index=region_choices.index(st.session_state.get("active_region", "IN-TG")), label_visibility="collapsed")
+    sel_reg = st.selectbox(
+        "Active Grid Region",
+        region_choices,
+        index=region_choices.index(st.session_state.get("active_region", "IN-TG")) if st.session_state.get("active_region") in region_choices else 0,
+        label_visibility="collapsed",
+    )
     st.session_state["active_region"] = sel_reg
 
 with top_col_user:
-    curr_role = st.session_state.get("user_role", "ADMIN")
-    curr_user = st.session_state.get("username", "admin")
+    curr_role = st.session_state.get("user_role", "VIEWER")
+    curr_user = st.session_state.get("username", "user")
     st.markdown(
-        f"""
-        <div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 6px;">
-            <span class="gs-badge green-badge">{curr_role}</span>
-            <span style="font-size: 0.85rem; font-weight: 600; color: #FFFFFF;">{curr_user}</span>
-        </div>
-        """,
+        f'<div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 6px;">'
+        f'<span class="gs-badge green-badge">{curr_role}</span>'
+        f'<span style="font-size: 0.85rem; font-weight: 600; color: #FFFFFF;">{curr_user}</span>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
 with top_col_btn:
-    if st.button("⟳ Refresh", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+    col_ref, col_out = st.columns(2)
+    with col_ref:
+        if st.button("⟳ Refresh", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+    with col_out:
+        if st.button("🚪 Logout", use_container_width=True):
+            st.session_state["is_authenticated"] = False
+            st.session_state["auth_token"] = None
+            st.session_state["user_role"] = None
+            st.session_state["username"] = None
+            st.session_state["team_id"] = None
+            st.rerun()
 
 st.markdown("<hr style='border-color: #0E383C; margin: 8px 0 20px 0;'>", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Sidebar Navigation
+# 5. Sidebar Navigation (Authenticated)
 # ─────────────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown(
-        """
-        <div style="padding: 12px 0 16px 0; border-bottom: 1px solid #0E383C; margin-bottom: 14px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="font-size: 1.3rem;">🌿</span>
-                <span style="font-size: 1.1rem; font-weight: 800; color: #FFFFFF;">GreenShift</span>
-            </div>
-            <div style="font-size: 0.72rem; color: #00E599; font-weight: 600; margin-top: 2px;">● CLUSTER ONLINE</div>
-        </div>
-        """,
+        '<div style="padding: 12px 0 16px 0; border-bottom: 1px solid #0E383C; margin-bottom: 14px;">'
+        '<div style="display: flex; align-items: center; gap: 8px;">'
+        '<span style="font-size: 1.3rem;">🌿</span>'
+        '<span style="font-size: 1.1rem; font-weight: 800; color: #FFFFFF;">GreenShift</span>'
+        '</div>'
+        '<div style="font-size: 0.72rem; color: #00E599; font-weight: 600; margin-top: 2px;">● CLUSTER ONLINE</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -166,54 +183,25 @@ with st.sidebar:
         "👥 Users & Access",
         "📑 Reports",
         "⚙️ Settings",
-        "🔑 Switch Account / Login",
     ]
 
     selected_nav = st.radio("NAVIGATION", nav_options, index=0, label_visibility="collapsed")
 
-    st.markdown("<div style='margin-top: 24px; padding-top: 14px; border-top: 1px solid #0E383C;'>", unsafe_allow_html=True)
-    st.caption("Active User Persona Switcher")
-    persona_quick = st.selectbox(
-        "Quick Persona Switch",
-        ["ADMIN (Full Access)", "TEAM_LEAD (team_alpha)", "TEAM_LEAD (team_beta)", "OPERATOR (Execution)", "VIEWER (Read-Only)"],
-        index=0,
-        label_visibility="collapsed",
-    )
+    st.markdown("<hr style='border-color: #0E383C; margin: 24px 0 14px 0;'>", unsafe_allow_html=True)
+    st.caption("Authenticated Identity")
+    st.info(f"**User**: `{st.session_state.get('username')}`\n\n**Role**: `{st.session_state.get('user_role')}`\n\n**Team**: `{st.session_state.get('team_id') or 'All'}`")
 
-    if "ADMIN" in persona_quick:
-        st.session_state["user_role"] = "ADMIN"
-        st.session_state["username"] = "admin_user"
+    if st.button("Sign Out", key="sidebar_sign_out", use_container_width=True):
+        st.session_state["is_authenticated"] = False
+        st.session_state["auth_token"] = None
+        st.session_state["user_role"] = None
+        st.session_state["username"] = None
         st.session_state["team_id"] = None
-    elif "team_alpha" in persona_quick:
-        st.session_state["user_role"] = "TEAM_LEAD"
-        st.session_state["username"] = "lead_team_alpha"
-        st.session_state["team_id"] = "team_alpha"
-    elif "team_beta" in persona_quick:
-        st.session_state["user_role"] = "TEAM_LEAD"
-        st.session_state["username"] = "lead_team_beta"
-        st.session_state["team_id"] = "team_beta"
-    elif "OPERATOR" in persona_quick:
-        st.session_state["user_role"] = "OPERATOR"
-        st.session_state["username"] = "operator_user"
-        st.session_state["team_id"] = "team_alpha"
-    elif "VIEWER" in persona_quick:
-        st.session_state["user_role"] = "VIEWER"
-        st.session_state["username"] = "viewer_user"
-        st.session_state["team_id"] = None
-
-    st.session_state["auth_token"] = create_access_token(
-        user_id=1,
-        username=st.session_state["username"],
-        role=st.session_state["user_role"],
-        team_id=st.session_state["team_id"],
-    )
-
-    st.caption(f"Role: {st.session_state['user_role']} | Team: {st.session_state['team_id'] or 'All'}")
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Route to Selected View
+# 6. Route to Selected View
 # ─────────────────────────────────────────────────────────────────────────────
 
 active_region = st.session_state.get("active_region", "IN-TG")
@@ -250,5 +238,4 @@ elif selected_nav == "📑 Reports":
     render_reports_view()
 elif selected_nav == "⚙️ Settings":
     render_settings_view()
-elif selected_nav == "🔑 Switch Account / Login":
-    render_login_view()
+

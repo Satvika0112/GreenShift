@@ -167,6 +167,7 @@ class TestDynamicArrivalSimulator:
         assert summary.jobs_released == 0
 
     def test_real_dataset_simulation_with_max_jobs(self, db_session, monkeypatch):
+        from unittest.mock import patch
         monkeypatch.setenv("SIMULATE_CARBON_API_DOWN", "true")
         # Run real dataset with max_jobs=5 and auto_schedule=True
         # With 10 supported regions (including IN-TG, IN-PB, US-CA), all 5 jobs succeed
@@ -178,18 +179,19 @@ class TestDynamicArrivalSimulator:
             reanchor_historical=True,
         )
 
-        sim = DynamicArrivalSimulator(config=config, db=db_session)
-        assert len(sim.jobs) == 5
+        with patch("app.dispatch.k8s_state_collector.check_kubernetes_available", return_value=False):
+            sim = DynamicArrivalSimulator(config=config, db=db_session)
+            assert len(sim.jobs) == 5
 
-        summary = sim.run(db=db_session)
-        assert summary.total_jobs == 5
-        assert summary.jobs_released == 5
-        assert summary.jobs_submitted_successfully == 5
-        assert summary.jobs_failed == 0
+            summary = sim.run(db=db_session)
+            assert summary.total_jobs == 5
+            assert summary.jobs_released == 5
+            assert summary.jobs_submitted_successfully == 5
+            assert summary.jobs_failed == 0
 
-        # Verify DB records and ScheduleDecisions for supported jobs
-        for j_rec in sim.jobs:
-            job = db_session.get(JobORM, j_rec.job_id)
-            assert job is not None
-            assert job.schedule_decision is not None
-            assert job.schedule_decision.selected_start is not None
+            # Verify DB records and ScheduleDecisions for supported jobs
+            for j_rec in sim.jobs:
+                job = db_session.get(JobORM, j_rec.job_id)
+                assert job is not None
+                assert job.schedule_decision is not None
+                assert job.schedule_decision.selected_start is not None

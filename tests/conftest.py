@@ -1,22 +1,36 @@
-"""
-GreenShift — pytest configuration and shared fixtures.
-"""
+import os
+# Ensure test execution defaults to local SQLite database regardless of host environment
+os.environ.setdefault("DATABASE_URL", "sqlite:///./greenshift.db")
+if "DATABASE_URL" in os.environ and os.environ["DATABASE_URL"].startswith("postgresql"):
+    os.environ["DATABASE_URL"] = "sqlite:///./greenshift.db"
 
 import pytest
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.shared.models import Base, JobStatus
 from app.shared.config import settings
+import app.shared.database as db_mod
+if str(db_mod.engine.url).startswith("postgresql"):
+    db_mod.engine = db_mod.build_engine("sqlite:///./greenshift.db")
+    db_mod.SessionLocal.configure(bind=db_mod.engine)
+
+from app.shared.models import Base, JobStatus
+
+
+from app.shared.rate_limiter import limiter
 
 
 @pytest.fixture(autouse=True)
-def default_simulate_carbon_api_down(monkeypatch):
+def default_test_setup(monkeypatch):
     """Ensure tests run deterministically and fast without external internet API calls by default."""
     import os
     if "SIMULATE_CARBON_API_DOWN" not in os.environ:
         monkeypatch.setenv("SIMULATE_CARBON_API_DOWN", "true")
+    try:
+        limiter.reset()
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────

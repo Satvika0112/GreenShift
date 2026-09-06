@@ -1,0 +1,321 @@
+---
+# ─────────────────────────────────────────────────────────────
+# GreenShift Kubernetes Network Policies
+# Namespace: greenshift
+# ─────────────────────────────────────────────────────────────
+
+# 1. Default Deny All (Zero-Trust Foundation)
+# Drops all unsolicited ingress and egress across all pods in the greenshift namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: greenshift
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+
+# 2. GreenShift API Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: greenshift-api-netpol
+  namespace: greenshift
+spec:
+  podSelector:
+    matchLabels:
+      app: greenshift
+      component: api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow HTTP port 8000 from Dashboard and external clients / ingress controllers
+    - from:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: dashboard
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # Allow connection to PostgreSQL database (port 5432)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow external HTTPS egress (port 443) for Carbon & Tariff APIs
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow DNS resolution (port 53)
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+
+# 3. PostgreSQL Network Policy
+# Accepts traffic ONLY from authorized backend application pods (api, ingest, scheduler, dispatcher, trust)
+# Direct access from dashboard or external pods is strictly denied
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: greenshift-postgres-netpol
+  namespace: greenshift
+spec:
+  podSelector:
+    matchLabels:
+      app: greenshift
+      component: postgres
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: api
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: ingest
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: scheduler
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: dispatcher
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: trust
+      ports:
+        - protocol: TCP
+          port: 5432
+  egress:
+    # Allow DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+
+# 4. Ingest Service Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: greenshift-ingest-netpol
+  namespace: greenshift
+spec:
+  podSelector:
+    matchLabels:
+      app: greenshift
+      component: ingest
+  policyTypes:
+    - Ingress
+    - Egress
+  # No Ingress allowed (background ingest worker)
+  ingress: []
+  egress:
+    # Connect to PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # External HTTPS egress (port 443) for Carbon / Electricity Maps API
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    # DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+
+# 5. Scheduler Service Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: greenshift-scheduler-netpol
+  namespace: greenshift
+spec:
+  podSelector:
+    matchLabels:
+      app: greenshift
+      component: scheduler
+  policyTypes:
+    - Ingress
+    - Egress
+  # No Ingress allowed (background scheduling worker)
+  ingress: []
+  egress:
+    # Connect to PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+
+# 6. Dispatcher Service Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: greenshift-dispatcher-netpol
+  namespace: greenshift
+spec:
+  podSelector:
+    matchLabels:
+      app: greenshift
+      component: dispatcher
+  policyTypes:
+    - Ingress
+    - Egress
+  # No Ingress allowed (background dispatching worker)
+  ingress: []
+  egress:
+    # Connect to PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Kubernetes API Server communication for dispatching jobs
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+        - protocol: TCP
+          port: 8443
+    # DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+
+# 7. Trust Service Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: greenshift-trust-netpol
+  namespace: greenshift
+spec:
+  podSelector:
+    matchLabels:
+      app: greenshift
+      component: trust
+  policyTypes:
+    - Ingress
+    - Egress
+  # No Ingress allowed (background verification worker)
+  ingress: []
+  egress:
+    # Connect to PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+
+# 8. Dashboard Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: greenshift-dashboard-netpol
+  namespace: greenshift
+spec:
+  podSelector:
+    matchLabels:
+      app: greenshift
+      component: dashboard
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Accept HTTP traffic on port 8501 from external users / Ingress / NodePort
+    - ports:
+        - protocol: TCP
+          port: 8501
+  egress:
+    # Connect to GreenShift API (port 8000)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: api
+      ports:
+        - protocol: TCP
+          port: 8000
+    # DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
