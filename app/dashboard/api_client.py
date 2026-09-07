@@ -74,6 +74,33 @@ def register_user_api(
     return r.json()
 
 
+def admin_create_user_api(
+    username: str,
+    email: str,
+    password: str,
+    role: str = "VIEWER",
+    team_id: Optional[str] = None,
+    token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Privileged user creation by administrator."""
+    payload = {
+        "username": username,
+        "email": email,
+        "password": password,
+        "role": role,
+        "team_id": team_id,
+    }
+    headers = get_auth_headers(token)
+    r = httpx.post(f"{API_URL}/api/v1/auth/admin/create-user", json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
+    if r.status_code == 404:
+        r = httpx.post(f"{API_URL}/auth/admin/create-user", json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
+    if r.status_code >= 400:
+        detail = r.json().get("detail", r.text) if "application/json" in r.headers.get("content-type", "") else r.text
+        raise RuntimeError(f"HTTP {r.status_code}: {detail}")
+    return r.json()
+
+
+
 def fetch_users(token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Retrieve all users if endpoint available or query database fallback."""
     try:
@@ -194,14 +221,13 @@ def approve_job_api(
     job_id: str,
     schedule_id: int,
     reason: str = "Schedule acceptable",
-    approved_by: str = "operator",
+    approved_by: Optional[str] = None,
     token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Approve a proposed execution schedule."""
     payload = {
         "schedule_id": schedule_id,
         "reason": reason,
-        "approved_by": approved_by,
     }
     headers = get_auth_headers(token)
     r = httpx.post(f"{API_URL}/api/v1/approval/{job_id}/approve", json=payload, headers=headers, timeout=15.0)
@@ -215,14 +241,13 @@ def decline_job_api(
     job_id: str,
     schedule_id: int,
     reason: str = "Window declined",
-    approved_by: str = "operator",
+    approved_by: Optional[str] = None,
     token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Decline a proposed execution schedule with custom reason."""
     payload = {
         "schedule_id": schedule_id,
         "reason": reason,
-        "approved_by": approved_by,
     }
     headers = get_auth_headers(token)
     r = httpx.post(f"{API_URL}/api/v1/approval/{job_id}/decline", json=payload, headers=headers, timeout=15.0)

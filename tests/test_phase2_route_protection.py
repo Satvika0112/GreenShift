@@ -33,12 +33,19 @@ from app.shared.models import (
 )
 from app.shared.utils import utcnow
 from app.trust.ledger import verify_chain
+from app.shared.auth import hash_password, create_access_token
 
 
 @pytest.fixture(autouse=True)
 def setup_route_protection_db():
-    """Ensure database tables exist and clean up users & jobs before/after each test."""
-    init_db()
+    """Ensure clean database tables for users & jobs before/after each test."""
+    from sqlalchemy import text as sa_text
+    from app.shared.database import engine
+    from app.shared.database import get_db
+    from app.api.main import app as _app
+
+    _app.dependency_overrides.pop(get_db, None)
+
     db = SessionLocal()
     try:
         db.query(ApprovalORM).delete()
@@ -50,9 +57,17 @@ def setup_route_protection_db():
         db.commit()
     finally:
         db.close()
+
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(sa_text("PRAGMA wal_checkpoint(PASSIVE)"))
+    except Exception:
+        pass
 
     yield
 
+    _app.dependency_overrides.pop(get_db, None)
+
     db = SessionLocal()
     try:
         db.query(ApprovalORM).delete()
@@ -64,6 +79,12 @@ def setup_route_protection_db():
         db.commit()
     finally:
         db.close()
+
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(sa_text("PRAGMA wal_checkpoint(PASSIVE)"))
+    except Exception:
+        pass
 
 
 @pytest.fixture
@@ -71,31 +92,56 @@ def client():
     return TestClient(app)
 
 
+from app.shared.auth import create_access_token, hash_password
+
+DUMMY_PASSWORD_HASH = hash_password("TestPassword123!")
+
+
 @pytest.fixture
 def auth_tokens(client):
-    """Register and authenticate users for all standard roles."""
+    """Seed test users and generate JWT access tokens for all standard roles."""
     roles = [
-        ("admin_p2", "admin_p2@greenshift.io", "AdminPass123!", "ADMIN", None),
-        ("lead_alpha_p2", "lead_alpha@greenshift.io", "LeadPass123!", "TEAM_LEAD", "team_alpha"),
-        ("lead_beta_p2", "lead_beta@greenshift.io", "LeadPass123!", "TEAM_LEAD", "team_beta"),
-        ("operator_p2", "operator_p2@greenshift.io", "OpsPass123!", "OPERATOR", "team_alpha"),
-        ("viewer_p2", "viewer_p2@greenshift.io", "ViewPass123!", "VIEWER", "team_alpha"),
+        ("admin_p2", "admin_p2@greenshift.io", "ADMIN", None),
+        ("lead_alpha_p2", "lead_alpha@greenshift.io", "TEAM_LEAD", "team_alpha"),
+        ("lead_beta_p2", "lead_beta@greenshift.io", "TEAM_LEAD", "team_beta"),
+        ("operator_p2", "operator_p2@greenshift.io", "OPERATOR", "team_alpha"),
+        ("viewer_p2", "viewer_p2@greenshift.io", "VIEWER", "team_alpha"),
     ]
     tokens = {}
-    for username, email, pwd, role, team_id in roles:
-        client.post("/auth/register", json={
-            "username": username,
-            "email": email,
-            "password": pwd,
-            "role": role,
-            "team_id": team_id,
-        })
-        login_res = client.post("/auth/login", json={
-            "username": username,
-            "password": pwd,
-        })
-        tokens[role if team_id is None else f"{role}_{team_id}"] = login_res.json()["access_token"]
+    db = SessionLocal()
+    try:
+        for idx, (username, email, role, team_id) in enumerate(roles, start=200):
+            user = UserORM(
+                id=idx,
+                username=username,
+                email=email,
+                hashed_password=DUMMY_PASSWORD_HASH,
+                role=UserRole(role),
+                team_id=team_id,
+                is_active=True,
+            )
+            db.merge(user)
+            token = create_access_token(
+                user_id=idx,
+                username=username,
+                role=role,
+                team_id=team_id,
+            )
+            tokens[role if team_id is None else f"{role}_{team_id}"] = token
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        from sqlalchemy import text
+        from app.shared.database import engine
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
+    except Exception:
+        pass
+
     return tokens
+
 
 
 # ====================================================================
@@ -294,26 +340,32 @@ def test_end_to_end_authenticated_pipeline(client):
     8. Check dispatch execution status via GET /api/v1/dispatch/{job_id}/status
     9. Verify SHA-256 tamper-evident trust ledger via GET /api/v1/trust/verify
     """
-    # 1. Register & Login Admin & Operator
-    client.post("/auth/register", json={
-        "username": "e2e_admin",
-        "email": "e2e_admin@greenshift.io",
-        "password": "AdminPassword123!",
-        "role": "ADMIN",
-    })
+    # 1. Seed & Login Admin & Operator
+    with SessionLocal() as db:
+        admin_u = UserORM(
+            username="e2e_admin",
+            email="e2e_admin@greenshift.io",
+            hashed_password=hash_password("AdminPassword123!"),
+            role=UserRole.ADMIN,
+            is_active=True,
+        )
+        op_u = UserORM(
+            username="e2e_operator",
+            email="e2e_operator@greenshift.io",
+            hashed_password=hash_password("OpsPassword123!"),
+            role=UserRole.OPERATOR,
+            team_id="team_alpha",
+            is_active=True,
+        )
+        db.add_all([admin_u, op_u])
+        db.commit()
+
     admin_token = client.post("/auth/login", json={
         "username": "e2e_admin",
         "password": "AdminPassword123!",
     }).json()["access_token"]
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
 
-    client.post("/auth/register", json={
-        "username": "e2e_operator",
-        "email": "e2e_operator@greenshift.io",
-        "password": "OpsPassword123!",
-        "role": "OPERATOR",
-        "team_id": "team_alpha",
-    })
     operator_token = client.post("/auth/login", json={
         "username": "e2e_operator",
         "password": "OpsPassword123!",

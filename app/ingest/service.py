@@ -55,20 +55,8 @@ def fetch_and_store_carbon(
     ttl = getattr(settings, "carbon_cache_ttl_seconds", 900)
     expires_at = now + timedelta(seconds=ttl)
 
-    for p in points:
-        orm = CarbonDataPointORM(
-            timestamp=p.timestamp,
-            region=p.region,
-            carbon_gco2_kwh=p.carbon_gco2_kwh,
-            fetched_at=p.fetched_at or now,
-            source=p.source,
-            expires_at=p.expires_at or expires_at,
-            em_zone=p.em_zone,
-            is_fallback=p.is_fallback,
-            fallback_reason=p.fallback_reason,
-        )
-        db.merge(orm)
-    db.commit()
+    from app.ingest.carbon_api import store_carbon_in_db_cache
+    store_carbon_in_db_cache(points, canonical_region, db=db, ttl_seconds=ttl)
 
     if record_provenance and points:
         sample = points[0]

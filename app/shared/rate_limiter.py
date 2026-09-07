@@ -14,3 +14,11 @@ limiter = Limiter(
     default_limits=["120/minute"],
     storage_uri="memory://",
 )
+
+
+def reset_rate_limiter() -> None:
+    """Reset all in-memory rate limiting counters (primarily used in test fixtures)."""
+    try:
+        limiter._limiter.storage.reset()
+    except Exception:
+        pass

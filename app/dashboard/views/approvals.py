@@ -80,7 +80,7 @@ def render_approvals_view() -> None:
                 with col_app:
                     if st.button(f"✓ APPROVE", key=f"app_{job_id}", type="primary", use_container_width=True):
                         try:
-                            approve_job_api(job_id, schedule_id, reason="Approved by Team Lead", approved_by=curr_user, token=token)
+                            approve_job_api(job_id, schedule_id, reason="Approved by Team Lead", token=token)
                             st.success(f"Job `{job_id}` approved successfully!")
                             st.rerun()
                         except Exception as exc:
@@ -97,7 +97,7 @@ def render_approvals_view() -> None:
                 with col_dec_btn:
                     if st.button(f"✕ DECLINE", key=f"dec_{job_id}", use_container_width=True):
                         try:
-                            decline_job_api(job_id, schedule_id, reason=custom_decline_reason, approved_by=curr_user, token=token)
+                            decline_job_api(job_id, schedule_id, reason=custom_decline_reason, token=token)
                             st.warning(f"Job `{job_id}` declined.")
                             st.rerun()
                         except Exception as exc:

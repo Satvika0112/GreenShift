@@ -6,7 +6,7 @@ FastAPI router — all ingest endpoints.
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.ingest.jobs import submit_job, get_job, list_jobs, update_job_status
@@ -110,7 +110,17 @@ def list_all_jobs(
 ):
     """List jobs, optionally filtered by team_id and/or status."""
     try:
-        jobs = list_jobs(db, team_id=team_id, status=status, limit=limit)
+        user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+        if user_role == UserRole.ADMIN.value:
+            effective_team_id = team_id
+        else:
+            # Non-admin users (TEAM_LEAD, OPERATOR, VIEWER) must only see their own team's data.
+            # A client-provided team_id query parameter must NOT allow bypassing this restriction.
+            if not current_user.team_id:
+                return []
+            effective_team_id = current_user.team_id
+
+        jobs = list_jobs(db, team_id=effective_team_id, status=status, limit=limit)
         res = []
         for j in jobs:
             item = {
@@ -162,6 +172,16 @@ def get_job_detail(
     job = get_job(db, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+    if user_role != UserRole.ADMIN.value:
+        user_team = (current_user.team_id or "").strip().lower()
+        job_team = (job.team_id or "").strip().lower()
+        if not user_team or user_team != job_team:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access forbidden: User from team '{current_user.team_id}' cannot view job belonging to team '{job.team_id}'",
+            )
 
     result = {
         "job_id": job.job_id,
@@ -246,6 +266,16 @@ def get_job_history(
     job = get_job(db, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+    if user_role != UserRole.ADMIN.value:
+        user_team = (current_user.team_id or "").strip().lower()
+        job_team = (job.team_id or "").strip().lower()
+        if not user_team or user_team != job_team:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access forbidden: User from team '{current_user.team_id}' cannot view job history belonging to team '{job.team_id}'",
+            )
 
     from app.trust.ledger import get_job_audit
     audit_trail = get_job_audit(db, job_id)

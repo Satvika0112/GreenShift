@@ -100,7 +100,7 @@ def test_user_registration_success(client):
     data = response.json()
     assert data["username"] == "alice_admin"
     assert data["email"] == "alice@greenshift.io"
-    assert data["role"] == "ADMIN"
+    assert data["role"] == "VIEWER"  # Fixed: public registration always assigns VIEWER
     assert data["team_id"] == "team-core"
     assert data["is_active"] is True
     assert "id" in data
@@ -122,7 +122,7 @@ def test_user_registration_api_v1_prefix(client):
     assert response.status_code == 201
     data = response.json()
     assert data["username"] == "bob_operator"
-    assert data["role"] == "OPERATOR"
+    assert data["role"] == "VIEWER"  # Fixed: public registration always assigns VIEWER
 
 
 def test_user_registration_duplicate_username(client):
@@ -312,7 +312,7 @@ def test_protected_endpoint_with_valid_token(client):
     me_res = client.get("/auth/me", headers=headers)
     assert me_res.status_code == 200
     assert me_res.json()["username"] == "helen_admin"
-    assert me_res.json()["role"] == "ADMIN"
+    assert me_res.json()["role"] == "VIEWER"
 
     # Call /api/v1/auth/me
     me_res_v1 = client.get("/api/v1/auth/me", headers=headers)
@@ -362,13 +362,17 @@ def test_protected_endpoint_with_expired_token(client):
 # ====================================================================
 
 def test_role_based_access_control_dependency(client):
-    # Register an ADMIN and an OPERATOR and a VIEWER
-    client.post("/auth/register", json={
-        "username": "admin_role_user",
-        "email": "admin_role@greenshift.io",
-        "password": "Password123!",
-        "role": "ADMIN",
-    })
+    # Seed an ADMIN in database, and register a VIEWER publicly
+    with SessionLocal() as db:
+        db.add(UserORM(
+            username="admin_role_user",
+            email="admin_role@greenshift.io",
+            hashed_password=hash_password("Password123!"),
+            role=UserRole.ADMIN,
+            is_active=True,
+        ))
+        db.commit()
+
     client.post("/auth/register", json={
         "username": "viewer_role_user",
         "email": "viewer_role@greenshift.io",

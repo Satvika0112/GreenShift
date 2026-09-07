@@ -70,11 +70,69 @@ def register(
             )
 
     hashed_pw = hash_password(body.password)
+    # Security enforcement: Public self-registration ALWAYS assigns UserRole.VIEWER
     user = UserORM(
         username=body.username,
         email=body.email,
         hashed_password=hashed_pw,
-        role=body.role,
+        role=UserRole.VIEWER,
+        team_id=body.team_id,
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    role_str = UserRole.VIEWER.value
+    try:
+        record_user_registered(db, username=user.username, role=role_str, team_id=user.team_id)
+    except Exception:
+        pass
+
+    return user
+
+
+@router.post(
+    "/admin/create-user",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a user with an assigned role (Admin only)",
+)
+@limiter.limit("30/minute")
+def admin_create_user(
+    request: Request,
+    body: UserRegisterRequest,
+    current_admin: UserORM = Depends(require_roles(UserRole.ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """
+    Privileged endpoint: An authenticated ADMIN may create a user and assign
+    explicit roles (VIEWER, OPERATOR, TEAM_LEAD, ADMIN).
+    """
+    existing = db.query(UserORM).filter(
+        or_(UserORM.username == body.username, UserORM.email == body.email)
+    ).first()
+
+    if existing:
+        if existing.username == body.username:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Username '{body.username}' is already taken",
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Email '{body.email}' is already registered",
+            )
+
+    assigned_role = body.role if body.role is not None else UserRole.VIEWER
+
+    hashed_pw = hash_password(body.password)
+    user = UserORM(
+        username=body.username,
+        email=body.email,
+        hashed_password=hashed_pw,
+        role=assigned_role,
         team_id=body.team_id,
         is_active=True,
     )
@@ -89,6 +147,7 @@ def register(
         pass
 
     return user
+
 
 
 @router.post(

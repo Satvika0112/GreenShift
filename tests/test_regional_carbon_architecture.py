@@ -142,23 +142,35 @@ class TestCarbonAPIRegionAwareness:
         }
 
         with patch.dict(os.environ, {"ELECTRICITY_MAPS_API_KEY": "valid_mock_token", "SIMULATE_CARBON_API_DOWN": "false"}):
-            with patch("httpx.Client.get", return_value=mock_resp) as mock_get:
-                # Test IN-GJ -> IN-WE
-                points = fetch_live_carbon_from_api("IN-GJ", now, now + timedelta(hours=3))
-                assert len(points) == 3
-                assert points[0].region == "IN-GJ"
-                assert points[0].em_zone == "IN-WE"
-                # Check call parameters
-                call_args = mock_get.call_args
-                assert call_args.kwargs["params"]["zone"] == "IN-WE"
+            # Also patch the settings object directly since conftest.py has already loaded it
+            with patch("app.ingest.carbon_api.settings") as mock_settings:
+                mock_settings.simulate_carbon_api_down = False
+                mock_settings.electricity_maps_api_key = "valid_mock_token"
+                mock_settings.carbon_api_base_url = "https://api.electricitymaps.com/v4"
+                mock_settings.carbon_fallback_gco2_per_kwh = 400.0
+                with patch("httpx.Client.get", return_value=mock_resp) as mock_get:
+                    # Test IN-GJ -> IN-WE
+                    points = fetch_live_carbon_from_api("IN-GJ", now, now + timedelta(hours=3))
+                    assert len(points) == 3
+                    assert points[0].region == "IN-GJ"
+                    assert points[0].em_zone == "IN-WE"
+                    # Check call parameters
+                    call_args = mock_get.call_args
+                    assert call_args.kwargs["params"]["zone"] == "IN-WE"
 
-            with patch("httpx.Client.get", return_value=mock_resp) as mock_get:
-                # Test IN-HP -> IN-NO
-                points = fetch_live_carbon_from_api("Himachal Pradesh", now, now + timedelta(hours=3))
-                assert points[0].region == "IN-HP"
-                assert points[0].em_zone == "IN-NO"
-                call_args = mock_get.call_args
-                assert call_args.kwargs["params"]["zone"] == "IN-NO"
+            with patch("app.ingest.carbon_api.settings") as mock_settings:
+                mock_settings.simulate_carbon_api_down = False
+                mock_settings.electricity_maps_api_key = "valid_mock_token"
+                mock_settings.carbon_api_base_url = "https://api.electricitymaps.com/v4"
+                mock_settings.carbon_fallback_gco2_per_kwh = 400.0
+                with patch("httpx.Client.get", return_value=mock_resp) as mock_get:
+                    # Test IN-HP -> IN-NO
+                    points = fetch_live_carbon_from_api("Himachal Pradesh", now, now + timedelta(hours=3))
+                    assert points[0].region == "IN-HP"
+                    assert points[0].em_zone == "IN-NO"
+                    call_args = mock_get.call_args
+                    assert call_args.kwargs["params"]["zone"] == "IN-NO"
+
 
     def test_cached_carbon_data_is_region_specific(self, db_session: Session):
         """Ensure a carbon value for IN-TG is NEVER returned for IN-GJ."""

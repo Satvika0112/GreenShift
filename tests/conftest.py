@@ -1,8 +1,9 @@
 import os
-# Ensure test execution defaults to local SQLite database regardless of host environment
+# Ensure test execution defaults to local SQLite database and mock API regardless of host environment
 os.environ.setdefault("DATABASE_URL", "sqlite:///./greenshift.db")
 if "DATABASE_URL" in os.environ and os.environ["DATABASE_URL"].startswith("postgresql"):
     os.environ["DATABASE_URL"] = "sqlite:///./greenshift.db"
+os.environ["SIMULATE_CARBON_API_DOWN"] = "true"
 
 import pytest
 from datetime import datetime, timezone, timedelta
@@ -10,6 +11,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.shared.config import settings
+settings.simulate_carbon_api_down = True
+
 import app.shared.database as db_mod
 if str(db_mod.engine.url).startswith("postgresql"):
     db_mod.engine = db_mod.build_engine("sqlite:///./greenshift.db")
@@ -18,7 +21,7 @@ if str(db_mod.engine.url).startswith("postgresql"):
 from app.shared.models import Base, JobStatus
 
 
-from app.shared.rate_limiter import limiter
+from app.shared.rate_limiter import limiter, reset_rate_limiter
 
 
 @pytest.fixture(autouse=True)
@@ -27,10 +30,7 @@ def default_test_setup(monkeypatch):
     import os
     if "SIMULATE_CARBON_API_DOWN" not in os.environ:
         monkeypatch.setenv("SIMULATE_CARBON_API_DOWN", "true")
-    try:
-        limiter.reset()
-    except Exception:
-        pass
+    reset_rate_limiter()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

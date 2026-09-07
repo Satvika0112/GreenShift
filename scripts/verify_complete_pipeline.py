@@ -28,10 +28,15 @@ if sys.platform == "win32":
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# If PostgreSQL is not reachable, default to local SQLite database
+if "DATABASE_URL" not in os.environ or os.environ["DATABASE_URL"].startswith("postgresql"):
+    try:
+        import socket
+        with socket.create_connection(("localhost", 5432), timeout=0.1):
+            pass
+    except Exception:
+        os.environ["DATABASE_URL"] = "sqlite:///./greenshift.db"
 from datetime import datetime, timedelta, timezone
-
-from app.shared.config import settings
-from app.shared.database import init_db, SessionLocal
 from app.shared.models import JobSubmitRequest, EventType, CarbonDataPoint, TariffDataPoint
 from app.ingest.jobs import submit_job
 from app.ingest.job_csv_loader import get_job_csv_count
@@ -55,6 +60,8 @@ from app.decide.impact_calculator import calculate_impact
 from app.decide.service import schedule_and_store
 from app.dispatch.job_builder import build_kubernetes_job
 from app.trust.ledger import append_event, verify_chain
+from app.shared.database import SessionLocal, init_db
+
 
 
 TOTAL_STEPS = 15
@@ -250,15 +257,24 @@ def main():
     from app.api.main import app
     client = TestClient(app)
 
+    from app.shared.auth import create_access_token, seed_default_users
+    from app.shared.models import UserORM
+    with SessionLocal() as db_session:
+        seed_default_users(db_session)
+        admin_u = db_session.query(UserORM).filter(UserORM.username == "admin").first()
+        admin_id = admin_u.id if admin_u else 1
+    admin_token = create_access_token(user_id=admin_id, username="admin", role="ADMIN")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
     r_inv = client.get("/api/v1/regional/inventory")
     assert r_inv.status_code == 200
     assert len(r_inv.json().get("inventory", [])) >= 5
 
-    r_k8s = client.get("/api/v1/kubernetes/state")
+    r_k8s = client.get("/api/v1/kubernetes/state", headers=headers)
     assert r_k8s.status_code == 200
     assert "cluster_health" in r_k8s.json()
 
-    r_stat = client.get("/api/v1/data-sources/status")
+    r_stat = client.get("/api/v1/data-sources/status", headers=headers)
     assert r_stat.status_code == 200
     assert "regional" in r_stat.json()
 

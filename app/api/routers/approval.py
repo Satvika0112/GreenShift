@@ -66,13 +66,12 @@ def api_approve_schedule(
       - OPERATOR / VIEWER: Forbidden (403).
     """
     try:
-        approver = body.approved_by if body.approved_by and body.approved_by != "admin" else current_user.username
         return approve_schedule(
             db=db,
             job_id=job_id,
             schedule_id=body.schedule_id,
             reason=body.reason,
-            approved_by=approver,
+            approved_by=current_user.username,
             user=current_user,
         )
     except ApprovalNotFoundError as exc:
@@ -117,13 +116,12 @@ def api_decline_schedule(
       - OPERATOR / VIEWER: Forbidden (403).
     """
     try:
-        decliner = body.approved_by if body.approved_by and body.approved_by != "admin" else current_user.username
         return decline_schedule(
             db=db,
             job_id=job_id,
             schedule_id=body.schedule_id,
             reason=body.reason,
-            approved_by=decliner,
+            approved_by=current_user.username,
             user=current_user,
         )
     except ApprovalNotFoundError as exc:
@@ -157,7 +155,16 @@ def api_get_pending_approvals(
 ):
     """Retrieve all jobs waiting for human approval with proposed schedules."""
     try:
-        return get_pending_approvals(db, team_id=team_id)
+        user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+        if user_role == UserRole.ADMIN.value:
+            effective_team_id = team_id
+        else:
+            # Non-admin users must only receive pending approvals for current_user.team_id
+            if not current_user.team_id:
+                return []
+            effective_team_id = current_user.team_id
+
+        return get_pending_approvals(db, team_id=effective_team_id)
     except Exception as exc:
         logger.error(f"Error fetching pending approvals: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while retrieving pending approvals.")
@@ -180,12 +187,22 @@ def api_get_job_approvals(
 ):
     """Retrieve all approvals or declines recorded for a given job."""
     try:
+        from app.ingest.jobs import get_job
+        job = get_job(db, job_id)
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job '{job_id}' not found")
+
+        user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+        if user_role != UserRole.ADMIN.value:
+            user_team = (current_user.team_id or "").strip().lower()
+            job_team = (job.team_id or "").strip().lower()
+            if not user_team or user_team != job_team:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Access forbidden: User from team '{current_user.team_id}' cannot view approvals for job belonging to team '{job.team_id}'",
+                )
+
         approvals = get_job_approvals(db, job_id)
-        if not approvals:
-            from app.ingest.jobs import get_job
-            job = get_job(db, job_id)
-            if job is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job '{job_id}' not found")
         return [
             ApprovalResponse(
                 id=a.id,

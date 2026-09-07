@@ -19,9 +19,12 @@ from fastapi.testclient import TestClient
 from app.api.main import app
 from app.shared.database import init_db, SessionLocal
 from app.shared.models import (
+    ApprovalORM,
+    AuditEventORM,
     JobORM,
     JobStatus,
     JobSubmitRequest,
+    KubernetesExecutionORM,
     ScheduleDecisionORM,
     UserORM,
     UserRole,
@@ -43,23 +46,53 @@ from app.shared.utils import utcnow
 
 @pytest.fixture(autouse=True)
 def setup_rbac_db():
-    """Ensure database tables exist and clean up users & jobs before each test."""
-    init_db()
+    """Ensure clean database tables for users & jobs before each test."""
+    from sqlalchemy import text as sa_text
+    from app.shared.database import engine
+    from app.shared.database import get_db
+    from app.api.main import app as _app
+
+    _app.dependency_overrides.pop(get_db, None)
+
     db = SessionLocal()
     try:
+        db.query(ApprovalORM).delete()
+        db.query(KubernetesExecutionORM).delete()
+        db.query(ScheduleDecisionORM).delete()
+        db.query(AuditEventORM).delete()
+        db.query(JobORM).delete()
         db.query(UserORM).delete()
         db.commit()
     finally:
         db.close()
+
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(sa_text("PRAGMA wal_checkpoint(PASSIVE)"))
+    except Exception:
+        pass
 
     yield
 
+    _app.dependency_overrides.pop(get_db, None)
+
     db = SessionLocal()
     try:
+        db.query(ApprovalORM).delete()
+        db.query(KubernetesExecutionORM).delete()
+        db.query(ScheduleDecisionORM).delete()
+        db.query(AuditEventORM).delete()
+        db.query(JobORM).delete()
         db.query(UserORM).delete()
         db.commit()
     finally:
         db.close()
+
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(sa_text("PRAGMA wal_checkpoint(PASSIVE)"))
+    except Exception:
+        pass
 
 
 @pytest.fixture
@@ -70,65 +103,52 @@ def client():
 @pytest.fixture
 def users_and_tokens(client):
     """Create test users for all roles and return a dictionary of their tokens."""
-    # 1. Admin
-    reg_admin = client.post("/auth/register", json={
-        "username": "admin_user",
-        "email": "admin@greenshift.io",
-        "password": "AdminPassword123!",
-        "role": "ADMIN",
-    }).json()
+    with SessionLocal() as db:
+        users = [
+            ("admin_user", "admin@greenshift.io", "AdminPassword123!", UserRole.ADMIN, None),
+            ("lead_team_a", "lead_a@greenshift.io", "LeadPassword123!", UserRole.TEAM_LEAD, "team-a"),
+            ("lead_team_b", "lead_b@greenshift.io", "LeadPassword123!", UserRole.TEAM_LEAD, "team-b"),
+            ("operator_user", "operator@greenshift.io", "OperatorPassword123!", UserRole.OPERATOR, "team-a"),
+            ("viewer_user", "viewer@greenshift.io", "ViewerPassword123!", UserRole.VIEWER, "team-a"),
+        ]
+        user_objs = {}
+        for username, email, pwd, role, team in users:
+            u = UserORM(
+                username=username,
+                email=email,
+                hashed_password=hash_password(pwd),
+                role=role,
+                team_id=team,
+                is_active=True,
+            )
+            db.add(u)
+            user_objs[username] = u
+        db.commit()
+        for u in user_objs.values():
+            db.refresh(u)
+
+        reg_admin = {"id": user_objs["admin_user"].id}
+        reg_lead_a = {"id": user_objs["lead_team_a"].id}
+        reg_lead_b = {"id": user_objs["lead_team_b"].id}
+        reg_operator = {"id": user_objs["operator_user"].id}
+        reg_viewer = {"id": user_objs["viewer_user"].id}
+
     token_admin = client.post("/auth/login", json={
         "username": "admin_user",
         "password": "AdminPassword123!",
     }).json()["access_token"]
-
-    # 2. Team A Lead
-    reg_lead_a = client.post("/auth/register", json={
-        "username": "lead_team_a",
-        "email": "lead_a@greenshift.io",
-        "password": "LeadPassword123!",
-        "role": "TEAM_LEAD",
-        "team_id": "team-a",
-    }).json()
     token_lead_a = client.post("/auth/login", json={
         "username": "lead_team_a",
         "password": "LeadPassword123!",
     }).json()["access_token"]
-
-    # 3. Team B Lead
-    reg_lead_b = client.post("/auth/register", json={
-        "username": "lead_team_b",
-        "email": "lead_b@greenshift.io",
-        "password": "LeadPassword123!",
-        "role": "TEAM_LEAD",
-        "team_id": "team-b",
-    }).json()
     token_lead_b = client.post("/auth/login", json={
         "username": "lead_team_b",
         "password": "LeadPassword123!",
     }).json()["access_token"]
-
-    # 4. Operator
-    reg_operator = client.post("/auth/register", json={
-        "username": "operator_user",
-        "email": "operator@greenshift.io",
-        "password": "OperatorPassword123!",
-        "role": "OPERATOR",
-        "team_id": "team-a",
-    }).json()
     token_operator = client.post("/auth/login", json={
         "username": "operator_user",
         "password": "OperatorPassword123!",
     }).json()["access_token"]
-
-    # 5. Viewer
-    reg_viewer = client.post("/auth/register", json={
-        "username": "viewer_user",
-        "email": "viewer@greenshift.io",
-        "password": "ViewerPassword123!",
-        "role": "VIEWER",
-        "team_id": "team-a",
-    }).json()
     token_viewer = client.post("/auth/login", json={
         "username": "viewer_user",
         "password": "ViewerPassword123!",
@@ -145,6 +165,7 @@ def users_and_tokens(client):
 
 def create_test_pending_job(db, job_id: str, team_id: str) -> tuple[JobORM, ScheduleDecisionORM]:
     """Helper to create a job and schedule decision in PENDING_APPROVAL status."""
+    from sqlalchemy import text as sa_text
     now = utcnow()
     req = JobSubmitRequest(
         job_id=job_id,
@@ -157,7 +178,6 @@ def create_test_pending_job(db, job_id: str, team_id: str) -> tuple[JobORM, Sche
     )
     job = submit_job(db, req)
     dec = schedule_and_store(db, job, record_audit=True)
-    db.refresh(job)
     return job, dec
 
 

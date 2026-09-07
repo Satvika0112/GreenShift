@@ -26,13 +26,10 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    """Resolve target database URL prioritizing settings/environment over alembic.ini default."""
+    """Resolve target database URL prioritizing explicit config or environment over defaults."""
     url = config.get_main_option("sqlalchemy.url")
-    if not url or url == "sqlite:///./greenshift.db":
-        if getattr(settings, "database_url", None):
-            url = settings.database_url
     if not url:
-        url = "sqlite:///./greenshift.db"
+        url = os.environ.get("DATABASE_URL") or getattr(settings, "database_url", None) or "sqlite:///./greenshift.db"
 
     # Normalize legacy postgres:// scheme to postgresql://
     if url.startswith("postgres://"):

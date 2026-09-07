@@ -732,7 +732,6 @@ class ApprovalRequest(BaseModel):
 
     schedule_id: int = Field(..., description="ID of the ScheduleDecisionORM")
     reason: Optional[str] = Field(None, description="Optional approval comment or required decline justification")
-    approved_by: Optional[str] = Field(default="admin", description="User identifier who took the decision")
 
 
 class ApprovalResponse(BaseModel):
@@ -793,7 +792,10 @@ class UserRegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=50, description="Unique username")
     email: str = Field(..., description="User email address")
     password: str = Field(..., min_length=6, description="Plaintext password")
-    role: Optional[UserRole] = Field(default=UserRole.VIEWER, description="User role")
+    role: Optional[UserRole] = Field(
+        default=UserRole.VIEWER,
+        description="User role (ignored on public /auth/register where all users receive VIEWER; honored only for authenticated admin user creation)",
+    )
     team_id: Optional[str] = Field(default=None, description="Optional team identifier")
 
 

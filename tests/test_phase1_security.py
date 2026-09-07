@@ -16,7 +16,7 @@ from app.api.main import app
 from app.shared.config import Settings, validate_security_config, DEV_INSECURE_JWT_SECRETS
 from app.shared.database import init_db, SessionLocal
 from app.shared.models import UserORM, UserRole
-from app.shared.auth import create_access_token
+from app.shared.auth import create_access_token, hash_password
 
 
 @pytest.fixture(autouse=True)
@@ -211,14 +211,17 @@ def test_users_endpoint_non_admin_returns_403(client):
 
 def test_users_endpoint_admin_succeeds_200(client):
     """Calling /api/v1/auth/users with ADMIN token must succeed (200 OK) and list all users."""
-    # Register admin
-    client.post("/auth/register", json={
-        "username": "admin_sec_user",
-        "email": "admin_sec@greenshift.io",
-        "password": "AdminPassword123!",
-        "role": "ADMIN",
-    })
-    # Register regular user
+    # Seed admin directly in database with ADMIN role
+    with SessionLocal() as db:
+        db.add(UserORM(
+            username="admin_sec_user",
+            email="admin_sec@greenshift.io",
+            hashed_password=hash_password("AdminPassword123!"),
+            role=UserRole.ADMIN,
+            is_active=True,
+        ))
+        db.commit()
+    # Register regular user via public registration
     client.post("/auth/register", json={
         "username": "regular_sec_user",
         "email": "regular_sec@greenshift.io",

@@ -5,7 +5,7 @@ GreenShift — Users & Access Control (RBAC) View.
 import pandas as pd
 import streamlit as st
 
-from app.dashboard.api_client import fetch_users, register_user_api
+from app.dashboard.api_client import fetch_users, register_user_api, admin_create_user_api
 from app.dashboard.components import render_section_header, render_metric_card, render_status_badge
 
 
@@ -68,13 +68,23 @@ def render_users_access_view() -> None:
                     st.warning("Please fill in all required user fields.")
                 else:
                     try:
-                        register_user_api(
-                            username=new_username,
-                            email=new_email,
-                            password=new_password,
-                            role=new_role,
-                            team_id=new_team if new_role != "ADMIN" else None,
-                        )
+                        if token and new_role != "VIEWER":
+                            admin_create_user_api(
+                                username=new_username,
+                                email=new_email,
+                                password=new_password,
+                                role=new_role,
+                                team_id=new_team if new_role != "ADMIN" else None,
+                                token=token,
+                            )
+                        else:
+                            register_user_api(
+                                username=new_username,
+                                email=new_email,
+                                password=new_password,
+                                role=new_role,
+                                team_id=new_team if new_role != "ADMIN" else None,
+                            )
                         st.success(f"User `{new_username}` registered successfully!")
                         st.rerun()
                     except Exception as exc:
