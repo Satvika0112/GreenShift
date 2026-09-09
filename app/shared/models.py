@@ -238,6 +238,7 @@ class JobORM(Base):
     workload_name        = Column(String, nullable=True)   # workload name/identifier
     team_id              = Column(String, nullable=False, index=True)  # team within org — NOT removed
     tenant_id            = Column(String, ForeignKey("tenants.id"), nullable=True, index=True)  # org (nullable for backward compat)
+    submitted_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)  # server-derived from authenticated identity
     submitted_at         = Column(DateTime(timezone=True), nullable=False, index=True)
     deadline             = Column(DateTime(timezone=True), nullable=False, index=True)
     runtime_minutes      = Column(Integer, nullable=False)
@@ -593,6 +594,65 @@ class RegionalTariffORM(Base):
     fixed_charge       = Column(Float, nullable=True)
     price_per_kwh_usd  = Column(Float, nullable=False)                # Normalized USD rate for calculations
     created_at         = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLAlchemy ORM — Notification
+# ─────────────────────────────────────────────────────────────────────────────
+
+class NotificationORM(Base):
+    """
+    In-app / email notification record.
+
+    Recipient is always server-derived (never client-supplied). Email delivery
+    is tracked separately from in-app state so an email failure can never
+    affect workload/business state — see app.notify.email.
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        UniqueConstraint("recipient_user_id", "dedup_key", name="uq_notifications_recipient_dedup"),
+        Index("ix_notifications_recipient_read", "recipient_user_id", "read_at"),
+        Index("ix_notifications_email_pending", "email_status", "next_attempt_at"),
+        CheckConstraint(
+            "severity IN ('INFO', 'WARNING', 'CRITICAL')",
+            name="ck_notifications_severity_valid",
+        ),
+        CheckConstraint(
+            "email_status IN ('NOT_REQUIRED', 'PENDING', 'SENT', 'FAILED')",
+            name="ck_notifications_email_status_valid",
+        ),
+    )
+
+    id                 = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id          = Column(String, ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True, index=True)
+    recipient_user_id  = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    job_id             = Column(String, nullable=True, index=True)
+    event_type         = Column(SAEnum(EventType), nullable=False, index=True)
+    category           = Column(String(30), nullable=False, index=True)  # SCHEDULING/APPROVAL/EXECUTION/ACCOUNT/SECURITY/INFRASTRUCTURE
+    severity           = Column(String(20), nullable=False, default="INFO")
+    title              = Column(String, nullable=False)
+    message            = Column(Text, nullable=False)
+    action_url         = Column(String, nullable=True)
+    created_at         = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    read_at            = Column(DateTime(timezone=True), nullable=True)
+
+    # Idempotency: "<event_type>:<job_id-or-none>[:<suffix>]" — a second
+    # identical event for the same recipient is a no-op, not a duplicate row.
+    dedup_key          = Column(String, nullable=False)
+
+    # Email delivery lifecycle — independent of the business transaction.
+    email_required     = Column(Boolean, nullable=False, default=False)
+    email_status       = Column(String(20), nullable=False, default="NOT_REQUIRED")
+    email_attempts     = Column(Integer, nullable=False, default=0)
+    email_sent_at      = Column(DateTime(timezone=True), nullable=True)
+    email_failed_at    = Column(DateTime(timezone=True), nullable=True)
+    last_error         = Column(Text, nullable=True)
+    next_attempt_at    = Column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def is_read(self) -> bool:
+        return self.read_at is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1097,3 +1157,24 @@ class TenantResponse(BaseModel):
     name: str
     is_active: bool
     created_at: datetime
+
+
+class NotificationResponse(BaseModel):
+    """Notification list/detail item."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    job_id: Optional[str] = None
+    event_type: EventType
+    category: str
+    severity: str
+    title: str
+    message: str
+    action_url: Optional[str] = None
+    created_at: datetime
+    read_at: Optional[datetime] = None
+    is_read: bool = False
+
+
+class UnreadCountResponse(BaseModel):
+    unread_count: int

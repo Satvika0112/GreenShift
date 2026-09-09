@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import uuid
 import streamlit as st
 
-from app.dashboard.api_client import submit_job_api, schedule_job_api, approve_job_api, dispatch_job_api
+from app.dashboard.api_client import submit_job_api, schedule_job_api, approve_job_api
 from app.dashboard.components import render_section_header, render_metric_card, render_decision_factor
 
 
@@ -202,28 +202,21 @@ def render_submit_workload_view() -> None:
                     del st.session_state["recent_submission"]
                     st.rerun()
         elif curr_role in ("ADMIN", "TEAM_LEAD", "OPERATOR"):
-            st.markdown("#### ⚡ Immediate Approval & Dispatch Gate")
-            c_imm1, c_imm2, c_imm3 = st.columns([1.2, 1.5, 1])
+            # NOTE: Approval and dispatch are deliberately two separate, independently
+            # reviewed steps — never combine them into one "Approve & Dispatch" action.
+            # Dispatch only becomes available once the job shows APPROVED above, via
+            # the Workloads Monitor / automated dispatcher.
+            st.markdown("#### ⚡ Human Approval Gate")
+            c_imm1, c_imm3 = st.columns([1.5, 1])
             with c_imm1:
                 if st.button("✓ Approve Schedule Now", key=f"imm_app_{sub_job_id}", type="primary"):
                     try:
                         approve_job_api(sub_job_id, schedule_id=sched_res.get("id", 0), token=token)
                         st.session_state["recent_submission"]["status"] = "APPROVED"
-                        st.success(f"Workload `{sub_job_id}` APPROVED!")
+                        st.success(f"Workload `{sub_job_id}` APPROVED! It will dispatch automatically at its scheduled window, or can be dispatched from the Workloads Monitor.")
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Approval failed: {exc}")
-            with c_imm2:
-                if st.button("🚀 Approve & Dispatch to Kubernetes", key=f"imm_disp_{sub_job_id}"):
-                    try:
-                        approve_job_api(sub_job_id, schedule_id=sched_res.get("id", 0), token=token)
-                        disp_res = dispatch_job_api(sub_job_id, token=token)
-                        p_name = disp_res.get("pod_name") or disp_res.get("kubernetes_job_name", "gs-pod")
-                        st.session_state["recent_submission"]["status"] = disp_res.get("gs_status", "QUEUED")
-                        st.success(f"Dispatched! Status: {disp_res.get('gs_status', 'QUEUED')} | Pod: {p_name}")
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"Dispatch failed: {exc}")
             with c_imm3:
                 if st.button("✕ Dismiss", key="dismiss_sub"):
                     del st.session_state["recent_submission"]

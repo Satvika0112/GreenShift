@@ -257,7 +257,7 @@ class TestOperationalMetricsTracking:
         db.add_all([job2, sd2])
         db.commit()
 
-        decline_schedule(db, "JOB-APPR-M2", sd2.id, approved_by="admin", user=user_admin)
+        decline_schedule(db, "JOB-APPR-M2", sd2.id, reason="No longer needed", approved_by="admin", user=user_admin)
 
         summary = metrics.get_summary()
         assert summary["approval"]["approvals"] == 1

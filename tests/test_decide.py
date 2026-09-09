@@ -116,17 +116,18 @@ class TestCandidateSlots:
 
 class TestInterpolation:
     def test_exact_timestamp_returns_value(self, now, carbon_curve):
-        val = _interpolate_carbon(now, carbon_curve)
+        val, is_fallback = _interpolate_carbon(now, carbon_curve)
         assert val == pytest.approx(300.0)
 
     def test_nearest_neighbour(self, now, carbon_curve):
         ts = now + timedelta(hours=2, minutes=20)
-        val = _interpolate_carbon(ts, carbon_curve)
+        val, is_fallback = _interpolate_carbon(ts, carbon_curve)
         assert val in (carbon_curve[2].carbon_gco2_kwh, carbon_curve[3].carbon_gco2_kwh)
 
     def test_empty_curve_returns_none_not_fabricated_value(self, now):
-        val = _interpolate_carbon(now, [])
+        val, is_fallback = _interpolate_carbon(now, [])
         assert val is None
+        assert is_fallback is False
 
     def test_empty_tariff_returns_none(self, now):
         val = _interpolate_tariff(now, [])

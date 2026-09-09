@@ -212,7 +212,7 @@ def schedule_batch(
                 reasons.append(CandidateRejectionReason.DEADLINE_VIOLATION)
 
             # Carbon Telemetry
-            c_intensity = _interpolate_carbon(start, carbon_curve)
+            c_intensity, _c_is_fallback = _interpolate_carbon(start, carbon_curve)
             if c_intensity is None:
                 reasons.append(CandidateRejectionReason.CARBON_DATA_UNAVAILABLE)
                 c_kg = None
@@ -317,7 +317,8 @@ def schedule_batch(
         # Quantitative Impact calculation (vs immediate baseline)
         baseline_start = candidate_starts[0]
         baseline_end = baseline_start + timedelta(minutes=job.runtime_minutes)
-        baseline_intensity = _interpolate_carbon(baseline_start, carbon_curve) or chosen.carbon_intensity or 0.0
+        baseline_intensity, _baseline_is_fallback = _interpolate_carbon(baseline_start, carbon_curve)
+        baseline_intensity = baseline_intensity or chosen.carbon_intensity or 0.0
         baseline_tariff_usd = _interpolate_tariff(baseline_start, tariff_curve, region_id=region_id) or chosen.tariff_usd or 0.0
         baseline_native_rate = _get_native_rate_at_slot(region_id, plan, baseline_start, baseline_tariff_usd)
 

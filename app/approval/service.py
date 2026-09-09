@@ -75,10 +75,9 @@ def check_user_approval_permission(job: JobORM, user: Optional[UserORM] = None) 
     # Company Admin / Team Lead
     if user_role in (UserRole.PLATFORM_ADMIN.value, UserRole.ADMIN.value, UserRole.COMPANY_ADMIN.value, UserRole.TEAM_LEAD.value):
         if user.tenant_id and job.tenant_id and user.tenant_id != job.tenant_id:
-            raise ApprovalPermissionError(
-                f"User from company '{user.company_name or user.tenant_id}' cannot approve/decline jobs for '{job.company_name or job.tenant_id}'",
-                status_code=403,
-            )
+            # Cross-tenant access -> 404 (not 403) to avoid leaking job existence,
+            # consistent with app.api.tenant_scope.get_tenant_jobs.
+            raise ApprovalNotFoundError(f"Job '{job.job_id}' not found")
         if user_role == UserRole.TEAM_LEAD.value and user.team_id and job.team_id:
             if user.team_id.strip().lower() != job.team_id.strip().lower():
                 raise ApprovalPermissionError(
@@ -198,8 +197,22 @@ def approve_schedule(
     )
     db.add(approval)
 
-    job.status = JobStatus.APPROVED
-    job.updated_at = now
+    # Atomic conditional transition: only succeeds if the job is still
+    # PENDING_APPROVAL. Guards against a concurrent approve/decline race —
+    # if another request already transitioned this job, rowcount is 0 and
+    # we abort instead of silently overwriting a contradictory decision.
+    rows_updated = (
+        db.query(JobORM)
+        .filter(JobORM.job_id == job.job_id, JobORM.status == JobStatus.PENDING_APPROVAL)
+        .update({"status": JobStatus.APPROVED, "updated_at": now}, synchronize_session=False)
+    )
+    if rows_updated == 0:
+        db.rollback()
+        raise ApprovalValidationError(
+            f"Job '{job_id}' was concurrently modified by another approval decision. Refresh and retry.",
+            status_code=409,
+        )
+
     db.commit()
     db.refresh(approval)
     db.refresh(job)
@@ -220,6 +233,25 @@ def approve_schedule(
         )
     except Exception as exc:
         logger.warning("Audit record failed for job %s approval: %s", job.job_id, exc)
+
+    if job.submitted_by_user_id:
+        try:
+            from app.notify.service import create_notification
+            from app.shared.models import EventType
+            create_notification(
+                db,
+                recipient_user_id=job.submitted_by_user_id,
+                event_type=EventType.APPROVAL_GRANTED,
+                category="APPROVAL",
+                severity="INFO",
+                title=f"Workload {job.job_id} approved",
+                message=f"Schedule for workload '{job.job_id}' was approved by {approved_by or 'admin'}.",
+                tenant_id=job.tenant_id,
+                job_id=job.job_id,
+                email_required=False,
+            )
+        except Exception as exc:
+            logger.warning("Notification failed for job %s approval: %s", job.job_id, exc)
 
     logger.info(
         "Job %s schedule %d APPROVED by %s (selected_start: %s UTC)",
@@ -309,8 +341,19 @@ def decline_schedule(
     )
     db.add(approval)
 
-    job.status = JobStatus.DECLINED
-    job.updated_at = now
+    # Atomic conditional transition — see approve_schedule() for rationale.
+    rows_updated = (
+        db.query(JobORM)
+        .filter(JobORM.job_id == job.job_id, JobORM.status == JobStatus.PENDING_APPROVAL)
+        .update({"status": JobStatus.DECLINED, "updated_at": now}, synchronize_session=False)
+    )
+    if rows_updated == 0:
+        db.rollback()
+        raise ApprovalValidationError(
+            f"Job '{job_id}' was concurrently modified by another approval decision. Refresh and retry.",
+            status_code=409,
+        )
+
     db.commit()
     db.refresh(approval)
     db.refresh(job)
@@ -331,6 +374,25 @@ def decline_schedule(
         )
     except Exception as exc:
         logger.warning("Audit record failed for job %s decline: %s", job.job_id, exc)
+
+    if job.submitted_by_user_id:
+        try:
+            from app.notify.service import create_notification
+            from app.shared.models import EventType
+            create_notification(
+                db,
+                recipient_user_id=job.submitted_by_user_id,
+                event_type=EventType.APPROVAL_DECLINED,
+                category="APPROVAL",
+                severity="WARNING",
+                title=f"Workload {job.job_id} declined",
+                message=f"Schedule for workload '{job.job_id}' was declined by {approved_by or 'admin'}. Reason: {approval.reason}",
+                tenant_id=job.tenant_id,
+                job_id=job.job_id,
+                email_required=False,
+            )
+        except Exception as exc:
+            logger.warning("Notification failed for job %s decline: %s", job.job_id, exc)
 
     logger.info("Job %s schedule %d DECLINED by %s (reason: %s)", job_id, schedule_id, approved_by, approval.reason)
 

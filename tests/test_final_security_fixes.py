@@ -193,6 +193,77 @@ def test_non_admin_calling_admin_create_user_returns_403(client, seed_users):
     assert resp_viewer.status_code == 403
 
 
+def test_tenant_scoped_admin_cannot_mint_platform_admin_via_legacy_endpoint(client):
+    """
+    P0 regression: a Company Admin (legacy role=ADMIN with a tenant_id set) must
+    NOT be able to use the deprecated /auth/admin/create-user endpoint to create
+    a global Platform Admin (role=PLATFORM_ADMIN/ADMIN with no tenant_id, which
+    is_platform_admin() treats as global scope). Also verifies any user they
+    legitimately create is scoped to their own tenant, never left tenant_id=NULL.
+    """
+    from app.shared.models import TenantORM
+
+    with SessionLocal() as db:
+        db.add(TenantORM(id="tenant-escalation-test", name="Escalation Test Co", is_active=True))
+        company_admin = UserORM(
+            username="company_admin_escalation",
+            email="company_admin_escalation@test.com",
+            hashed_password=hash_password("CompanyAdminPass123!"),
+            role=UserRole.ADMIN,          # legacy alias — tenant-scoped when tenant_id is set
+            tenant_id="tenant-escalation-test",
+            is_active=True,
+        )
+        db.add(company_admin)
+        db.commit()
+        db.refresh(company_admin)
+        token = create_access_token(
+            user_id=company_admin.id, username=company_admin.username,
+            role="ADMIN", tenant_id="tenant-escalation-test",
+        )
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Attempt to mint a global Platform Admin — must be rejected.
+    resp = client.post("/auth/admin/create-user", headers=headers, json={
+        "username": "minted_platform_admin",
+        "email": "minted_platform_admin@evil.example",
+        "password": "Password123!",
+        "role": "PLATFORM_ADMIN",
+    })
+    assert resp.status_code == 403
+
+    resp2 = client.post("/auth/admin/create-user", headers=headers, json={
+        "username": "minted_admin_alias",
+        "email": "minted_admin_alias@evil.example",
+        "password": "Password123!",
+        "role": "ADMIN",
+        "tenant_id": None,  # explicit attempt to leave it global-scoped
+    })
+    assert resp2.status_code == 403
+
+    with SessionLocal() as db:
+        assert db.query(UserORM).filter(UserORM.username == "minted_platform_admin").first() is None
+        assert db.query(UserORM).filter(UserORM.username == "minted_admin_alias").first() is None
+
+    # A legitimate, non-privileged creation must still work and be tenant-scoped.
+    resp3 = client.post("/auth/admin/create-user", headers=headers, json={
+        "username": "legit_new_user",
+        "email": "legit_new_user@test.com",
+        "password": "Password123!",
+        "role": "VIEWER",
+    })
+    assert resp3.status_code == 201
+    with SessionLocal() as db:
+        created = db.query(UserORM).filter(UserORM.username == "legit_new_user").first()
+        assert created is not None
+        assert created.tenant_id == "tenant-escalation-test"
+
+    with SessionLocal() as db:
+        db.query(UserORM).filter(UserORM.tenant_id == "tenant-escalation-test").delete()
+        db.query(TenantORM).filter(TenantORM.id == "tenant-escalation-test").delete()
+        db.commit()
+
+
 def test_admin_can_create_users_with_allowed_roles(client, seed_users):
     """E. ADMIN calling /auth/admin/create-user can create users with explicit roles."""
     headers_admin = {"Authorization": f"Bearer {seed_users['admin']}"}

@@ -322,4 +322,33 @@ Public self-registration via `POST /auth/register` previously created active use
 3. **Multi-Tenant Seed Provisioning**:
    - Enhanced `scripts/seed_tenants.py` to provision initial administrators for all standard tenants (`tenant-default`, `tenant-acme`, `tenant-globex`) with active, approved statuses.
 
+---
 
+## ADR-012: Backend Integrity & Hardening Pass — Privilege Escalation Fix, Migration Parity, Approval/Dispatch Race Guards, Notifications
+
+**Status:** ACCEPTED
+**Date:** 2026-09-10
+
+### Context
+
+A full backend audit found the codebase already had substantial security hardening (ADR-007, ADR-009, ADR-011), but a live audit of the actual running system (not just the code) surfaced defects that only appear against a genuinely clean environment or under concurrency: `POST /auth/admin/create-user` still allowed a tenant-scoped Company Admin to mint a global Platform Admin; `alembic upgrade head` had never actually completed on a clean database (revision IDs exceeded Alembic's default `version_num` column width, and the `jobstatus`/`userrole` Postgres enums were missing values that later migrations' own CHECK constraints required); approval decisions had no concurrency guard; a manually-triggered dispatch could fire before its approved execution window; and no notification system existed.
+
+### Decision
+
+1. **P0 — Privilege escalation closed**: `POST /auth/admin/create-user` now applies the same role/tenant restrictions as the authoritative `POST /admin/users` (only a genuine Platform Admin — `tenant_id IS NULL` — may assign `PLATFORM_ADMIN`/`ADMIN`; a Company Admin is forced onto their own `tenant_id`, previously left `NULL`).
+2. **P0 — Migration parity**: `alembic/versions/001,004,005` were corrected in place (never having successfully run to completion anywhere — no environment had an `alembic_version` table past revision 3) to widen the `jobstatus`/`userrole` enums and add the `tenants`/`api_keys` tables and `users.tenant_id`/`approval_status` columns at the point they're actually needed. Revision IDs were shortened (`001`..`008`) to fit Alembic's default 32-char version column. New migrations `007`/`008` add the remaining `schedule_decisions` contention-scheduling columns, the `notifications` table, and `jobs.submitted_by_user_id`. Verified end-to-end on both a clean Postgres database and a clean SQLite file.
+3. **P1 — Approval tenant isolation**: cross-tenant approve/decline now returns 404 (not 403), matching the `get_tenant_jobs()` convention elsewhere (`app/approval/service.py`).
+4. **P1 — Approval race guard**: `approve_schedule`/`decline_schedule` now perform an atomic conditional `UPDATE ... WHERE status = PENDING_APPROVAL`; a simultaneous approve+decline race leaves exactly one winner and the loser gets `409`.
+5. **P1 — Dispatch window enforced on the manual path**: `validate_job_for_dispatch()` now rejects dispatch of a job whose `selected_start` is still in the future, closing the gap where the automated loop's `promote_scheduled_to_ready()` gate could be bypassed via `POST /dispatch/{job_id}`.
+6. **P1 — Carbon fallback data labeled, not silently blended with live data**: `_interpolate_carbon()` now returns `(intensity, is_fallback)`; the scheduler surfaces `carbon_data_source: FALLBACK_ESTIMATED | LIVE_OR_CACHED` on every candidate and appends an explicit note to `reason` when the recommended slot used synthetic fallback data.
+7. **P1 — Removed the combined "Approve & Dispatch" dashboard action** (`app/dashboard/views/submit_workload.py`) — approval and dispatch are now always two independently reviewed steps in the UI, matching the backend's separation.
+8. **P1 — RBAC logic bug in `require_roles()`**: a branch let *any* company member (including `VIEWER`) through whenever an endpoint's allow-list contained *any* of `COMPANY_USER`/`USER`/`VIEWER` for anyone — not specifically the caller's own role. Fixed to check the caller's own role; also added the missing `require_roles(...)` dependency to `POST /schedule/{job_id}`, which previously had no role gate at all.
+9. **Notifications (new)**: `app/notify/` — `NotificationORM` (dedup'd per recipient via `uq_notifications_recipient_dedup`), `service.py` (recipient always server-derived; tenant/user-isolated read/mark-read), `email.py` (SMTP delivery fully decoupled from business transactions — a delivery failure only ever touches its own notification row, never job/workload state; bounded exponential-backoff retries). Wired into: schedule-proposed, scheduling-infeasible, approval-granted/declined, job-completed/failed, pending-registration (to Platform Admins), user-activated/deactivated. `JobORM.submitted_by_user_id` added (server-derived at ingest) as the recipient-resolution key — this also closes the pre-existing gap where individual-user job attribution didn't exist (only team/tenant scoping did).
+10. **Self-role-change guard**: `PATCH /admin/users/{user_id}/status` now rejects a caller changing their own `role`, even though they were already tenant/role-gated from escalating it.
+
+### Consequences
+
+- The scheduler's ranking/constraint logic (ADR-006) was **not** touched — carbon-first lexicographic ranking, strict hard constraints, and no silent budget relaxation all verified unchanged.
+- `greenshift.db` (the local dev SQLite file) is gitignored and was regenerated from scratch during this work — it was itself stale relative to `models.py` (missing columns introduced by earlier, uncommitted-to-Alembic model changes), which is exactly the class of drift this pass closes off going forward.
+- A Postgres-specific edge case remains: downgrading migration `008` then re-upgrading on the same Postgres database fails on re-creating the shared `eventtype` enum (SQLAlchemy tries `CREATE TYPE` again even with `create_type=False` in this specific downgrade-then-reupgrade sequence). This does not affect a normal `upgrade head` on a clean database and is not exercised by the test suite (which runs on SQLite); documented here as a known limitation rather than chased further.
+- Full regression suite: 591 collected, 590 passed, 1 known-environmental failure (`test_simulated_snapshot_has_node_inventory_and_consistent_metrics` expects a 3-node simulated cluster but the connected live Docker Desktop cluster has 1 node — pre-existing, unrelated to this pass).

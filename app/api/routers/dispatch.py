@@ -37,7 +37,19 @@ def trigger_dispatch(
     Strictly validates tenant isolation, user authorization, job approval status, and schedule ownership.
     """
     from app.api.tenant_scope import get_tenant_jobs
-    job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
+    try:
+        job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            try:
+                from app.trust.service import record_dispatch_blocked
+                record_dispatch_blocked(
+                    db, job_id, reason=exc.detail,
+                    current_status=None, requested_by=current_user.username,
+                )
+            except Exception as audit_exc:
+                logger.warning(f"Audit record failed for dispatch blocked on {job_id}: {audit_exc}")
+        raise
 
     try:
         execution = dispatch_job(db, job, user=current_user)

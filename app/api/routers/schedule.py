@@ -22,7 +22,12 @@ router = APIRouter()
 def trigger_schedule(
     job_id: str,
     db: Session = Depends(get_db),
-    current_user: UserORM = Depends(get_current_user),
+    current_user: UserORM = Depends(
+        require_roles(
+            UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR,
+            UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER, UserRole.PLATFORM_ADMIN,
+        )
+    ),
 ):
     """
     Manually trigger scheduling for a specific job.
@@ -39,6 +44,25 @@ def trigger_schedule(
     try:
         decision = schedule_and_store(db, job)
     except ValueError as exc:
+        if job.submitted_by_user_id:
+            try:
+                from app.notify.service import create_notification
+                from app.shared.models import EventType
+                create_notification(
+                    db,
+                    recipient_user_id=job.submitted_by_user_id,
+                    event_type=EventType.JOB_SCHEDULED,
+                    category="SCHEDULING",
+                    severity="WARNING",
+                    title=f"Workload {job.job_id} could not be scheduled",
+                    message=f"No feasible execution window was found for workload '{job.job_id}': {exc}",
+                    tenant_id=job.tenant_id,
+                    job_id=job.job_id,
+                    dedup_suffix="infeasible",
+                    email_required=False,
+                )
+            except Exception as notify_exc:
+                logger.warning("Notification failed for job %s infeasibility: %s", job_id, notify_exc)
         raise HTTPException(status_code=422, detail=str(exc))
     except HTTPException:
         raise

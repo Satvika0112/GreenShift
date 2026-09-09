@@ -12,16 +12,42 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '001_initial_postgresql_schema'
+revision: str = '001'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+
+# Full JobStatus enum values, matching app.shared.models.JobStatus.
+# NOTE: widened from the original 6-value set — the original set never
+# actually supported a clean `alembic upgrade head` (migration 004's
+# check constraint already required PENDING_APPROVAL/APPROVED/DECLINED,
+# which this enum did not contain), so this is a same-migration fix
+# rather than a later ALTER TYPE.
+JOB_STATUS_VALUES = (
+    'SUBMITTED', 'VALIDATED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED',
+    'READY', 'CLAIMING', 'DECLINED', 'REJECTED', 'QUEUED', 'DISPATCHING',
+    'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED',
+)
 
 
 def upgrade() -> None:
     bind = op.get_bind()
     insp = sa.inspect(bind)
     existing_tables = set(insp.get_table_names())
+
+    # ─── Table: tenants ───────────────────────────────────────────
+    if 'tenants' not in existing_tables:
+        op.create_table(
+            'tenants',
+            sa.Column('id', sa.String(), nullable=False),
+            sa.Column('name', sa.String(), nullable=False),
+            sa.Column('is_active', sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+            sa.PrimaryKeyConstraint('id'),
+            sa.UniqueConstraint('name'),
+        )
+        existing_tables.add('tenants')
 
     # ─── Table: jobs ──────────────────────────────────────────────
     if 'jobs' not in existing_tables:
@@ -30,13 +56,14 @@ def upgrade() -> None:
             sa.Column('job_id', sa.String(), nullable=False),
             sa.Column('workload_name', sa.String(), nullable=True),
             sa.Column('team_id', sa.String(), nullable=False),
+            sa.Column('tenant_id', sa.String(), nullable=True),
             sa.Column('submitted_at', sa.DateTime(), nullable=False),
             sa.Column('deadline', sa.DateTime(), nullable=False),
             sa.Column('runtime_minutes', sa.Integer(), nullable=False),
             sa.Column('power_kw', sa.Float(), nullable=False),
             sa.Column('region', sa.String(), nullable=False),
             sa.Column('timezone', sa.String(), nullable=True, server_default='UTC'),
-            sa.Column('status', sa.Enum('SUBMITTED', 'SCHEDULED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', name='jobstatus'), nullable=False),
+            sa.Column('status', sa.Enum(*JOB_STATUS_VALUES, name='jobstatus'), nullable=False),
             sa.Column('container_image', sa.String(), nullable=False),
             sa.Column('cpu_request', sa.String(), nullable=True, server_default='500m'),
             sa.Column('memory_request', sa.String(), nullable=True, server_default='512Mi'),
@@ -46,8 +73,12 @@ def upgrade() -> None:
             sa.Column('earliest_start_time', sa.DateTime(), nullable=True),
             sa.Column('energy_kwh', sa.Float(), nullable=True),
             sa.Column('deferrable', sa.Boolean(), nullable=True),
+            sa.Column('claimed_by', sa.String(), nullable=True),
+            sa.Column('claimed_at', sa.DateTime(), nullable=True),
+            sa.Column('lease_expires_at', sa.DateTime(), nullable=True),
             sa.Column('created_at', sa.DateTime(), nullable=False),
             sa.Column('updated_at', sa.DateTime(), nullable=True),
+            sa.ForeignKeyConstraint(['tenant_id'], ['tenants.id']),
             sa.PrimaryKeyConstraint('job_id')
         )
         op.create_index('ix_jobs_deadline', 'jobs', ['deadline'], unique=False)
@@ -55,7 +86,10 @@ def upgrade() -> None:
         op.create_index('ix_jobs_status', 'jobs', ['status'], unique=False)
         op.create_index('ix_jobs_submitted_at', 'jobs', ['submitted_at'], unique=False)
         op.create_index('ix_jobs_team_id', 'jobs', ['team_id'], unique=False)
+        op.create_index('ix_jobs_tenant_id', 'jobs', ['tenant_id'], unique=False)
         op.create_index('ix_jobs_created_at', 'jobs', ['created_at'], unique=False)
+        op.create_index('idx_jobs_dispatch_queue', 'jobs', ['status', 'priority', 'deadline'], unique=False)
+        op.create_index('idx_jobs_claim_lease', 'jobs', ['status', 'lease_expires_at'], unique=False)
 
     # ─── Table: schedule_decisions ────────────────────────────────
     if 'schedule_decisions' not in existing_tables:
@@ -112,7 +146,7 @@ def upgrade() -> None:
             sa.Column('planned_end', sa.DateTime(), nullable=True),
             sa.Column('actual_end', sa.DateTime(), nullable=True),
             sa.Column('k8s_status', sa.String(), nullable=True),
-            sa.Column('gs_status', sa.Enum('SUBMITTED', 'SCHEDULED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', name='jobstatus'), nullable=False),
+            sa.Column('gs_status', sa.Enum(*JOB_STATUS_VALUES, name='jobstatus'), nullable=False),
             sa.Column('error_message', sa.Text(), nullable=True),
             sa.Column('created_at', sa.DateTime(), nullable=False),
             sa.Column('updated_at', sa.DateTime(), nullable=True),
@@ -241,3 +275,5 @@ def downgrade() -> None:
         op.drop_table('schedule_decisions')
     if 'jobs' in existing_tables:
         op.drop_table('jobs')
+    if 'tenants' in existing_tables:
+        op.drop_table('tenants')

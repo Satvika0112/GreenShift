@@ -230,7 +230,7 @@ def test_team_lead_attempting_other_team_dispatch_is_forbidden(db, auth_users):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 403
-    assert "cannot dispatch job belonging to team" in response.json()["detail"]
+    assert "belongs to another team" in response.json()["detail"]
 
     # Verify DISPATCH_BLOCKED event is in audit ledger
     events = get_job_audit(db, job.job_id)

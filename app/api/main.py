@@ -267,3 +267,11 @@ try:
     app.include_router(admin_router.router, prefix="/admin", tags=["Admin"])
 except ImportError:
     logger.warning("Admin router not yet implemented")
+
+# Notifications
+try:
+    from app.api.routers import notifications as notifications_router
+    app.include_router(notifications_router.router, prefix="/api/v1", tags=["Notifications"])
+    app.include_router(notifications_router.router, prefix="", tags=["Notifications"])
+except ImportError:
+    logger.warning("Notifications router not yet implemented")

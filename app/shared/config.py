@@ -201,6 +201,20 @@ class Settings(BaseSettings):
         description="Allow synthetic tariff data when no CSV is configured",
     )
 
+    # ─── Notification Email Delivery ─────────────────────────────
+    smtp_enabled: bool = Field(
+        default=False,
+        description="Enable outbound email delivery for notifications. Off by default — in-app notifications always work regardless.",
+    )
+    smtp_host: str = Field(default="")
+    smtp_port: int = Field(default=587)
+    smtp_username: str = Field(default="")
+    smtp_password: str = Field(default="")
+    smtp_use_tls: bool = Field(default=True)
+    smtp_from_address: str = Field(default="noreply@greenshift.local")
+    notification_email_max_attempts: int = Field(default=5)
+    notification_poll_interval_seconds: int = Field(default=15)
+
     @model_validator(mode="after")
     def _default_auth_enabled_for_env(self) -> "Settings":
         if "auth_enabled" not in self.model_fields_set:

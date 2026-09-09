@@ -21,6 +21,7 @@ def submit_job(
     request: JobSubmitRequest,
     tenant_id: Optional[str] = None,
     company_name: Optional[str] = None,
+    submitted_by_user_id: Optional[int] = None,
 ) -> JobORM:
     """
     Register a new job in the job registry.
@@ -65,6 +66,7 @@ def submit_job(
         team_id              = request.team_id,
         tenant_id            = effective_tenant_id,
         company_name         = effective_company_name,
+        submitted_by_user_id = submitted_by_user_id,
         submitted_at         = submitted_at,
         deadline             = deadline,
         runtime_minutes      = request.runtime_minutes,

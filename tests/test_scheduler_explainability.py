@@ -124,14 +124,19 @@ class TestSchedulerDecisionExplainability:
         assert "Lowest-carbon feasible window" in decision.reason
 
     def test_explainability_constants_match_spec(self):
-        """Verify all rejection reason constants match the required specification."""
-        assert CandidateRejectionReason.CARBON_BUDGET_EXCEEDED == "CARBON_BUDGET_EXCEEDED"
-        assert CandidateRejectionReason.DEADLINE_VIOLATION == "DEADLINE_VIOLATION"
+        """Verify all rejection reason constants resolve to their canonical wire values.
+
+        Several names are deliberate aliases collapsing to one canonical string
+        (e.g. DEADLINE_VIOLATION and SLA_VIOLATION both report "SLA_VIOLATION")
+        so API consumers see a small, stable set of rejection codes.
+        """
+        assert CandidateRejectionReason.CARBON_BUDGET_EXCEEDED == "CARBON_THRESHOLD"
+        assert CandidateRejectionReason.DEADLINE_VIOLATION == "SLA_VIOLATION"
         assert CandidateRejectionReason.SLA_VIOLATION == "SLA_VIOLATION"
         assert CandidateRejectionReason.INSUFFICIENT_CPU == "INSUFFICIENT_CPU"
         assert CandidateRejectionReason.INSUFFICIENT_RAM == "INSUFFICIENT_RAM"
-        assert CandidateRejectionReason.INSUFFICIENT_GPU == "INSUFFICIENT_GPU"
-        assert CandidateRejectionReason.REGION_INELIGIBLE == "REGION_INELIGIBLE"
+        assert CandidateRejectionReason.INSUFFICIENT_GPU == "GPU_UNAVAILABLE"
+        assert CandidateRejectionReason.REGION_INELIGIBLE == "POLICY_RESTRICTION"
         assert CandidateRejectionReason.CARBON_DATA_UNAVAILABLE == "CARBON_DATA_UNAVAILABLE"
 
     def test_explainability_non_deferrable_workload(self, now_utc, sample_carbon_curve, sample_tariff_curve):
@@ -339,7 +344,7 @@ class TestDatabaseAndAPIExplainabilityIntegration:
         assert "deterministic_rank" in columns
 
         # Downgrade to 005
-        command.downgrade(alembic_cfg, "005_add_users_table")
+        command.downgrade(alembic_cfg, "005")
         insp2 = sa_inspect(eng)
         columns_down = {c["name"] for c in insp2.get_columns("schedule_decisions")}
         assert "candidates_evaluated" not in columns_down

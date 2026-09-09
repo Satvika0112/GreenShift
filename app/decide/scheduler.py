@@ -123,28 +123,32 @@ def _cost_usd(energy_kwh: float, price_per_kwh: float) -> float:
 def _interpolate_carbon(
     timestamp: datetime,
     carbon_curve: List[CarbonDataPoint],
-) -> Optional[float]:
+) -> Tuple[Optional[float], bool]:
     """
-    Return the carbon intensity (gCO2/kWh) for a given timestamp if trustworthy data exists.
-    Returns None if carbon telemetry is missing or untrustworthy.
+    Return (carbon intensity gCO2/kWh, is_fallback) for a given timestamp if
+    trustworthy data exists. Returns (None, False) if carbon telemetry is
+    missing or untrustworthy. is_fallback is True when the nearest point is
+    synthetic/fallback data rather than live or CSV/cached telemetry — callers
+    must surface this in the decision output rather than presenting it as live.
     """
     if not carbon_curve:
-        return None
+        return None, False
 
     best = min(carbon_curve, key=lambda p: abs((p.timestamp - timestamp).total_seconds()))
     diff = abs((best.timestamp - timestamp).total_seconds())
+    is_fallback = bool(getattr(best, "is_fallback", False))
 
     # If the nearest data point is more than 2 hours away and not explicitly tagged as a fallback
-    if diff > 7200 and not getattr(best, "is_fallback", False):
+    if diff > 7200 and not is_fallback:
         logger.warning(
             "No carbon data near %s (nearest: %s, diff: %.0fs) — untrustworthy for optimization",
             timestamp,
             best.timestamp,
             diff,
         )
-        return None
+        return None, False
 
-    return best.carbon_gco2_kwh
+    return best.carbon_gco2_kwh, is_fallback
 
 
 def _interpolate_tariff(
@@ -400,7 +404,7 @@ def _execute_schedule_job(
                 reasons.append(f"RESOURCE_UNAVAILABLE: {resource_msg}")
 
         # D. Carbon Telemetry Availability
-        c_intensity = _interpolate_carbon(start, carbon_curve)
+        c_intensity, c_is_fallback = _interpolate_carbon(start, carbon_curve)
         if c_intensity is None:
             reasons.append(CandidateRejectionReason.CARBON_DATA_UNAVAILABLE)
             c_kg = None
@@ -429,6 +433,7 @@ def _execute_schedule_job(
             carbon_emission_kg=c_kg,
             electricity_cost=cost,
             tariff_usd=t_price,
+            is_fallback_carbon=c_is_fallback,
         )
         evaluations.append(cand_eval)
         if cand_eval.feasible:
@@ -495,6 +500,7 @@ def _execute_schedule_job(
             "feasible": True,
             "rank": rank_idx,
             "score": round(1.0 / (1.0 + (cand.carbon_emission_kg or 0.0)), 4),
+            "carbon_data_source": "FALLBACK_ESTIMATED" if cand.is_fallback_carbon else "LIVE_OR_CACHED",
         })
 
     # Build rejected candidates explainability array
@@ -522,6 +528,7 @@ def _execute_schedule_job(
         "rank": 1,
         "score": round(1.0 / (1.0 + best_carbon), 4),
         "reason": "Optimal carbon-first window meeting all SLA and resource constraints",
+        "carbon_data_source": "FALLBACK_ESTIMATED" if best.is_fallback_carbon else "LIVE_OR_CACHED",
     }
 
     # 8. Decision Explainability Summary
@@ -547,11 +554,16 @@ def _execute_schedule_job(
             f"Electricity cost (${best_cost:.4f}) was used as secondary tie-breaker, "
             f"and earliest start time ({best_start.isoformat()}) as deterministic final tie-breaker."
         )
+    if best.is_fallback_carbon:
+        reason += (
+            " NOTE: carbon intensity for this window is ESTIMATED (synthetic fallback data, "
+            "not live-metered or cached provider data) — treat the carbon figure as indicative, not measured."
+        )
 
     # 9. Baseline Scenario: Immediate execution at earliest candidate slot
     baseline_start = candidates[0]
     baseline_end = baseline_start + timedelta(minutes=runtime_minutes)
-    baseline_intensity = _interpolate_carbon(baseline_start, carbon_curve)
+    baseline_intensity, _baseline_is_fallback = _interpolate_carbon(baseline_start, carbon_curve)
     if baseline_intensity is None:
         baseline_intensity = best_intensity
     baseline_tariff_usd = _interpolate_tariff(baseline_start, tariff_curve, region_id=region_id)

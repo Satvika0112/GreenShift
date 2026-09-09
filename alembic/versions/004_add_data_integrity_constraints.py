@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '004_add_data_integrity_constraints'
-down_revision: Union[str, None] = '003_add_database_indexes'
+revision: str = '004'
+down_revision: Union[str, None] = '003'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -44,7 +44,7 @@ def upgrade() -> None:
             )
             batch_op.create_check_constraint(
                 'ck_jobs_status_valid',
-                "status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')"
+                "status IN ('SUBMITTED', 'VALIDATED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'READY', 'CLAIMING', 'DECLINED', 'REJECTED', 'QUEUED', 'DISPATCHING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED')"
             )
 
     # 2. Schedule Decisions constraints
@@ -88,7 +88,7 @@ def upgrade() -> None:
             )
             batch_op.create_check_constraint(
                 'ck_k8s_executions_status_valid',
-                "gs_status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')"
+                "gs_status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'READY', 'CLAIMING', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')"
             )
 
     # 5. Carbon Data constraints

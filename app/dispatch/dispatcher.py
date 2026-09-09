@@ -144,6 +144,22 @@ def validate_job_for_dispatch(job: JobORM, user: Optional[object] = None) -> Non
             status_code=400,
         )
 
+    # Execution window: never dispatch before the approved selected_start,
+    # even via the manual endpoint. Jobs that reached READY/CLAIMING/QUEUED/
+    # DISPATCHING through the automated promote_scheduled_to_ready() gate
+    # already satisfy this trivially; this only blocks a direct manual
+    # dispatch of a job whose window hasn't arrived yet.
+    selected_start = decision.selected_start
+    if selected_start is not None:
+        if selected_start.tzinfo is None:
+            selected_start = selected_start.replace(tzinfo=timezone.utc)
+        if selected_start > utcnow():
+            raise DispatchBlockedError(
+                f"Job {job.job_id} cannot be dispatched before its selected execution "
+                f"window ({selected_start.isoformat()})",
+                status_code=400,
+            )
+
 
 def dispatch_job(db: Session, job: JobORM, user: Optional[object] = None) -> KubernetesExecutionORM:
     """
@@ -339,6 +355,25 @@ def _mark_job_failed(db: Session, job: JobORM, error_msg: str) -> None:
     except Exception as exc:
         logger.warning("Audit record failed for job %s failure: %s", job.job_id, exc)
 
+    if job.submitted_by_user_id:
+        try:
+            from app.notify.service import create_notification
+            from app.shared.models import EventType
+            create_notification(
+                db,
+                recipient_user_id=job.submitted_by_user_id,
+                event_type=EventType.K8S_JOB_FAILED,
+                category="EXECUTION",
+                severity="CRITICAL",
+                title=f"Workload {job.job_id} failed",
+                message=f"Workload '{job.job_id}' failed during dispatch: {error_msg}",
+                tenant_id=job.tenant_id,
+                job_id=job.job_id,
+                email_required=True,
+            )
+        except Exception as exc:
+            logger.warning("Notification failed for job %s failure: %s", job.job_id, exc)
+
 
 def refresh_job_status(db: Session, execution: KubernetesExecutionORM) -> KubernetesExecutionORM:
     """
@@ -423,6 +458,39 @@ def refresh_job_status(db: Session, execution: KubernetesExecutionORM) -> Kubern
                     )
             except Exception as exc:
                 logger.warning("Audit record failed for job %s transition to %s: %s", execution.job_id, gs_status, exc)
+
+            if job and job.submitted_by_user_id and gs_status in (JobStatus.COMPLETED, JobStatus.FAILED):
+                try:
+                    from app.notify.service import create_notification
+                    from app.shared.models import EventType
+                    if gs_status == JobStatus.COMPLETED:
+                        create_notification(
+                            db,
+                            recipient_user_id=job.submitted_by_user_id,
+                            event_type=EventType.K8S_JOB_COMPLETED,
+                            category="EXECUTION",
+                            severity="INFO",
+                            title=f"Workload {job.job_id} completed",
+                            message=f"Workload '{job.job_id}' completed successfully. Impact/report data is now available.",
+                            tenant_id=job.tenant_id,
+                            job_id=job.job_id,
+                            email_required=False,
+                        )
+                    else:
+                        create_notification(
+                            db,
+                            recipient_user_id=job.submitted_by_user_id,
+                            event_type=EventType.K8S_JOB_FAILED,
+                            category="EXECUTION",
+                            severity="CRITICAL",
+                            title=f"Workload {job.job_id} failed",
+                            message=f"Workload '{job.job_id}' failed during execution: {execution.error_message or 'unknown error'}",
+                            tenant_id=job.tenant_id,
+                            job_id=job.job_id,
+                            email_required=True,
+                        )
+                except Exception as exc:
+                    logger.warning("Notification failed for job %s transition to %s: %s", execution.job_id, gs_status, exc)
 
         logger.info(
             "Job %s | K8s: %s | GS: %s",

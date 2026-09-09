@@ -177,6 +177,28 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
     db.refresh(saved_sd)
     decision.id = saved_sd.id
 
+    if job.status == JobStatus.PENDING_APPROVAL and job.submitted_by_user_id:
+        try:
+            from app.notify.service import create_notification
+            from app.shared.models import EventType
+            create_notification(
+                db,
+                recipient_user_id=job.submitted_by_user_id,
+                event_type=EventType.SCHEDULE_PROPOSED,
+                category="SCHEDULING",
+                severity="INFO",
+                title=f"Workload {job.job_id} ready for approval",
+                message=(
+                    f"A schedule for workload '{job.job_id}' is ready for review "
+                    f"(carbon: {decision.carbon_emission:.4f} kg CO2, start: {decision.selected_start.isoformat()})."
+                ),
+                tenant_id=job.tenant_id,
+                job_id=job.job_id,
+                email_required=False,
+            )
+        except Exception as exc:
+            logger.warning("Notification failed for job %s schedule-proposed: %s", decision.job_id, exc)
+
     # Record audit events if requested
     if record_audit:
         try:

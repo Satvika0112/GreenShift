@@ -31,12 +31,17 @@ from app.shared.auth import (
     create_access_token,
     get_current_user,
     require_roles,
+    is_platform_admin,
+    is_company_admin,
 )
 from app.trust.service import (
     record_login_success,
     record_login_failure,
     record_user_registered,
 )
+from app.shared.utils import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["Authentication"])
 
@@ -103,6 +108,25 @@ def register(
     except Exception:
         pass
 
+    if approval_status == "PENDING":
+        try:
+            from app.notify.service import create_notification, resolve_platform_admin_user_ids
+            from app.shared.models import EventType
+            for admin_id in resolve_platform_admin_user_ids(db):
+                create_notification(
+                    db,
+                    recipient_user_id=admin_id,
+                    event_type=EventType.AUTH_USER_REGISTERED,
+                    category="ACCOUNT",
+                    severity="INFO",
+                    title="New access request pending review",
+                    message=f"User '{user.username}' ({user.email}) has requested access and is awaiting approval.",
+                    dedup_suffix=user.username,
+                    email_required=False,
+                )
+        except Exception as exc:
+            logger.warning("Notification failed for pending registration %s: %s", user.username, exc)
+
     return user
 
 
@@ -121,9 +145,17 @@ def admin_create_user(
     db: Session = Depends(get_db),
 ):
     """
-    Privileged endpoint: An authenticated ADMIN may create a user and assign
-    explicit roles (VIEWER, OPERATOR, TEAM_LEAD, ADMIN).
+    Deprecated, tenant-safe alias of the authoritative `POST /admin/users`.
+    A Company Admin may only create users within their own tenant and may
+    never assign PLATFORM_ADMIN/ADMIN. A Platform Admin (role=ADMIN or
+    PLATFORM_ADMIN with no tenant) may assign any role for any tenant.
     """
+    if not is_company_admin(current_admin):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Company Admin or Platform Admin privileges required",
+        )
+
     existing = db.query(UserORM).filter(
         or_(UserORM.username == body.username, UserORM.email == body.email)
     ).first()
@@ -141,6 +173,24 @@ def admin_create_user(
             )
 
     assigned_role = body.role if body.role is not None else UserRole.VIEWER
+    caller_is_platform_admin = is_platform_admin(current_admin)
+
+    if assigned_role in (UserRole.PLATFORM_ADMIN, UserRole.ADMIN) and not caller_is_platform_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Platform Admins can assign PLATFORM_ADMIN or ADMIN roles",
+        )
+
+    requested_tenant = getattr(body, "tenant_id", None)
+    if caller_is_platform_admin:
+        target_tenant = requested_tenant or getattr(current_admin, "tenant_id", None)
+    else:
+        if requested_tenant and requested_tenant != current_admin.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Company Admins cannot create users in other tenants",
+            )
+        target_tenant = current_admin.tenant_id
 
     hashed_pw = hash_password(body.password)
     user = UserORM(
@@ -149,6 +199,7 @@ def admin_create_user(
         hashed_password=hashed_pw,
         role=assigned_role,
         team_id=body.team_id,
+        tenant_id=target_tenant,
         approval_status="APPROVED",
         is_active=True,
     )

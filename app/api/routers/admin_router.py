@@ -351,6 +351,10 @@ def update_user_status(
     if not is_platform_admin(identity) and user.tenant_id != identity.tenant_id:
         raise HTTPException(status_code=404, detail=f"User {user_id} not found")
 
+    is_self = str(getattr(identity, "user_id", "")) == str(user_id)
+    if is_self and body.role is not None:
+        raise HTTPException(status_code=403, detail="You cannot change your own role")
+
     old_active = user.is_active
     old_approval = user.approval_status
 
@@ -377,13 +381,38 @@ def update_user_status(
     db.refresh(user)
 
     admin_username = getattr(identity, "username", "admin") if identity else "admin"
+    became_active = (not old_active or old_approval == "PENDING") and user.is_active and user.approval_status == "APPROVED"
+    became_inactive = old_active and not user.is_active
     try:
-        if (not old_active or old_approval == "PENDING") and user.is_active and user.approval_status == "APPROVED":
+        if became_active:
             record_user_activated(db, username=user.username, activated_by=admin_username, tenant_id=user.tenant_id)
-        elif old_active and not user.is_active:
+        elif became_inactive:
             record_user_deactivated(db, username=user.username, deactivated_by=admin_username, tenant_id=user.tenant_id)
     except Exception:
         pass
+
+    if became_active or became_inactive:
+        try:
+            from app.notify.service import create_notification
+            from app.shared.models import EventType
+            create_notification(
+                db,
+                recipient_user_id=user.id,
+                event_type=EventType.AUTH_USER_ACTIVATED if became_active else EventType.AUTH_USER_DEACTIVATED,
+                category="ACCOUNT",
+                severity="INFO" if became_active else "WARNING",
+                title="Account activated" if became_active else "Account deactivated",
+                message=(
+                    f"Your GreenShift account was activated by {admin_username}."
+                    if became_active
+                    else f"Your GreenShift account was deactivated by {admin_username}."
+                ),
+                tenant_id=user.tenant_id,
+                dedup_suffix=str(user.updated_at),
+                email_required=True,
+            )
+        except Exception:
+            pass
 
     return user
 

@@ -68,6 +68,7 @@ def submit_new_job(
             body,
             tenant_id=current_user.tenant_id,
             company_name=current_user.company_name,
+            submitted_by_user_id=current_user.id,
         )
 
         # Record validation audit event

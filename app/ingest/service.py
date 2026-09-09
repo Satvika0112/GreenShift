@@ -130,6 +130,7 @@ def ingest_job(
     request: JobSubmitRequest,
     tenant_id: Optional[str] = None,
     company_name: Optional[str] = None,
+    submitted_by_user_id: Optional[int] = None,
 ) -> JobORM:
     """
     Full ingest pipeline for a new job:
@@ -139,7 +140,7 @@ def ingest_job(
     4. Return the registered job (scheduling happens separately in DECIDE)
     """
     # 1. Register job
-    job = submit_job(db, request, tenant_id=tenant_id, company_name=company_name)
+    job = submit_job(db, request, tenant_id=tenant_id, company_name=company_name, submitted_by_user_id=submitted_by_user_id)
 
     # 2. Record audit event
     try:

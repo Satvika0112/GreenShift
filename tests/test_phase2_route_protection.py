@@ -296,7 +296,7 @@ def test_team_lead_cannot_schedule_another_team_job(client, auth_tokens):
     # Team Lead Alpha attempts to schedule Beta's job
     res = client.post("/api/v1/schedule/JOB-BETA-001", headers={"Authorization": f"Bearer {lead_alpha_token}"})
     assert res.status_code == 403
-    assert "cannot schedule jobs for team 'team_beta'" in res.json()["detail"].lower()
+    assert "belongs to another team" in res.json()["detail"].lower()
 
 
 # ====================================================================
@@ -421,6 +421,17 @@ def test_end_to_end_authenticated_pipeline(client):
     )
     assert approve_res.status_code == 200
     assert approve_res.json()["decision"] == "APPROVED"
+
+    # Fast-track the execution window so this pipeline test isn't blocked by
+    # the dispatch-window gate (an approved job may not dispatch before its
+    # selected_start) — the scheduler picked a real future carbon-optimal
+    # slot, and this test exercises dispatch mechanics, not window timing.
+    with SessionLocal() as db:
+        sd = db.get(ScheduleDecisionORM, schedule_id)
+        now_utc = datetime.now(timezone.utc)
+        sd.selected_start = now_utc - timedelta(seconds=5)
+        sd.selected_end = sd.selected_start + timedelta(minutes=1)
+        db.commit()
 
     from kubernetes.client.rest import ApiException
     mock_batch = MagicMock()

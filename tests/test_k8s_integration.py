@@ -103,6 +103,15 @@ class TestLiveKubernetesIntegration:
         job = submit_job(db, sample_k8s_job_request)
         schedule_and_store(db, job)
         db.refresh(job)
+
+        # Fast-track start time so this dispatch mechanics test isn't blocked
+        # by the execution-window gate (see ERROR-005 in docs/ERROR_LOG.md).
+        sd_orm = job.schedule_decision
+        now_utc = datetime.now(timezone.utc)
+        sd_orm.selected_start = now_utc - timedelta(seconds=5)
+        sd_orm.selected_end = sd_orm.selected_start + timedelta(minutes=1)
+        db.commit()
+
         approve_schedule(db, job.job_id, job.schedule_decision.id, approved_by="admin-test")
         db.refresh(job)
 
@@ -131,6 +140,13 @@ class TestLiveKubernetesIntegration:
         job = submit_job(db, sample_k8s_job_request)
         schedule_and_store(db, job)
         db.refresh(job)
+
+        sd_orm = job.schedule_decision
+        now_utc = datetime.now(timezone.utc)
+        sd_orm.selected_start = now_utc - timedelta(seconds=5)
+        sd_orm.selected_end = sd_orm.selected_start + timedelta(minutes=1)
+        db.commit()
+
         approve_schedule(db, job.job_id, job.schedule_decision.id, approved_by="admin-test")
         db.refresh(job)
 
@@ -241,6 +257,13 @@ class TestLiveKubernetesIntegration:
         job = submit_job(db, sample_k8s_job_request)
         schedule_and_store(db, job)
         db.refresh(job)
+
+        sd_orm = job.schedule_decision
+        now_utc = datetime.now(timezone.utc)
+        sd_orm.selected_start = now_utc - timedelta(seconds=5)
+        sd_orm.selected_end = sd_orm.selected_start + timedelta(minutes=1)
+        db.commit()
+
         approve_schedule(db, job.job_id, job.schedule_decision.id, approved_by="admin-test")
         db.refresh(job)
 

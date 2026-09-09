@@ -457,17 +457,12 @@ def require_roles(*allowed_roles: UserRole) -> Callable:
         ):
             return current_user
 
-        # Company user passes user and viewer checks
-        if is_company_member(current_user) and any(
-            r in allowed_values
-            for r in (
-                UserRole.COMPANY_USER.value,
-                UserRole.USER.value,
-                UserRole.VIEWER.value,
-            )
-        ):
-            return current_user
-
+        # Ordinary company members (COMPANY_USER/USER/VIEWER/OPERATOR) fall
+        # through to the exact-match check below: they pass only when their
+        # own specific role is in the endpoint's allow-list. (A prior branch
+        # here incorrectly granted access to any company member — including
+        # VIEWER — whenever the allow-list contained ANY of COMPANY_USER/
+        # USER/VIEWER for anyone, regardless of the caller's actual role.)
         if user_role_val not in allowed_values:
             try:
                 from app.trust.service import record_access_denied
