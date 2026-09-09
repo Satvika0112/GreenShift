@@ -98,6 +98,20 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ─── Enterprise React Control Plane ───────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: greenshift/frontend:latest
+    container_name: greenshift-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
   # ─── Ingest Service ───────────────────────────────────────────
   ingest:
     build:

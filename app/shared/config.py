@@ -94,7 +94,7 @@ class Settings(BaseSettings):
         ),
     )
     cors_origins: str = Field(
-        default="http://localhost:3000,http://localhost:8000,http://localhost:8501,http://127.0.0.1:3000,http://127.0.0.1:8000,http://127.0.0.1:8501",
+        default="http://localhost:3000,http://localhost:5173,http://localhost:8000,http://localhost:8501,http://127.0.0.1:3000,http://127.0.0.1:5173,http://127.0.0.1:8000,http://127.0.0.1:8501",
         description="Comma-separated list of allowed CORS origins for API clients (configured via CORS_ORIGINS)",
     )
     internal_service_key: Optional[str] = Field(
