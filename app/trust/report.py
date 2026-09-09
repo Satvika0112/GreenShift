@@ -137,6 +137,16 @@ def _job_row(job: JobORM) -> dict:
         "cost_difference_usd":  sd.cost_difference if sd else None,
         "budget_remaining_kg":  sd.budget_remaining if sd else None,
 
+        # Native currency cost (INR)
+        "greenshift_cost_inr":  sd.native_cost if sd else None,
+        "baseline_cost_inr":    sd.baseline_native_cost if sd else None,
+
+        # Scheduling delay
+        "scheduling_delay_hours": sd.scheduling_delay_hours if sd else None,
+
+        # Carbon reduction percentage per job
+        "carbon_reduction_pct": sd.carbon_reduction_pct if sd else None,
+
         # Kubernetes execution
         "k8s_job_name":         ke.kubernetes_job_name if ke else None,
         "k8s_namespace":        ke.kubernetes_namespace if ke else None,
@@ -157,6 +167,33 @@ def _job_row(job: JobORM) -> dict:
 # Aggregate summary
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _aggregate_by_region(rows: List[dict]) -> dict:
+    """Regional breakdown — required for BRSR geographic disclosure."""
+    regions = {}
+    for r in rows:
+        region = r.get("region", "UNKNOWN") or "UNKNOWN"
+        if region not in regions:
+            regions[region] = {
+                "job_count": 0,
+                "energy_kwh": 0.0,
+                "carbon_avoided_kg": 0.0,
+                "cost_saved_usd": 0.0,
+                "sla_met": 0,
+            }
+        regions[region]["job_count"] += 1
+        regions[region]["energy_kwh"] += r.get("energy_kwh", 0) or 0
+        regions[region]["carbon_avoided_kg"] += r.get("carbon_avoided_kg", 0) or 0
+        regions[region]["cost_saved_usd"] += r.get("cost_difference_usd", 0) or 0
+        if r.get("sla_met"):
+            regions[region]["sla_met"] += 1
+
+    for reg, data in regions.items():
+        data["energy_kwh"] = round(data["energy_kwh"], 4)
+        data["carbon_avoided_kg"] = round(data["carbon_avoided_kg"], 4)
+        data["cost_saved_usd"] = round(data["cost_saved_usd"], 4)
+    return regions
+
+
 def _aggregate(rows: List[dict]) -> dict:
     """Compute aggregate sustainability metrics across all jobs."""
     scheduled_rows = [r for r in rows if r["greenshift_carbon_kg"] is not None]
@@ -174,6 +211,16 @@ def _aggregate(rows: List[dict]) -> dict:
     total_gs_cost         = sum(r["greenshift_cost_usd"] or 0 for r in rows)
     total_baseline_cost   = sum(r["baseline_cost_usd"] or 0 for r in rows)
     total_cost_saved      = sum(r["cost_difference_usd"] or 0 for r in rows)
+
+    total_gs_cost_inr       = sum(r.get("greenshift_cost_inr") or 0 for r in rows)
+    total_baseline_cost_inr = sum(r.get("baseline_cost_inr") or 0 for r in rows)
+    total_cost_saved_inr    = total_baseline_cost_inr - total_gs_cost_inr
+
+    delays = [r["scheduling_delay_hours"] for r in scheduled_rows if r.get("scheduling_delay_hours") is not None]
+    avg_delay = (sum(delays) / len(delays)) if delays else 0.0
+
+    positive_count = sum(1 for r in rows if (r.get("carbon_avoided_kg") or 0) > 0)
+    negative_count = sum(1 for r in rows if (r.get("carbon_avoided_kg") or 0) < 0)
 
     avg_intensity = (
         sum(r["carbon_intensity_gco2_kwh"] for r in scheduled_rows if r["carbon_intensity_gco2_kwh"])
@@ -203,6 +250,25 @@ def _aggregate(rows: List[dict]) -> dict:
         "total_greenshift_cost_usd":   round(total_gs_cost, 6),
         "total_baseline_cost_usd":     round(total_baseline_cost, 6),
         "total_cost_saved_usd":        round(total_cost_saved, 6),
+
+        # Energy intensity (kWh per job — efficiency metric)
+        "energy_intensity_kwh_per_job": round(total_energy_kwh / total_jobs, 4) if total_jobs > 0 else 0.0,
+
+        # GHG emissions intensity (kg CO₂ per kWh — how clean is the energy?)
+        "ghg_intensity_kg_per_kwh": round(total_gs_carbon / total_energy_kwh, 6) if total_energy_kwh > 0 else 0.0,
+
+        # Regional breakdown (BRSR requires geographic disclosure)
+        "by_region": _aggregate_by_region(rows),
+
+        # Cost in native currency (INR) alongside USD
+        "total_greenshift_cost_inr": round(total_gs_cost_inr, 4),
+        "total_baseline_cost_inr": round(total_baseline_cost_inr, 4),
+        "total_cost_saved_inr": round(total_cost_saved_inr, 4),
+
+        # Scheduling efficiency
+        "avg_scheduling_delay_hours": round(avg_delay, 2),
+        "jobs_with_positive_carbon_savings": positive_count,
+        "jobs_with_negative_carbon_savings": negative_count,
     }
 
 
@@ -245,10 +311,23 @@ def generate_report(
 
     return {
         "metadata": {
-            "report_type":    "GreenShift BRSR Sustainability Report",
+            "report_type":    "GreenShift BRSR-Aligned Sustainability Report",  # "Aligned" not "Compliant"
             "generated_at":   generated_at,
-            "framework":      "BRSR (Business Responsibility and Sustainability Reporting)",
+            "framework":      "BRSR (Business Responsibility and Sustainability Reporting) — Aligned",
             "scope":          "Scope 2 — Purchased Electricity (Compute Workloads)",
+            "methodology":    (
+                "Carbon intensity from Electricity Maps API / regional CSV datasets. "
+                "Tariff data from Indian DISCOM Time-of-Day schedules. "
+                "Baseline = immediate execution at earliest feasible slot."
+            ),
+            "data_quality_notes": {
+                "carbon_source": "Electricity Maps API with CSV and controlled fallback",
+                "tariff_source": "Indian regional DISCOM ToD tariff CSVs (FY2026-27)",
+                "limitations": (
+                    "Scope 2 only. Scope 1 (direct) and Scope 3 (supply chain) "
+                    "are outside current measurement scope."
+                ),
+            },
             "team_filter":    team_id or "ALL",
             "date_from":      start_date.isoformat() if start_date else "ALL",
             "date_to":        end_date.isoformat() if end_date else "ALL",
@@ -297,7 +376,7 @@ def generate_markdown_summary(db: Session) -> str:
     m = report["metadata"]
 
     lines = [
-        f"# 🌿 GreenShift BRSR Sustainability Report",
+        f"# 🌿 GreenShift BRSR-Aligned Sustainability Report",
         f"**Generated:** {m['generated_at']}",
         f"",
         f"## Energy & Carbon",
@@ -309,13 +388,28 @@ def generate_markdown_summary(db: Session) -> str:
         f"| **Carbon Avoided** | **{s['total_carbon_avoided_kg']:.4f} kg CO₂** |",
         f"| Carbon Reduction | {s['carbon_reduction_pct']:.1f}% |",
         f"| Avg Carbon Intensity | {s['avg_carbon_intensity_gco2_kwh']:.1f} gCO₂/kWh |",
+        f"| Energy Intensity | {s['energy_intensity_kwh_per_job']:.4f} kWh/job |",
+        f"| GHG Emissions Intensity | {s['ghg_intensity_kg_per_kwh']:.6f} kg CO₂/kWh |",
         f"",
         f"## Cost",
-        f"| Metric | Value |",
-        f"|---|---|",
-        f"| GreenShift Cost | ${s['total_greenshift_cost_usd']:.4f} |",
-        f"| Baseline Cost | ${s['total_baseline_cost_usd']:.4f} |",
-        f"| **Cost Saved** | **${s['total_cost_saved_usd']:.4f}** |",
+        f"| Metric | Value (USD) | Value (INR) |",
+        f"|---|---|---|",
+        f"| GreenShift Cost | ${s['total_greenshift_cost_usd']:.4f} | ₹{s['total_greenshift_cost_inr']:.2f} |",
+        f"| Baseline Cost | ${s['total_baseline_cost_usd']:.4f} | ₹{s['total_baseline_cost_inr']:.2f} |",
+        f"| **Cost Saved** | **${s['total_cost_saved_usd']:.4f}** | **₹{s['total_cost_saved_inr']:.2f}** |",
+        f"",
+        f"## Regional Breakdown",
+        f"| Region | Jobs | Energy (kWh) | Carbon Avoided (kg) | Cost Saved (USD) | SLA Met |",
+        f"|---|---|---|---|---|---|",
+    ]
+
+    for reg, rstats in s.get("by_region", {}).items():
+        lines.append(
+            f"| {reg} | {rstats['job_count']} | {rstats['energy_kwh']:.2f} | "
+            f"{rstats['carbon_avoided_kg']:.2f} | ${rstats['cost_saved_usd']:.2f} | {rstats['sla_met']} |"
+        )
+
+    lines.extend([
         f"",
         f"## Jobs & SLA",
         f"| Metric | Value |",
@@ -325,10 +419,18 @@ def generate_markdown_summary(db: Session) -> str:
         f"| Failed | {s['failed_jobs']} |",
         f"| SLA Met | {s['sla_met']} ({s['sla_performance_pct']:.1f}%) |",
         f"| SLA Misses | {s['sla_misses']} |",
+        f"| Avg Scheduling Delay | {s['avg_scheduling_delay_hours']:.2f} hrs |",
         f"",
         f"## Audit",
         f"| Chain Status | {'✅ VALID' if report['audit']['chain_valid'] else '❌ BROKEN'} |",
         f"| Event Count | {report['audit']['event_count']} |",
-    ]
+        f"",
+        f"## Methodology & Data Quality",
+        f"- **Scope**: Scope 2 — Purchased Electricity (Compute Workloads)",
+        f"- **Carbon data**: Electricity Maps API with CSV and controlled fallback",
+        f"- **Tariff data**: Indian regional DISCOM Time-of-Day tariff CSVs",
+        f"- **Baseline method**: Immediate execution at earliest feasible slot",
+        f"- **Limitations**: Scope 1 and Scope 3 emissions outside current measurement scope",
+    ])
 
     return "\n".join(lines)

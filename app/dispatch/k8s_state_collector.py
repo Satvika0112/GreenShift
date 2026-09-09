@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from app.dispatch.kubernetes_client import (
     check_kubernetes_available,
@@ -38,6 +38,38 @@ class NodeState:
     gpu_capacity: int = 0
     gpu_allocatable: int = 0
     roles: List[str] = field(default_factory=list)
+    cpu_used_cores: float = 0.0
+    memory_used_mib: float = 0.0
+    gpu_used: int = 0
+
+    @property
+    def cpu_free_cores(self) -> float:
+        return max(0.0, self.cpu_allocatable_cores - self.cpu_used_cores)
+
+    @property
+    def memory_free_mib(self) -> float:
+        return max(0.0, self.memory_allocatable_mib - self.memory_used_mib)
+
+    @property
+    def gpu_free(self) -> int:
+        return max(0, self.gpu_allocatable - self.gpu_used)
+
+    def can_fit(
+        self,
+        cpu_request_cores: float = 0.5,
+        memory_request_mib: float = 512.0,
+        gpu_request: int = 0,
+    ) -> bool:
+        """Check if this specific node can accommodate the resource requests."""
+        if self.status != "Ready":
+            return False
+        if self.cpu_free_cores < cpu_request_cores:
+            return False
+        if self.memory_free_mib < memory_request_mib:
+            return False
+        if gpu_request > 0 and self.gpu_free < gpu_request:
+            return False
+        return True
 
 
 @dataclass
@@ -67,21 +99,67 @@ class ClusterResourceSnapshot:
         memory_request_mib: float = 512.0,
         gpu_request: int = 0,
     ) -> Tuple[bool, str]:
-        """Check if cluster currently has sufficient resources for a workload."""
+        """Check if cluster currently has sufficient resources for a workload.
+        
+        Evaluates node-level feasibility: a workload must fit on at least one single Ready node.
+        If self.nodes is not populated, falls back to aggregate check for backward compatibility.
+        """
         if not self.connected and self.cluster_health != "SIMULATED":
             # In simulated mode, assume available resources
             return True, "Cluster connected (simulated capacity)"
 
+        if not self.nodes:
+            # Fallback for backward compatibility (e.g. tests or environments without node inventory)
+            if self.free_cpu_cores < cpu_request_cores:
+                return False, f"Insufficient CPU: requested {cpu_request_cores} cores, free {self.free_cpu_cores:.2f} cores"
+            if self.free_memory_mib < memory_request_mib:
+                return False, f"Insufficient RAM: requested {memory_request_mib} MiB, free {self.free_memory_mib:.1f} MiB"
+            if gpu_request > 0 and self.free_gpus < gpu_request:
+                return False, f"Insufficient GPU: requested {gpu_request}, free {self.free_gpus}"
+            return True, "Cluster resources available"
+
+        # Fail-fast aggregate check
         if self.free_cpu_cores < cpu_request_cores:
             return False, f"Insufficient CPU: requested {cpu_request_cores} cores, free {self.free_cpu_cores:.2f} cores"
-
         if self.free_memory_mib < memory_request_mib:
             return False, f"Insufficient RAM: requested {memory_request_mib} MiB, free {self.free_memory_mib:.1f} MiB"
-
         if gpu_request > 0 and self.free_gpus < gpu_request:
             return False, f"Insufficient GPU: requested {gpu_request}, free {self.free_gpus}"
 
-        return True, "Cluster resources available"
+        # Node-level check: must fit on at least one Ready node
+        fitting_nodes = [
+            n for n in self.nodes
+            if n.can_fit(cpu_request_cores, memory_request_mib, gpu_request)
+        ]
+
+        if not fitting_nodes:
+            ready_nodes = [n for n in self.nodes if n.status == "Ready"]
+            max_node_cpu = max((n.cpu_free_cores for n in ready_nodes), default=0.0)
+            max_node_mem = max((n.memory_free_mib for n in ready_nodes), default=0.0)
+            max_node_gpu = max((n.gpu_free for n in ready_nodes), default=0)
+            return False, (
+                f"No single node can fit workload (requested: {cpu_request_cores} CPU, "
+                f"{memory_request_mib:.1f} MiB RAM, {gpu_request} GPU; "
+                f"largest Ready node has: {max_node_cpu:.2f} CPU, {max_node_mem:.1f} MiB RAM, {max_node_gpu} GPU)"
+            )
+
+        best = self.find_best_node(cpu_request_cores, memory_request_mib, gpu_request)
+        return True, f"Feasible on {len(fitting_nodes)} node(s); best candidate: {best.name if best else 'none'}"
+
+    def find_best_node(
+        self,
+        cpu_request_cores: float = 0.5,
+        memory_request_mib: float = 512.0,
+        gpu_request: int = 0,
+    ) -> Optional[NodeState]:
+        """Find the best node to schedule on (spread strategy: node with most free CPU among fitting Ready nodes)."""
+        candidates = [
+            n for n in self.nodes
+            if n.can_fit(cpu_request_cores, memory_request_mib, gpu_request)
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda n: n.cpu_free_cores)
 
 
 def _parse_cpu_string(cpu_str: str) -> float:
@@ -153,6 +231,9 @@ def collect_cluster_state() -> ClusterResourceSnapshot:
                     gpu_capacity=0,
                     gpu_allocatable=0,
                     roles=["control-plane", "master"],
+                    cpu_used_cores=2.0,
+                    memory_used_mib=8192.0,
+                    gpu_used=0,
                 ),
                 NodeState(
                     name="node-2-worker-gpu",
@@ -164,6 +245,9 @@ def collect_cluster_state() -> ClusterResourceSnapshot:
                     gpu_capacity=4,
                     gpu_allocatable=4,
                     roles=["worker", "gpu"],
+                    cpu_used_cores=1.5,
+                    memory_used_mib=6144.0,
+                    gpu_used=1,
                 ),
                 NodeState(
                     name="node-3-worker",
@@ -175,6 +259,9 @@ def collect_cluster_state() -> ClusterResourceSnapshot:
                     gpu_capacity=0,
                     gpu_allocatable=0,
                     roles=["worker"],
+                    cpu_used_cores=1.0,
+                    memory_used_mib=4096.0,
+                    gpu_used=0,
                 ),
             ],
         )
@@ -241,19 +328,32 @@ def collect_cluster_state() -> ClusterResourceSnapshot:
         used_cpu = 0.0
         used_mem = 0.0
         used_gpu = 0
+        node_by_name = {n.name: n for n in nodes}
         try:
             pod_list = core.list_pod_for_all_namespaces(
                 field_selector="status.phase=Running",
                 _request_timeout=5,
             )
             for pod in pod_list.items:
+                pod_node = getattr(pod.spec, "node_name", None) if pod.spec else None
                 for c in (pod.spec.containers or []):
                     req = c.resources.requests or {} if c.resources else {}
-                    used_cpu += _parse_cpu_string(req.get("cpu", "0"))
-                    used_mem += _parse_memory_string(req.get("memory", "0"))
-                    used_gpu += int(req.get("nvidia.com/gpu", 0))
+                    c_cpu = _parse_cpu_string(req.get("cpu", "0"))
+                    c_mem = _parse_memory_string(req.get("memory", "0"))
+                    c_gpu = int(req.get("nvidia.com/gpu", 0))
+                    used_cpu += c_cpu
+                    used_mem += c_mem
+                    used_gpu += c_gpu
+                    if pod_node and pod_node in node_by_name:
+                        node_by_name[pod_node].cpu_used_cores += c_cpu
+                        node_by_name[pod_node].memory_used_mib += c_mem
+                        node_by_name[pod_node].gpu_used += c_gpu
         except Exception as exc:
             logger.debug("Pod resource listing skipped: %s", exc)
+
+        for n in nodes:
+            n.cpu_used_cores = round(n.cpu_used_cores, 2)
+            n.memory_used_mib = round(n.memory_used_mib, 1)
 
         free_cpu = max(0.0, allocatable_cpu - used_cpu)
         free_mem = max(0.0, allocatable_mem - used_mem)

@@ -217,6 +217,40 @@ class TestDynamicJobBuilder:
         assert _scale_memory("512Mi") == "1024Mi"
         assert _scale_memory("2Gi") == "4Gi"
 
+    def test_node_affinity_when_preferred_node_provided(self, sample_job_and_decision):
+        job, decision = sample_job_and_decision
+        k8s_job = build_kubernetes_job(job, decision, preferred_node="node-2-worker-gpu")
+
+        pod_spec = k8s_job.spec.template.spec
+        assert pod_spec.affinity is not None
+        node_aff = pod_spec.affinity.node_affinity
+        assert node_aff is not None
+        assert node_aff.preferred_during_scheduling_ignored_during_execution is not None
+        term = node_aff.preferred_during_scheduling_ignored_during_execution[0]
+        assert term.weight == 100
+        req = term.preference.match_expressions[0]
+        assert req.key == "kubernetes.io/hostname"
+        assert "node-2-worker-gpu" in req.values
+
+    def test_gpu_node_selector_when_gpu_requested(self, sample_job_and_decision):
+        job, decision = sample_job_and_decision
+        job.gpu_request = 2
+        k8s_job = build_kubernetes_job(job, decision)
+
+        pod_spec = k8s_job.spec.template.spec
+        assert pod_spec.affinity is not None
+        node_aff = pod_spec.affinity.node_affinity
+        assert node_aff is not None
+        req_terms = node_aff.required_during_scheduling_ignored_during_execution
+        assert req_terms is not None
+        match_expr = req_terms.node_selector_terms[0].match_expressions[0]
+        assert match_expr.key == "nvidia.com/gpu.present"
+        assert match_expr.values == ["true"]
+
+        container = pod_spec.containers[0]
+        assert container.resources.requests["nvidia.com/gpu"] == "2"
+        assert container.resources.limits["nvidia.com/gpu"] == "2"
+
 
 class TestDispatcherIdempotencyAndFlow:
     """Test suite for dispatch_job() idempotency and error handling."""

@@ -58,24 +58,44 @@ def render_scheduling_engine_view() -> None:
         carbon_avoided = float(dec.get("carbon_avoided") or 0.012)
         reason = dec.get("reason") or "Lowest-carbon feasible window within deadline"
 
-        # Top 3 Decision Metrics
-        m1, m2, m3 = st.columns(3)
+        # Decision Metrics (Carbon, Cost, Window, Slot Contention)
+        m1, m2, m3, m4 = st.columns(4)
         with m1:
             st.markdown(render_metric_card("Carbon Intensity", f"{carbon_intensity:.1f} gCO₂/kWh", f"{carbon_avoided:.4f} kg avoided", accent=True), unsafe_allow_html=True)
         with m2:
             st.markdown(render_metric_card("Electricity Cost", f"${cost_usd:.4f}", "Time-of-Day rate applied"), unsafe_allow_html=True)
         with m3:
             st.markdown(render_metric_card("Scheduling Window", f"{sel_start}", f"Duration: {job_data.get('runtime_minutes', 30)} min"), unsafe_allow_html=True)
+        with m4:
+            slot_util = dec.get("slot_utilization_pct")
+            util_str = f"{slot_util:.1f}%" if slot_util is not None else "N/A"
+            spilled = dec.get("spilled_from_preferred", False)
+            spill_sub = "Spilled from peak" if spilled else "Preferred slot fit"
+            st.markdown(render_metric_card("Slot Capacity Util.", util_str, spill_sub), unsafe_allow_html=True)
 
         # Why this slot?
+        method = dec.get("scheduling_method", "single_greedy")
+        ml_used = dec.get("ml_advisor_used", False)
+        demand_pred = dec.get("demand_predicted")
         st.markdown("#### 💡 Why this slot was selected:")
+        contention_bullet = (
+            f"• <strong>Contention-Aware Scheduling</strong>: Slot utilization at allocation was <strong>{util_str}</strong>. "
+            + ("Workload was gently spilled to this slot because preferred slot reached capacity limit.<br>" if spilled else "Workload successfully accommodated in preferred low-carbon window.<br>")
+            if slot_util is not None else ""
+        )
+        ml_bullet = (
+            f"• <strong>ML Demand Forecaster (Layer 2)</strong>: Predicted future arrival pressure: <strong>{demand_pred:.3f}</strong> (5% soft penalty applied to preserve peak headroom).<br>"
+            if ml_used and demand_pred is not None else ""
+        )
+
         st.markdown(
             f'<div style="background: #041315; border: 1px solid #0E383C; border-left: 4px solid #00E599; padding: 14px 18px; border-radius: 8px; margin-bottom: 20px;">'
-            f'<div style="color: #FFFFFF; font-weight: 600; margin-bottom: 6px;">✓ Primary Objective: {reason}</div>'
+            f'<div style="color: #FFFFFF; font-weight: 600; margin-bottom: 6px;">✓ Method: <code>{method}</code> | {reason}</div>'
             f'<div style="font-size: 0.85rem; color: #94A3B8;">'
-            f'• Carbon intensity in this slot represents a significant reduction compared to baseline arrival.<br>'
-            f'• Hard deadline constraints satisfied.<br>'
-            f'• Sufficient cluster CPU & RAM capacity verified via Kubernetes collector.'
+            f'• Carbon intensity in this slot represents an optimal reduction compared to baseline arrival.<br>'
+            f'{contention_bullet}'
+            f'{ml_bullet}'
+            f'• Hard deadline and cluster capacity constraints fully satisfied.'
             f'</div>'
             f'</div>',
             unsafe_allow_html=True,
@@ -85,7 +105,7 @@ def render_scheduling_engine_view() -> None:
         st.markdown("#### 📊 Decision Factors")
         st.markdown(render_decision_factor("Carbon Abatement Score", 88.0, "88%"), unsafe_allow_html=True)
         st.markdown(render_decision_factor("Electricity Tariff Score", 74.0, "74%"), unsafe_allow_html=True)
-        st.markdown(render_decision_factor("Cluster Resource Fit", 95.0, "95%"), unsafe_allow_html=True)
+        st.markdown(render_decision_factor("Slot Capacity Headroom", 100.0 - (slot_util or 5.0), f"{100.0 - (slot_util or 5.0):.0f}% free"), unsafe_allow_html=True)
         st.markdown(render_decision_factor("SLA Margin / Buffer", 82.0, "82%"), unsafe_allow_html=True)
 
         # Candidate Slot Comparison Table

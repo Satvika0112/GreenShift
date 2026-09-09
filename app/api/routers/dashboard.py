@@ -3,11 +3,12 @@ Agent 5 — PRESENT
 FastAPI dashboard summary router.
 """
 
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.shared.database import get_db
-from app.shared.auth import get_current_user
+from app.shared.auth import require_viewer, AuthenticatedIdentity
 from app.shared.models import JobORM, JobStatus, AuditEventORM, ScheduleDecisionORM, UserORM
 from app.shared.utils import get_logger
 
@@ -19,12 +20,15 @@ router = APIRouter()
 @router.get("/dashboard/summary")
 def get_dashboard_summary(
     db: Session = Depends(get_db),
-    current_user: UserORM = Depends(get_current_user),
+    identity: Optional[AuthenticatedIdentity] = Depends(require_viewer),
 ):
     """Aggregate summary data for the Streamlit dashboard."""
     try:
         # Job counts
-        jobs = db.query(JobORM).all()
+        if identity and identity.tenant_id:
+            jobs = db.query(JobORM).filter(JobORM.tenant_id == identity.tenant_id).all()
+        else:
+            jobs = db.query(JobORM).all()
         status_counts = {s.value: 0 for s in JobStatus}
         for j in jobs:
             status_counts[j.status.value] += 1
@@ -41,7 +45,14 @@ def get_dashboard_summary(
         # Audit
         event_count = db.query(AuditEventORM).count()
 
+        active_count = (
+            status_counts.get("RUNNING", 0)
+            + status_counts.get("QUEUED", 0)
+            + status_counts.get("DISPATCHING", 0)
+        )
         return {
+            "total_jobs": len(jobs),
+            "active_jobs": active_count,
             "jobs": {
                 "total": len(jobs),
                 **status_counts,

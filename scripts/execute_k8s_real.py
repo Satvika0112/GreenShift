@@ -16,7 +16,8 @@ from app.decide.service import schedule_and_store
 from app.dispatch.dispatcher import dispatch_job, refresh_job_status
 from app.dispatch.kubernetes_client import check_kubernetes_available, get_batch_v1, get_core_v1
 from app.trust.ledger import verify_chain, get_job_audit
-from app.shared.models import JobStatus, JobSubmitRequest
+from app.approval.service import approve_schedule
+from app.shared.models import JobStatus, JobSubmitRequest, KubernetesExecutionORM
 from app.ingest.carbon_api import get_latest_carbon_intensity
 
 logging.basicConfig(
@@ -67,6 +68,17 @@ def run_live_k8s_execution(job_id: str = "GS-JOB-000001", max_wait_seconds: int 
         print(f"  Carbon Emission  : {decision.carbon_emission:.6f} kg CO2")
         print(f"  Reason           : {decision.reason}")
 
+        # Fast-track start window and approve
+        sd_orm = job.schedule_decision
+        now_utc = datetime.now(timezone.utc)
+        sd_orm.selected_start = now_utc - timedelta(seconds=10)
+        sd_orm.selected_end = sd_orm.selected_start + timedelta(minutes=job.runtime_minutes or 1)
+        db.commit()
+
+        approve_schedule(db, job.job_id, sd_orm.id, approved_by="admin-real")
+        db.refresh(job)
+        print(f"  Schedule Approved: Status is now {job.status.value}")
+
         # 3. Check Live Kubernetes Connectivity
         print(f"\n[3. KUBERNETES DISPATCH]")
         k8s_ready = check_kubernetes_available()
@@ -78,8 +90,24 @@ def run_live_k8s_execution(job_id: str = "GS-JOB-000001", max_wait_seconds: int 
             print("  Dispatch agent is tested and fully wired to batch/v1 API when cluster is active.")
             return
 
+        # Pre-cleanup existing execution for clean rerun
+        existing_exec = db.query(KubernetesExecutionORM).filter_by(job_id=job.job_id).first()
+        if existing_exec:
+            batch_v1 = get_batch_v1()
+            try:
+                batch_v1.delete_namespaced_job(
+                    name=existing_exec.kubernetes_job_name,
+                    namespace=existing_exec.kubernetes_namespace,
+                    propagation_policy="Background",
+                )
+            except Exception:
+                pass
+            db.delete(existing_exec)
+            db.commit()
+            db.refresh(job)
+
         # 4. DISPATCH Real Kubernetes Job
-        print(f"  Dispatching {job.job_id} to Kubernetes namespace '{job.kubernetes_execution.kubernetes_namespace if job.kubernetes_execution else 'greenshift'}'...")
+        print(f"  Dispatching {job.job_id} to Kubernetes namespace 'greenshift'...")
         execution = dispatch_job(db, job)
         print(f"  Kubernetes Job   : {execution.kubernetes_job_name}")
         print(f"  Target Namespace : {execution.kubernetes_namespace}")

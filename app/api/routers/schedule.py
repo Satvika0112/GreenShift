@@ -96,3 +96,61 @@ def trigger_schedule(
         },
     }
 
+
+@router.get("/schedule/{job_id}")
+@router.get("/schedule/{job_id}/explain")
+def get_schedule_explainability(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """Retrieve schedule decision and explainability details for a job."""
+    job = get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    decision = job.schedule_decision
+    if decision is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} has not been scheduled yet")
+
+    from app.shared.timezone import format_dual_time
+
+    return {
+        "id": decision.id,
+        "schedule_id": decision.id,
+        "job_id": decision.job_id,
+        "selected_start": decision.selected_start.isoformat(),
+        "selected_end": decision.selected_end.isoformat(),
+        "carbon_intensity": decision.carbon_intensity,
+        "electricity_cost": decision.electricity_cost,
+        "carbon_emission": decision.carbon_emission,
+        "region_id": decision.region_id,
+        "tariff_plan": decision.tariff_plan,
+        "currency": decision.currency,
+        "native_cost": decision.native_cost,
+        "baseline_native_cost": decision.baseline_native_cost,
+        "reason": decision.reason,
+        "budget_remaining": decision.budget_remaining,
+        "objective": decision.scheduler_objective or "CARBON_FIRST",
+        "scheduler_objective": decision.scheduler_objective or "CARBON_FIRST",
+        "candidates_evaluated": getattr(decision, "candidates_evaluated", 0) or 0,
+        "feasible_candidates_count": getattr(decision, "feasible_candidates_count", 0) or 0,
+        "rejection_summary": getattr(decision, "rejection_summary", {}) or {},
+        "rejection_reasons": getattr(decision, "rejection_reasons", []) or [],
+        "deterministic_ranking": getattr(decision, "deterministic_rank", 1) or 1,
+        "deterministic_rank": getattr(decision, "deterministic_rank", 1) or 1,
+        "baseline_start": decision.baseline_start.isoformat() if decision.baseline_start else None,
+        "baseline_end": decision.baseline_end.isoformat() if decision.baseline_end else None,
+        "carbon_avoided": decision.carbon_avoided,
+        "cost_difference": decision.cost_difference,
+        "carbon_reduction_pct": decision.carbon_reduction_pct,
+        "cost_reduction_pct": decision.cost_reduction_pct,
+        "scheduling_delay_hours": decision.scheduling_delay_hours,
+        "sla_met": decision.sla_met,
+        "time_details": {
+            "selected_start": format_dual_time(decision.selected_start, region=decision.region_id),
+            "selected_end": format_dual_time(decision.selected_end, region=decision.region_id),
+        },
+    }
+
+

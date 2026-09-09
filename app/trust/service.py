@@ -406,14 +406,25 @@ def run_trust_loop() -> None:
 
     poll_interval = 60
     logger.info("TRUST audit verification service started — verifying every %ds", poll_interval)
+    from app.observability.metrics import audit_chain_valid, audit_event_count, audit_anchor_verified
+    from app.trust.anchor import should_anchor, write_anchor, verify_anchor
+
     while True:
         db = SessionLocal()
         try:
             result = verify_chain(db)
+            audit_chain_valid.set(1 if result.valid else 0)
+            audit_event_count.set(result.event_count)
             if result.valid:
                 logger.info("TRUST Audit Status: VALID CHAIN (%d events verified)", result.event_count)
             else:
                 logger.error("TRUST Audit Status: TAMPER DETECTED — %s", result.message)
+
+            if should_anchor(db):
+                write_anchor(db)
+
+            anchor_result = verify_anchor(db)
+            audit_anchor_verified.set(1 if anchor_result.get("verified") else 0)
         except Exception as exc:
             logger.error("TRUST verification loop error: %s", exc)
         finally:

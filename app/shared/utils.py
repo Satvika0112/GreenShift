@@ -2,20 +2,42 @@
 GreenShift — Shared utilities.
 """
 
+import json
 import logging
+import sys
 import uuid
 from datetime import datetime, timezone
 
 from app.shared.config import settings
 
 
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_data = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_data)
+
+
 def get_logger(name: str) -> logging.Logger:
-    """Return a named logger configured with the application log level."""
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper(), logging.INFO),
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    )
-    return logging.getLogger(name)
+    """Return a named logger configured with environment-aware formatting."""
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        if getattr(settings, "environment", "") == "production":
+            handler.setFormatter(JSONFormatter())
+        else:
+            handler.setFormatter(logging.Formatter(
+                "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+            ))
+        logger.addHandler(handler)
+        logger.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
+    return logger
 
 
 def generate_job_id() -> str:

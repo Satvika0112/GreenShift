@@ -3,20 +3,27 @@ GreenShift — Authentication & JWT Security Layer
 
 Provides bcrypt password hashing, JWT token creation/decoding,
 and FastAPI dependency extractors for role-based access control.
+
+Multi-tenant dual-channel auth (Phase 1):
+  1. Authorization: Bearer <JWT>  → JWT decode → user lookup
+  2. X-API-Key: <key>             → SHA-256 hash → api_key lookup
+  3. AUTH_ENABLED=false            → return None  (dev mode only)
 """
 
+import hashlib
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Callable
 import secrets
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status, Header
-from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, HTTPException, Request, Security, status, Header
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.shared.config import settings
 from app.shared.database import get_db
-from app.shared.models import UserORM, UserRole
+from app.shared.models import UserORM, UserRole, APIKeyORM
 
 # OAuth2 / HTTPBearer scheme
 http_bearer = HTTPBearer(auto_error=False)
@@ -45,6 +52,7 @@ def create_access_token(
     username: str,
     role: str,
     team_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
     expires_delta: Optional[timedelta] = None,
 ) -> str:
     """Create a signed JWT access token containing minimal identity information."""
@@ -60,6 +68,7 @@ def create_access_token(
         "username": username,
         "role": role,
         "team_id": team_id,
+        "tenant_id": tenant_id,
         "iat": int(now.timestamp()),
         "exp": int(expire.timestamp()),
     }
@@ -95,11 +104,128 @@ def decode_access_token(token: str) -> dict:
         )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# AuthenticatedIdentity — unified identity from JWT or API key
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class AuthenticatedIdentity:
+    """Resolved identity for the current request, regardless of auth method."""
+    user_id: str
+    tenant_id: Optional[str]
+    role: UserRole
+    auth_method: str   # "jwt" or "api_key"
+
+
+async def get_current_identity(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(http_bearer),
+    db: Session = Depends(get_db),
+) -> Optional[AuthenticatedIdentity]:
+    """
+    Resolve AuthenticatedIdentity from request. Tried in order:
+      1. Authorization: Bearer <JWT> → decode → user lookup
+      2. X-API-Key: <key>            → SHA-256 hash → api_key lookup
+      3. AUTH_ENABLED=false          → return None (dev mode passthrough)
+
+    Returns AuthenticatedIdentity or raises 401. Returns None in dev mode.
+    """
+    if not settings.auth_enabled:
+        return None  # Dev mode: all endpoints open
+
+    # 1. Try JWT Bearer token
+    if credentials and credentials.credentials:
+        try:
+            payload = decode_access_token(credentials.credentials)
+            user_id = payload.get("user_id")
+            if user_id is not None:
+                user = db.get(UserORM, int(user_id))
+                if user and user.is_active:
+                    return AuthenticatedIdentity(
+                        user_id=str(user.id),
+                        tenant_id=getattr(user, "tenant_id", None),
+                        role=UserRole(payload["role"]),
+                        auth_method="jwt",
+                    )
+        except (HTTPException, Exception):
+            pass
+
+    # 2. Try X-API-Key header
+    api_key_raw = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+    if api_key_raw:
+        key_hash = hashlib.sha256(api_key_raw.encode()).hexdigest()
+        api_key = db.query(APIKeyORM).filter(
+            APIKeyORM.key_hash == key_hash,
+            APIKeyORM.is_active == True,  # noqa: E712
+        ).first()
+        if api_key:
+            api_key.last_used = datetime.now(timezone.utc)
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+            return AuthenticatedIdentity(
+                user_id=api_key.id,
+                tenant_id=api_key.tenant_id,
+                role=api_key.role,
+                auth_method="api_key",
+            )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication token required",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def require_role(*allowed_roles: UserRole):
+    """
+    Dependency factory enforcing role-based access control via AuthenticatedIdentity.
+    Returns None in dev mode (AUTH_ENABLED=false).
+    """
+    role_set = set(allowed_roles)
+
+    async def checker(
+        identity: Optional[AuthenticatedIdentity] = Depends(get_current_identity),
+    ) -> Optional[AuthenticatedIdentity]:
+        if identity is None:
+            return None  # Dev mode passthrough
+        if identity.role not in role_set:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Role '{identity.role.value}' is not authorized. "
+                    f"Required: {[r.value for r in allowed_roles]}"
+                ),
+            )
+        return identity
+
+    return checker
+
+
+# Convenience role dependency singletons
+require_admin    = require_role(UserRole.ADMIN)
+require_operator = require_role(UserRole.ADMIN, UserRole.OPERATOR)
+require_user     = require_role(UserRole.ADMIN, UserRole.OPERATOR, UserRole.USER, UserRole.TEAM_LEAD)
+require_viewer   = require_role(UserRole.ADMIN, UserRole.OPERATOR, UserRole.USER, UserRole.TEAM_LEAD, UserRole.VIEWER)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Legacy dependencies — preserved for backward compatibility with existing code
+# ─────────────────────────────────────────────────────────────────────────────
+
 def get_current_user(
     auth_header: Optional[HTTPAuthorizationCredentials] = Depends(http_bearer),
     db: Session = Depends(get_db),
 ) -> UserORM:
-    """FastAPI dependency: Extract and validate the currently authenticated user."""
+    """FastAPI dependency: Extract and validate the currently authenticated user.
+
+    Legacy dependency retained for backward compatibility. New code should use
+    get_current_identity() which supports both JWT and API key auth.
+
+    NOTE: This dependency always requires a valid token, even in dev mode.
+    Use get_current_identity() for endpoints that should be open in dev mode.
+    """
     if not auth_header or not auth_header.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -142,7 +268,10 @@ def get_current_active_user(
 
 
 def require_roles(*allowed_roles: UserRole) -> Callable:
-    """Dependency factory enforcing role-based access control (RBAC)."""
+    """Legacy dependency factory enforcing role-based access control (RBAC).
+
+    Preserved for backward compatibility. New code should use require_role().
+    """
     allowed_values = {r.value if isinstance(r, UserRole) else str(r) for r in allowed_roles}
 
     def role_checker(
@@ -229,4 +358,3 @@ def seed_default_users(db: Session) -> None:
         db.commit()
     except Exception:
         db.rollback()
-

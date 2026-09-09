@@ -1,0 +1,43 @@
+﻿=== PODS IN GREENSHIFT NAMESPACE ===
+NAME                                    READY   STATUS      RESTARTS      AGE     IP            NODE                    NOMINATED NODE   READINESS GATES
+greenshift-api-5bd46c968f-bztl8         1/1     Running     1 (14m ago)   16m     10.244.0.8    desktop-control-plane   <none>           <none>
+greenshift-dashboard-5c4b79745-mt7dk    1/1     Running     2 (14m ago)   25m     10.244.0.4    desktop-control-plane   <none>           <none>
+greenshift-dispatcher-7ff68f944-94fjz   1/1     Running     2 (14m ago)   25m     10.244.0.7    desktop-control-plane   <none>           <none>
+greenshift-ingest-67b4849ccf-pv4xs      1/1     Running     2 (14m ago)   25m     10.244.0.2    desktop-control-plane   <none>           <none>
+greenshift-scheduler-7bb5bdbc86-rwtbj   1/1     Running     2 (14m ago)   25m     10.244.0.6    desktop-control-plane   <none>           <none>
+greenshift-trust-696fcbfdd9-g5gvp       1/1     Running     2 (14m ago)   25m     10.244.0.3    desktop-control-plane   <none>           <none>
+gs-job-7d506fcb-5rztj                   0/1     Completed   0             5m13s   10.244.0.17   desktop-control-plane   <none>           <none>
+postgres-676c48778b-jkbqm               1/1     Running     2 (14m ago)   25m     10.244.0.5    desktop-control-plane   <none>           <none>
+
+=== SERVICES IN GREENSHIFT NAMESPACE ===
+NAME                   TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE   SELECTOR
+greenshift-api         ClusterIP   10.96.179.202   <none>        8000/TCP         25m   app=greenshift,component=api
+greenshift-dashboard   NodePort    10.96.95.206    <none>        8501:31222/TCP   25m   app=greenshift,component=dashboard
+postgres               ClusterIP   10.96.238.245   <none>        5432/TCP         25m   app=greenshift,component=postgres
+
+=== DEPLOYMENTS IN GREENSHIFT NAMESPACE ===
+NAME                    READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES                         SELECTOR
+greenshift-api          1/1     1            1           25m   api          greenshift/api:latest          app=greenshift,component=api
+greenshift-dashboard    1/1     1            1           25m   dashboard    greenshift/dashboard:latest    app=greenshift,component=dashboard
+greenshift-dispatcher   1/1     1            1           25m   dispatcher   greenshift/dispatcher:latest   app=greenshift,component=dispatcher
+greenshift-ingest       1/1     1            1           25m   ingest       greenshift/ingest:latest       app=greenshift,component=ingest
+greenshift-scheduler    1/1     1            1           25m   scheduler    greenshift/scheduler:latest    app=greenshift,component=scheduler
+greenshift-trust        1/1     1            1           25m   trust        greenshift/trust:latest        app=greenshift,component=trust
+postgres                1/1     1            1           25m   postgres     postgres:16-alpine             app=greenshift,component=postgres
+
+=== CONFIGMAPS ===
+NAME                     DATA   AGE
+greenshift-config        16     25m
+greenshift-tariff-data   1      25m
+kube-root-ca.crt         1      3d10h
+
+=== RBAC (SA, ROLES, BINDINGS) ===
+NAME                                   AGE
+serviceaccount/default                 3d10h
+serviceaccount/greenshift-dispatcher   3d10h
+
+NAME                                                        CREATED AT
+role.rbac.authorization.k8s.io/greenshift-dispatcher-role   2026-09-05T07:15:04Z
+
+NAME                                                                      ROLE                              AGE
+rolebinding.rbac.authorization.k8s.io/greenshift-dispatcher-rolebinding   Role/greenshift-dispatcher-role   3d10h

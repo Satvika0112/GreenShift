@@ -1,0 +1,23 @@
+﻿GreenShift Live Kubernetes Validation Evidence Summary
+Timestamp: 20260908_224717
+Directory: evidence\k8s-validation-20260908_224717
+
+Files Captured:
+
+Name                                              Length LastWriteTime      
+----                                              ------ -------------      
+00_manifest.txt                                        0 08-09-2026 22:49:38
+01_cluster_info.txt                                  972 08-09-2026 22:47:17
+02_k8s_resources.txt                                3746 08-09-2026 22:47:18
+03_e2e_test_output.txt                             27846 08-09-2026 22:48:27
+05_pytest_k8s_integration.txt                       2484 08-09-2026 22:49:38
+pod_log_greenshift-api-5bd46c968f-bztl8.txt        13528 08-09-2026 22:48:27
+pod_log_greenshift-dashboard-5c4b79745-mt7dk.txt     181 08-09-2026 22:48:28
+pod_log_greenshift-dispatcher-7ff68f944-94fjz.txt   3631 08-09-2026 22:48:28
+pod_log_greenshift-ingest-67b4849ccf-pv4xs.txt      6510 08-09-2026 22:48:28
+pod_log_greenshift-scheduler-7bb5bdbc86-rwtbj.txt   4237 08-09-2026 22:48:28
+pod_log_greenshift-trust-696fcbfdd9-g5gvp.txt       5164 08-09-2026 22:48:28
+pod_log_gs-job-7d506fcb-5rztj.txt                  33479 08-09-2026 22:48:28
+pod_log_postgres-676c48778b-jkbqm.txt               3650 08-09-2026 22:48:28
+
+

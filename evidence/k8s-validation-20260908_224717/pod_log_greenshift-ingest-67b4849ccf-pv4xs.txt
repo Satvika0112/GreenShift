@@ -1,0 +1,55 @@
+﻿2026-09-08 17:03:02,290 | WARNING  | app.shared.database | Database not ready on attempt 1/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:04,291 | WARNING  | app.shared.database | Database not ready on attempt 2/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:11,297 | WARNING  | app.shared.database | Database not ready on attempt 3/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:13,299 | WARNING  | app.shared.database | Database not ready on attempt 4/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:15,300 | WARNING  | app.shared.database | Database not ready on attempt 5/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:17,308 | WARNING  | app.shared.database | Database not ready on attempt 6/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:24,315 | WARNING  | app.shared.database | Database not ready on attempt 7/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:26,316 | WARNING  | app.shared.database | Database not ready on attempt 8/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:43,328 | WARNING  | app.shared.database | Database not ready on attempt 9/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:45,395 | INFO     | app.shared.database | Database tables initialized and migrated successfully
+2026-09-08 17:03:45,395 | INFO     | __main__ | Database initialised successfully
+2026-09-08 17:03:45,395 | ERROR    | app.ingest.job_csv_loader | Job CSV not found: /data/jobs/greenshift_workloads_final.csv
+2026-09-08 17:03:45,395 | WARNING  | __main__ | No valid jobs loaded from CSV /data/jobs/greenshift_workloads_final.csv
+2026-09-08 17:03:45,395 | INFO     | __main__ | Initial CSV load: 0 jobs loaded, 1 errors
+2026-09-08 17:03:45,395 | WARNING  | __main__ | CSV load error: Job CSV not found: /data/jobs/greenshift_workloads_final.csv
+2026-09-08 17:03:45,395 | INFO     | __main__ | Ingest service started — refreshing data every 3600s
+2026-09-08 17:03:45,396 | WARNING  | greenshift.carbon | [CARBON] API unavailable: ELECTRICITY_MAPS_API_KEY is not configured — attempting resilience fallback
+2026-09-08 17:03:45,409 | WARNING  | greenshift.carbon | [CARBON] Using emergency fallback (400.0 gCO2/kWh) for region IN-TG. Reason: ELECTRICITY_MAPS_API_KEY is not configured
+2026-09-08 17:03:45,468 | INFO     | __main__ | Stored 49 carbon data points for IN-TG (source=fallback, fallback=True)
+2026-09-08 17:03:45,471 | INFO     | app.ingest.regional_tariff_loader | Loaded Master Regional Tariff dataset from /data/tariff/master_tod_tariff_all_regions.csv (IN-TG: 24, IN-GJ: 24, IN-HP: 0, IN-WB: 24 hours)
+2026-09-08 17:03:45,607 | INFO     | greenshift.data_sources | Tariff data: Regional Data Layer (49 points, 0.0858–0.1050 USD/kWh) for region=IN-TG
+2026-09-08 17:03:45,614 | INFO     | __main__ | Stored 49 tariff data points for IN-TG
+2026-09-08 17:03:45,614 | WARNING  | greenshift.carbon | [CARBON] API unavailable: ELECTRICITY_MAPS_API_KEY is not configured — attempting resilience fallback
+2026-09-08 17:03:45,616 | WARNING  | greenshift.carbon | [CARBON] Using emergency fallback (400.0 gCO2/kWh) for region IN-GJ. Reason: ELECTRICITY_MAPS_API_KEY is not configured
+2026-09-08 17:03:45,665 | INFO     | __main__ | Stored 49 carbon data points for IN-GJ (source=fallback, fallback=True)
+2026-09-08 17:03:45,766 | INFO     | greenshift.data_sources | Tariff data: Regional Data Layer (49 points, 0.0408–0.0534 USD/kWh) for region=IN-GJ
+2026-09-08 17:03:45,773 | INFO     | __main__ | Stored 49 tariff data points for IN-GJ
+2026-09-08 17:03:45,773 | WARNING  | greenshift.carbon | [CARBON] API unavailable: ELECTRICITY_MAPS_API_KEY is not configured — attempting resilience fallback
+2026-09-08 17:03:45,775 | WARNING  | greenshift.carbon | [CARBON] Using emergency fallback (400.0 gCO2/kWh) for region IN-HP. Reason: ELECTRICITY_MAPS_API_KEY is not configured
+2026-09-08 17:03:45,794 | INFO     | __main__ | Stored 49 carbon data points for IN-HP (source=fallback, fallback=True)
+2026-09-08 17:03:45,899 | INFO     | greenshift.data_sources | Tariff data: Regional Data Layer (49 points, 0.0666–0.0666 USD/kWh) for region=IN-HP
+2026-09-08 17:03:45,907 | INFO     | __main__ | Stored 49 tariff data points for IN-HP
+2026-09-08 17:03:45,908 | WARNING  | greenshift.carbon | [CARBON] API unavailable: ELECTRICITY_MAPS_API_KEY is not configured — attempting resilience fallback
+2026-09-08 17:03:45,915 | WARNING  | greenshift.carbon | [CARBON] Using emergency fallback (400.0 gCO2/kWh) for region IN-WB. Reason: ELECTRICITY_MAPS_API_KEY is not configured
+2026-09-08 17:03:45,966 | INFO     | __main__ | Stored 49 carbon data points for IN-WB (source=fallback, fallback=True)
+2026-09-08 17:03:46,108 | INFO     | greenshift.data_sources | Tariff data: Regional Data Layer (49 points, 0.0534–0.1314 USD/kWh) for region=IN-WB
+2026-09-08 17:03:46,113 | INFO     | __main__ | Stored 49 tariff data points for IN-WB

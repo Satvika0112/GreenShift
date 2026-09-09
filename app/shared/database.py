@@ -131,6 +131,10 @@ def run_schema_migrations() -> None:
         ("jobs", "energy_kwh",          "FLOAT",     "DOUBLE PRECISION"),
         ("jobs", "deferrable",          "BOOLEAN",   "BOOLEAN"),
         ("jobs", "tariff_plan",         "VARCHAR",   "VARCHAR"),
+        # jobs table — dispatch claiming metadata
+        ("jobs", "claimed_by",          "VARCHAR",   "VARCHAR"),
+        ("jobs", "claimed_at",          "DATETIME",  "TIMESTAMP WITH TIME ZONE"),
+        ("jobs", "lease_expires_at",    "DATETIME",  "TIMESTAMP WITH TIME ZONE"),
         # schedule_decisions table — tariff & regional impact fields
         ("schedule_decisions", "optimization_score",     "FLOAT",   "DOUBLE PRECISION"),
         ("schedule_decisions", "tariff_inr_per_kwh",     "FLOAT",   "DOUBLE PRECISION"),
@@ -145,6 +149,12 @@ def run_schema_migrations() -> None:
         ("schedule_decisions", "cost_reduction_pct",     "FLOAT",   "DOUBLE PRECISION"),
         ("schedule_decisions", "scheduling_delay_hours", "FLOAT",   "DOUBLE PRECISION"),
         ("schedule_decisions", "sla_met",                "BOOLEAN", "BOOLEAN"),
+        # schedule_decisions table — contention-aware & ML advisor fields
+        ("schedule_decisions", "scheduling_method",      "VARCHAR", "VARCHAR"),
+        ("schedule_decisions", "slot_utilization_pct",   "FLOAT",   "DOUBLE PRECISION"),
+        ("schedule_decisions", "demand_predicted",       "FLOAT",   "DOUBLE PRECISION"),
+        ("schedule_decisions", "spilled_from_preferred", "BOOLEAN", "BOOLEAN"),
+        ("schedule_decisions", "ml_advisor_used",        "BOOLEAN", "BOOLEAN"),
         # regional_tariffs table — new common schema columns
         ("regional_tariffs", "tod_block",        "VARCHAR", "VARCHAR"),
         ("regional_tariffs", "base_energy_rate", "FLOAT",   "DOUBLE PRECISION"),
@@ -162,6 +172,9 @@ def run_schema_migrations() -> None:
         ("carbon_data", "confidence_status", "VARCHAR", "VARCHAR"),
         ("carbon_data", "is_fallback",       "BOOLEAN", "BOOLEAN"),
         ("carbon_data", "fallback_reason",   "VARCHAR", "VARCHAR"),
+        # Phase 1 Multi-Tenant: tenant_id on users and jobs
+        ("users", "tenant_id",  "VARCHAR", "VARCHAR"),
+        ("jobs",  "tenant_id",  "VARCHAR", "VARCHAR"),
     ]
 
     with engine.begin() as conn:
@@ -204,6 +217,29 @@ def run_schema_migrations() -> None:
                     logger.info("Schema migration: created unique index uq_audit_events_sequence on audit_events(sequence)")
         except Exception as exc:
             logger.debug("Migration skip unique index on audit_events.sequence: %s", exc)
+
+        # Ensure SQLite jobs check constraint includes all lifecycle statuses
+        if not is_pg:
+            try:
+                with engine.connect() as conn:
+                    row = conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'")).fetchone()
+                    if row and row[0]:
+                        old_c = "CHECK (status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED'))"
+                        new_c = "CHECK (status IN ('SUBMITTED', 'VALIDATED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'REJECTED', 'QUEUED', 'DISPATCHING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'))"
+                        if old_c in row[0]:
+                            conn.execute(text("PRAGMA foreign_keys=OFF;"))
+                            new_sql = row[0].replace(old_c, new_c).replace('CREATE TABLE "jobs"', 'CREATE TABLE "jobs_new"')
+                            conn.execute(text(new_sql))
+                            conn.execute(text("INSERT INTO jobs_new SELECT * FROM jobs;"))
+                            conn.execute(text("DROP TABLE jobs;"))
+                            conn.execute(text("ALTER TABLE jobs_new RENAME TO jobs;"))
+                            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_team_status ON jobs (team_id, status);"))
+                            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_status_created ON jobs (status, created_at);"))
+                            conn.execute(text("PRAGMA foreign_keys=ON;"))
+                            conn.commit()
+                            logger.info("Schema migration: successfully updated SQLite jobs status check constraint")
+            except Exception as exc:
+                logger.debug("SQLite check constraint migration skipped: %s", exc)
 
 
 def init_db(max_retries: int = 15, delay_seconds: float = 2.0) -> None:

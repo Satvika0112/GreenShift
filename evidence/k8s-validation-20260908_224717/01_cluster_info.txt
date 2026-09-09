@@ -1,0 +1,18 @@
+﻿=== KUBECTL CLUSTER-INFO ===
+Kubernetes control plane is running at https://127.0.0.1:63799
+CoreDNS is running at https://127.0.0.1:63799/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+
+To further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.
+
+=== KUBERNETES NODES ===
+NAME                    STATUS   ROLES           AGE     VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE                       KERNEL-VERSION                              CONTAINER-RUNTIME
+desktop-control-plane   Ready    control-plane   3d10h   v1.36.1   172.19.0.4    <none>        Debian GNU/Linux 13 (trixie)   6.18.33.2-microsoft-standard-WSL2 (amd64)   containerd://2.3.1
+
+=== NAMESPACES ===
+NAME                 STATUS   AGE
+default              Active   3d10h
+greenshift           Active   3d10h
+kube-node-lease      Active   3d10h
+kube-public          Active   3d10h
+kube-system          Active   3d10h
+local-path-storage   Active   3d10h

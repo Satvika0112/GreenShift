@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -50,18 +50,25 @@ def utcnow() -> datetime:
 
 class JobStatus(str, enum.Enum):
     SUBMITTED        = "SUBMITTED"
+    VALIDATED        = "VALIDATED"
     SCHEDULED        = "SCHEDULED"
     PENDING_APPROVAL = "PENDING_APPROVAL"
     APPROVED         = "APPROVED"
+    READY            = "READY"        # scheduled + selected_start <= now -> eligible for dispatch
+    CLAIMING         = "CLAIMING"     # dispatcher worker holds atomic lease
     DECLINED         = "DECLINED"
+    REJECTED         = "REJECTED"
     QUEUED           = "QUEUED"
+    DISPATCHING      = "DISPATCHING"
     RUNNING          = "RUNNING"
     COMPLETED        = "COMPLETED"
     FAILED           = "FAILED"
+    CANCELLED        = "CANCELLED"
 
 
 class EventType(str, enum.Enum):
     JOB_SUBMITTED        = "JOB_SUBMITTED"
+    JOB_VALIDATED        = "JOB_VALIDATED"
     JOB_SCHEDULED        = "JOB_SCHEDULED"
     SCHEDULE_PROPOSED    = "SCHEDULE_PROPOSED"
     APPROVAL_GRANTED     = "APPROVAL_GRANTED"
@@ -74,6 +81,7 @@ class EventType(str, enum.Enum):
     K8S_JOB_STARTED      = "K8S_JOB_STARTED"
     K8S_JOB_COMPLETED    = "K8S_JOB_COMPLETED"
     K8S_JOB_FAILED       = "K8S_JOB_FAILED"
+    JOB_CANCELLED        = "JOB_CANCELLED"
     BUDGET_UPDATED       = "BUDGET_UPDATED"
     EXPORT_GENERATED     = "EXPORT_GENERATED"
     # ── Carbon Provenance & Resilience Events ──
@@ -92,9 +100,32 @@ class EventType(str, enum.Enum):
 
 class UserRole(str, enum.Enum):
     ADMIN     = "ADMIN"
-    TEAM_LEAD = "TEAM_LEAD"
     OPERATOR  = "OPERATOR"
+    USER      = "USER"      # Renamed from TEAM_LEAD in Phase 1 multi-tenant
+    TEAM_LEAD = "TEAM_LEAD" # Kept for backward compat with existing DB rows and tests
     VIEWER    = "VIEWER"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLAlchemy ORM — Tenant
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TenantORM(Base):
+    """Multi-tenant organisation (provisioning-only — no API creation endpoint)."""
+
+    __tablename__ = "tenants"
+
+    id         = Column(String, primary_key=True)             # e.g. "tenant-acme"
+    name       = Column(String, nullable=False, unique=True)  # e.g. "Acme Corp"
+    is_active  = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    users    = relationship("UserORM", back_populates="tenant", foreign_keys="UserORM.tenant_id")
+    api_keys = relationship("APIKeyORM", back_populates="tenant")
+
+
+# RULE 3: API keys can NEVER have ADMIN role
+API_KEY_ALLOWED_ROLES = {UserRole.OPERATOR, UserRole.USER, UserRole.VIEWER}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -106,7 +137,10 @@ class UserORM(Base):
 
     __tablename__ = "users"
     __table_args__ = (
-        CheckConstraint("role IN ('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'VIEWER')", name="ck_users_role_valid"),
+        CheckConstraint(
+            "role IN ('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'USER', 'VIEWER')",
+            name="ck_users_role_valid",
+        ),
     )
 
     id              = Column(Integer, primary_key=True, autoincrement=True)
@@ -114,10 +148,37 @@ class UserORM(Base):
     email           = Column(String(255), nullable=False, unique=True, index=True)
     hashed_password = Column(String(255), nullable=False)
     role            = Column(SAEnum(UserRole), default=UserRole.VIEWER, nullable=False, index=True)
-    team_id         = Column(String, nullable=True, index=True)
+    team_id         = Column(String, nullable=True, index=True)   # team within org — NOT removed
+    tenant_id       = Column(String, ForeignKey("tenants.id"), nullable=True, index=True)  # org
     is_active       = Column(Boolean, default=True, nullable=False)
     created_at      = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     updated_at      = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
+
+    tenant = relationship("TenantORM", back_populates="users", foreign_keys=[tenant_id])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLAlchemy ORM — APIKey
+# ─────────────────────────────────────────────────────────────────────────────
+
+class APIKeyORM(Base):
+    """
+    API key for CI/CD pipelines and automated systems.
+    RULE 3: role can NEVER be ADMIN — enforced at creation time.
+    """
+
+    __tablename__ = "api_keys"
+
+    id         = Column(String, primary_key=True)            # UUID
+    key_hash   = Column(String, nullable=False, unique=True) # SHA-256 of raw key
+    tenant_id  = Column(String, ForeignKey("tenants.id"), nullable=False, index=True)
+    role       = Column(SAEnum(UserRole), nullable=False, default=UserRole.OPERATOR)
+    label      = Column(String, nullable=True)               # e.g. "CI pipeline"
+    is_active  = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    last_used  = Column(DateTime(timezone=True), nullable=True)
+
+    tenant = relationship("TenantORM", back_populates="api_keys")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -131,16 +192,19 @@ class JobORM(Base):
     __table_args__ = (
         Index("ix_jobs_team_status", "team_id", "status"),
         Index("ix_jobs_status_created", "status", "created_at"),
+        Index("idx_jobs_dispatch_queue", "status", "priority", "deadline"),
+        Index("idx_jobs_claim_lease", "status", "lease_expires_at"),
         CheckConstraint("runtime_minutes > 0", name="ck_jobs_runtime_minutes_positive"),
         CheckConstraint("power_kw > 0", name="ck_jobs_power_kw_positive"),
         CheckConstraint("carbon_budget_kg IS NULL OR carbon_budget_kg >= 0", name="ck_jobs_carbon_budget_non_negative"),
         CheckConstraint("energy_kwh IS NULL OR energy_kwh >= 0", name="ck_jobs_energy_kwh_non_negative"),
-        CheckConstraint("status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')", name="ck_jobs_status_valid"),
+        CheckConstraint("status IN ('SUBMITTED', 'VALIDATED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'READY', 'CLAIMING', 'DECLINED', 'REJECTED', 'QUEUED', 'DISPATCHING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED')", name="ck_jobs_status_valid"),
     )
 
     job_id               = Column(String, primary_key=True)
     workload_name        = Column(String, nullable=True)   # workload name/identifier
-    team_id              = Column(String, nullable=False, index=True)
+    team_id              = Column(String, nullable=False, index=True)  # team within org — NOT removed
+    tenant_id            = Column(String, ForeignKey("tenants.id"), nullable=True, index=True)  # org (nullable for backward compat)
     submitted_at         = Column(DateTime(timezone=True), nullable=False, index=True)
     deadline             = Column(DateTime(timezone=True), nullable=False, index=True)
     runtime_minutes      = Column(Integer, nullable=False)
@@ -158,6 +222,10 @@ class JobORM(Base):
     earliest_start_time  = Column(DateTime(timezone=True), nullable=True) # job cannot start before this
     energy_kwh           = Column(Float, nullable=True)    # pre-computed or power_kw * runtime_h
     deferrable           = Column(Boolean, nullable=True)  # True = can be shifted for savings
+    # ── Dispatch claiming metadata ──
+    claimed_by           = Column(String, nullable=True)   # worker_id of the dispatcher that claimed this job
+    claimed_at           = Column(DateTime(timezone=True), nullable=True)    # when the claim was made
+    lease_expires_at     = Column(DateTime(timezone=True), nullable=True)    # claim auto-expires after this time
     created_at           = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     updated_at           = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
 
@@ -260,6 +328,13 @@ class ScheduleDecisionORM(Base):
     scheduler_objective       = Column(String, nullable=True, default="CARBON_FIRST")
     deterministic_rank        = Column(Integer, nullable=True, default=1)
 
+    # Contention-aware scheduling metadata
+    scheduling_method       = Column(String, nullable=True, default="single_greedy")
+    slot_utilization_pct    = Column(Float, nullable=True)
+    demand_predicted        = Column(Float, nullable=True)
+    spilled_from_preferred  = Column(Boolean, nullable=True, default=False)
+    ml_advisor_used         = Column(Boolean, nullable=True, default=False)
+
     job = relationship("JobORM", back_populates="schedule_decision", foreign_keys=[job_id])
     approvals = relationship(
         "ApprovalORM",
@@ -317,7 +392,7 @@ class KubernetesExecutionORM(Base):
         Index("ix_k8s_executions_job_status", "job_id", "gs_status"),
         CheckConstraint("planned_end IS NULL OR planned_start IS NULL OR planned_end > planned_start", name="ck_k8s_executions_planned_time_window"),
         CheckConstraint("actual_end IS NULL OR actual_start IS NULL OR actual_end >= actual_start", name="ck_k8s_executions_actual_time_window"),
-        CheckConstraint("gs_status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')", name="ck_k8s_executions_status_valid"),
+        CheckConstraint("gs_status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'READY', 'CLAIMING', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')", name="ck_k8s_executions_status_valid"),
     )
 
     id                   = Column(Integer, primary_key=True, autoincrement=True)
@@ -678,6 +753,13 @@ class ScheduleDecision(BaseModel):
     scheduling_delay_hours:    Optional[float]    = None
     sla_met:                   Optional[bool]     = True
 
+    # Contention-aware scheduling metadata
+    scheduling_method:         Optional[str]      = "single_greedy"
+    slot_utilization_pct:      Optional[float]    = None
+    demand_predicted:          Optional[float]    = None
+    spilled_from_preferred:    Optional[bool]     = False
+    ml_advisor_used:           Optional[bool]     = False
+
 
 class KubernetesExecution(BaseModel):
     """Status of a dispatched Kubernetes Job."""
@@ -802,8 +884,21 @@ class UserRegisterRequest(BaseModel):
 class UserLoginRequest(BaseModel):
     """Payload for user login."""
 
-    username: str = Field(..., description="Username or email")
+    username: Optional[str] = Field(None, description="Username or email")
+    username_or_email: Optional[str] = Field(None, description="Username or email alias")
     password: str = Field(..., description="User password")
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_username(cls, data: object) -> object:
+        if isinstance(data, dict):
+            u = data.get("username") or data.get("username_or_email")
+            if u:
+                data["username"] = u
+                data["username_or_email"] = u
+            elif not data.get("username"):
+                raise ValueError("Username or email is required")
+        return data
 
 
 class UserResponse(BaseModel):
@@ -829,3 +924,82 @@ class TokenResponse(BaseModel):
     user: UserResponse
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1 Multi-Tenant Auth Schemas
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    """Email + password login (tenant-aware)."""
+    email: str = Field(..., description="User email address")
+    password: str = Field(..., description="User password")
+
+
+class LoginResponse(BaseModel):
+    """Response from POST /auth/login."""
+    access_token: str
+    token_type: str = "bearer"
+    tenant_id: Optional[str] = None
+    role: str
+    expires_in: int
+
+
+class UserCreateRequest(BaseModel):
+    """ADMIN-only user creation within own tenant."""
+    email: str = Field(..., description="User email address")
+    password: str = Field(..., min_length=8, description="Password (min 8 chars)")
+    role: UserRole = Field(default=UserRole.VIEWER)
+    username: Optional[str] = Field(None, description="Optional username; defaults to email prefix")
+    team_id: Optional[str] = Field(None, description="Optional team within the tenant")
+
+
+class TenantUserResponse(BaseModel):
+    """User profile response including tenant context."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    email: str
+    role: UserRole
+    tenant_id: Optional[str] = None
+    team_id: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+
+
+class APIKeyCreateRequest(BaseModel):
+    """ADMIN-only API key creation. Role must not be ADMIN."""
+    label: Optional[str] = Field(None, description="Human-readable label e.g. 'CI pipeline'")
+    role: UserRole = Field(default=UserRole.OPERATOR, description="Role for API key (cannot be ADMIN)")
+
+
+class APIKeyCreateResponse(BaseModel):
+    """Response from POST /admin/api-keys — raw key shown ONCE only."""
+    key_id: str
+    api_key: str   # raw key — shown only at creation time
+    tenant_id: str
+    role: str
+    label: Optional[str] = None
+    created_at: datetime
+
+
+class APIKeyListItem(BaseModel):
+    """API key list entry — never exposes raw key or hash."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    tenant_id: str
+    role: UserRole
+    label: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+    last_used: Optional[datetime] = None
+
+
+class TenantResponse(BaseModel):
+    """Tenant info response."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    is_active: bool
+    created_at: datetime

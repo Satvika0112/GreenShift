@@ -1,0 +1,36 @@
+﻿2026-09-08 17:03:02,908 | WARNING  | app.shared.database | Database not ready on attempt 1/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:04,909 | WARNING  | app.shared.database | Database not ready on attempt 2/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:06,910 | WARNING  | app.shared.database | Database not ready on attempt 3/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:08,911 | WARNING  | app.shared.database | Database not ready on attempt 4/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:10,912 | WARNING  | app.shared.database | Database not ready on attempt 5/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:12,913 | WARNING  | app.shared.database | Database not ready on attempt 6/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:19,925 | WARNING  | app.shared.database | Database not ready on attempt 7/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:21,926 | WARNING  | app.shared.database | Database not ready on attempt 8/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:23,927 | WARNING  | app.shared.database | Database not ready on attempt 9/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:30,932 | WARNING  | app.shared.database | Database not ready on attempt 10/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:32,933 | WARNING  | app.shared.database | Database not ready on attempt 11/15 ((psycopg2.OperationalError) could not translate host name "postgres" to address: Temporary failure in name resolution
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)) — retrying in 2.0s...
+2026-09-08 17:03:34,991 | INFO     | app.shared.database | Database tables initialized and migrated successfully
+2026-09-08 17:03:34,991 | INFO     | __main__ | Database initialised successfully
+2026-09-08 17:03:34,991 | INFO     | __main__ | DISPATCH service started — polling every 30s

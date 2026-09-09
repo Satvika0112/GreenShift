@@ -10,9 +10,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-logger = logging.getLogger("greenshift.dashboard.api")
+logger = logging.getLogger(__name__)
 
-API_URL = os.environ.get("API_BASE_URL", os.environ.get("GREENSHIFT_API_URL", "http://localhost:8000"))
+def _get_active_api_url() -> str:
+    env_url = os.environ.get("API_BASE_URL") or os.environ.get("GREENSHIFT_API_URL")
+    if env_url:
+        return env_url.rstrip("/")
+    for candidate in ("http://127.0.0.1:8001", "http://localhost:8001", "http://127.0.0.1:8000", "http://localhost:8000"):
+        try:
+            r = httpx.get(f"{candidate}/live", timeout=0.8)
+            if r.status_code == 200:
+                return candidate
+        except Exception:
+            continue
+    return "http://127.0.0.1:8001"
+
+API_URL = _get_active_api_url()
 DEFAULT_TIMEOUT = 12.0
 
 
@@ -36,7 +49,11 @@ def get_auth_headers(token: Optional[str] = None) -> Dict[str, str]:
 
 def login_user_api(username_or_email: str, password: str) -> Dict[str, Any]:
     """Authenticate user with backend and retrieve JWT access token."""
-    payload = {"username_or_email": username_or_email, "password": password}
+    payload = {
+        "username": username_or_email,
+        "username_or_email": username_or_email,
+        "password": password,
+    }
     try:
         r = httpx.post(f"{API_URL}/api/v1/auth/login", json=payload, timeout=DEFAULT_TIMEOUT)
         if r.status_code == 404:
@@ -148,6 +165,16 @@ def submit_job_api(payload: Dict[str, Any], token: Optional[str] = None) -> Dict
     """Submit a new workload specification."""
     headers = get_auth_headers(token)
     r = httpx.post(f"{API_URL}/api/v1/jobs", json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
+    if r.status_code >= 400:
+        detail = r.json().get("detail", r.text) if "application/json" in r.headers.get("content-type", "") else r.text
+        raise RuntimeError(f"HTTP {r.status_code}: {detail}")
+    return r.json()
+
+
+def cancel_job_api(job_id: str, token: Optional[str] = None) -> Dict[str, Any]:
+    """Cancel an active or pending workload."""
+    headers = get_auth_headers(token)
+    r = httpx.post(f"{API_URL}/api/v1/jobs/{job_id}/cancel", headers=headers, timeout=DEFAULT_TIMEOUT)
     if r.status_code >= 400:
         detail = r.json().get("detail", r.text) if "application/json" in r.headers.get("content-type", "") else r.text
         raise RuntimeError(f"HTTP {r.status_code}: {detail}")
@@ -485,4 +512,106 @@ def fetch_reports_savings(token: Optional[str] = None) -> Dict[str, Any]:
     except Exception:
         pass
     return {}
+
+
+def fetch_fleet_impact_api(token: Optional[str] = None) -> Dict[str, Any]:
+    """Fetch full fleet impact analysis with direct DB fallback."""
+    try:
+        headers = get_auth_headers(token)
+        r = httpx.get(f"{API_URL}/api/v1/impact/fleet", headers=headers, timeout=DEFAULT_TIMEOUT)
+        if r.status_code == 404:
+            r = httpx.get(f"{API_URL}/impact/fleet", headers=headers, timeout=DEFAULT_TIMEOUT)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+
+    # Direct DB fallback
+    try:
+        from app.shared.database import SessionLocal
+        from app.analytics.fleet_impact import compute_fleet_impact
+        db = SessionLocal()
+        try:
+            report = compute_fleet_impact(db)
+            return report.to_dict()
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("Failed direct DB fallback for fleet impact: %s", exc)
+        return {}
+
+
+def fetch_capacity_map_api() -> Dict[str, Any]:
+    """Fetch slot capacity & contention heatmap with direct fallback."""
+    try:
+        r = httpx.get(f"{API_URL}/api/v1/scheduler/capacity-map", timeout=DEFAULT_TIMEOUT)
+        if r.status_code == 404:
+            r = httpx.get(f"{API_URL}/scheduler/capacity-map", timeout=DEFAULT_TIMEOUT)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+
+    try:
+        from app.shared.database import SessionLocal
+        from app.decide.slot_capacity import SlotCapacityRegistry
+        from app.dispatch.k8s_state_collector import collect_cluster_state, _parse_cpu_string, _parse_memory_string
+        from app.shared.models import JobORM, ScheduleDecisionORM
+        db = SessionLocal()
+        try:
+            cluster_state = collect_cluster_state()
+            registry = SlotCapacityRegistry(default_snapshot=cluster_state)
+            decisions = db.query(ScheduleDecisionORM).all()
+            for sd in decisions:
+                job = db.query(JobORM).filter(JobORM.job_id == sd.job_id).first()
+                if job and sd.selected_start:
+                    cpu = _parse_cpu_string(job.cpu_request or "500m")
+                    mem = _parse_memory_string(job.memory_request or "512Mi")
+                    gpu = int(getattr(job, "gpu_request", 0) or 0)
+                    duration_hours = (job.runtime_minutes or 60) / 60.0
+                    region = sd.region_id or job.region or "us-east-1"
+                    registry.allocate(region, sd.selected_start, duration_hours, cpu, mem, gpu)
+            return {
+                "summary": registry.get_summary(),
+                "cluster_limits": {
+                    "max_cpu_cores": registry.default_max_cpu,
+                    "max_memory_mib": registry.default_max_mem_mib,
+                    "max_gpus": registry.default_max_gpus,
+                },
+                "contention_map": registry.get_contention_map(),
+            }
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("Capacity map fallback error: %s", exc)
+        return {}
+
+
+def fetch_demand_forecaster_status_api() -> Dict[str, Any]:
+    """Fetch demand forecaster model status and metrics."""
+    try:
+        r = httpx.get(f"{API_URL}/api/v1/demand-forecaster/status", timeout=DEFAULT_TIMEOUT)
+        if r.status_code == 404:
+            r = httpx.get(f"{API_URL}/demand-forecaster/status", timeout=DEFAULT_TIMEOUT)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+
+    try:
+        from app.decide.demand_forecaster import get_demand_forecaster
+        from app.shared.database import SessionLocal
+        from app.shared.models import JobORM
+        db = SessionLocal()
+        try:
+            forecaster = get_demand_forecaster()
+            st_data = forecaster.get_status()
+            st_data["historical_job_count"] = db.query(JobORM).count()
+            st_data["model_type"] = "GradientBoostingRegressor (n=50, depth=4)" if forecaster.is_trained else None
+            return st_data
+        finally:
+            db.close()
+    except Exception:
+        return {"is_trained": False}
+
 

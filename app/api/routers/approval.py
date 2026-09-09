@@ -25,8 +25,10 @@ from app.shared.auth import get_current_user
 from app.shared.database import get_db
 from app.shared.rate_limiter import limiter
 from app.shared.models import (
+    ApprovalORM,
     ApprovalRequest,
     ApprovalResponse,
+    JobORM,
     PendingApprovalItem,
     UserORM,
     UserRole,
@@ -168,6 +170,50 @@ def api_get_pending_approvals(
     except Exception as exc:
         logger.error(f"Error fetching pending approvals: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while retrieving pending approvals.")
+
+
+@router.get(
+    "/approvals/declined",
+    summary="List all declined approvals",
+)
+@router.get(
+    "/approval/declined",
+    include_in_schema=False,
+)
+def api_get_declined_approvals(
+    team_id: Optional[str] = Query(None, description="Filter declined approvals by team ID"),
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """Retrieve all declined workloads."""
+    try:
+        query = (
+            db.query(ApprovalORM)
+            .join(ApprovalORM.job)
+            .filter(ApprovalORM.decision == "DECLINED")
+        )
+        user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+        if user_role != UserRole.ADMIN.value:
+            effective_team_id = current_user.team_id or ""
+            query = query.filter(JobORM.team_id == effective_team_id)
+        elif team_id:
+            query = query.filter(JobORM.team_id == team_id)
+
+        approvals = query.order_by(ApprovalORM.created_at.desc()).all()
+        return [
+            {
+                "job_id": a.job_id,
+                "team_id": a.job.team_id if a.job else "N/A",
+                "declined_at": a.created_at.isoformat() if a.created_at else "",
+                "declined_by": a.approved_by,
+                "reason": a.reason,
+                "status": "DECLINED",
+            }
+            for a in approvals
+        ]
+    except Exception as exc:
+        logger.error(f"Error fetching declined approvals: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while retrieving declined approvals.")
 
 
 @router.get(

@@ -116,10 +116,10 @@ def update_job_status(db: Session, job_id: str, status: JobStatus) -> Optional[J
 
 
 def get_jobs_awaiting_schedule(db: Session) -> List[JobORM]:
-    """Return all jobs with status=SUBMITTED that have not yet been scheduled."""
+    """Return all jobs with status=SUBMITTED or VALIDATED that have not yet been scheduled."""
     return (
         db.query(JobORM)
-        .filter(JobORM.status == JobStatus.SUBMITTED)
+        .filter(JobORM.status.in_([JobStatus.SUBMITTED, JobStatus.VALIDATED]))
         .filter(JobORM.deadline > utcnow())
         .all()
     )

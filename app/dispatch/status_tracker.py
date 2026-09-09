@@ -73,7 +73,13 @@ def get_pod_name(
             namespace=namespace,
             label_selector=f"batch.kubernetes.io/job-name={job_name}",
         )
-        if pods.items:
+        # Filter out terminating pods (deletion_timestamp is set)
+        active_pods = [p for p in pods.items if p.metadata.deletion_timestamp is None]
+        if active_pods:
+            # Prefer the most recently created active pod
+            active_pods.sort(key=lambda p: p.metadata.creation_timestamp or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            return active_pods[0].metadata.name
+        elif pods.items:
             return pods.items[0].metadata.name
         return None
     except ApiException as exc:

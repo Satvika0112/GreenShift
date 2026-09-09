@@ -5,7 +5,14 @@ GreenShift — Real-time Job Monitoring & Kubernetes Dispatch View.
 import streamlit as st
 import pandas as pd
 
-from app.dashboard.api_client import fetch_jobs, fetch_job_detail, dispatch_job_api
+from app.dashboard.api_client import (
+    fetch_jobs,
+    fetch_job_detail,
+    dispatch_job_api,
+    schedule_job_api,
+    approve_job_api,
+    cancel_job_api,
+)
 from app.dashboard.components import (
     render_section_header,
     render_metric_card,
@@ -89,28 +96,64 @@ def render_job_monitoring_view() -> None:
             st.markdown(f"- **Carbon Avoided:** `{dec.get('carbon_avoided', 0.0):.4f} kg`")
             st.markdown(f"- **SLA Status:** `MET (Within Deadline)`")
 
-        # Action Button: Dispatch to Kubernetes
+        # Action Buttons & Status Gate
         st.markdown("---")
         col_act1, col_act2 = st.columns([1.5, 1])
+        token = st.session_state.get("auth_token")
+
         with col_act1:
             if current_status == "APPROVED":
                 st.markdown("✅ **Workload is Approved and ready for Kubernetes dispatch.**")
-            elif current_status in ("QUEUED", "RUNNING", "COMPLETED"):
-                st.markdown(f"ℹ️ Workload already dispatched. Current status: **{current_status}**.")
+            elif current_status in ("QUEUED", "RUNNING"):
+                st.markdown(f"ℹ️ Workload executing in Kubernetes. Current status: **{current_status}**.")
+            elif current_status == "COMPLETED":
+                st.markdown("✅ Workload execution has **COMPLETED** successfully.")
+            elif current_status == "DISPATCHING":
+                st.markdown("🚀 Workload is currently **DISPATCHING** to cluster...")
+            elif current_status in ("SUBMITTED", "VALIDATED"):
+                st.markdown(f"⚡ Workload is **{current_status}** and ready for Carbon-First scheduling.")
             elif current_status == "PENDING_APPROVAL":
                 st.markdown("⚠️ Workload requires **Human Approval** before dispatch is permitted.")
             elif current_status == "DECLINED":
                 st.markdown("🛑 Workload was **DECLINED**. Kubernetes dispatch is strictly blocked.")
+            elif current_status == "CANCELLED":
+                st.markdown("⚠️ Workload was **CANCELLED**.")
+            elif current_status == "FAILED":
+                st.markdown("❌ Workload execution **FAILED**.")
 
         with col_act2:
-            token = st.session_state.get("auth_token")
-            dispatch_btn = st.button("🚀 Dispatch to Kubernetes", type="primary", use_container_width=True)
-
-            if dispatch_btn:
-                try:
-                    with st.spinner("Dispatching job to Kubernetes cluster via backend authorization gate..."):
-                        disp_res = dispatch_job_api(selected_id, token=token)
-                        st.success(f"Job successfully dispatched! Status: {disp_res.get('gs_status', 'QUEUED')} | Pod: {disp_res.get('kubernetes_job_name')}")
+            if current_status == "APPROVED":
+                if st.button("🚀 Dispatch to Kubernetes", type="primary", use_container_width=True):
+                    try:
+                        with st.spinner("Dispatching job to Kubernetes cluster via backend authorization gate..."):
+                            disp_res = dispatch_job_api(selected_id, token=token)
+                            p_name = disp_res.get("pod_name") or disp_res.get("kubernetes_job_name", "gs-pod")
+                            st.success(f"Job successfully dispatched! Status: {disp_res.get('gs_status', 'QUEUED')} | Pod: {p_name}")
+                            st.rerun()
+                    except Exception as exc:
+                        st.error(f"Dispatch Blocked / Failed: {exc}")
+            elif current_status in ("SUBMITTED", "VALIDATED"):
+                if st.button("🚀 Schedule Workload Now", type="primary", use_container_width=True):
+                    try:
+                        sched_res = schedule_job_api(selected_id, token=token)
+                        st.success(f"Workload scheduled! Status: {sched_res.get('status', 'SCHEDULED')}")
                         st.rerun()
-                except Exception as exc:
-                    st.error(f"Dispatch Blocked / Failed: {exc}")
+                    except Exception as exc:
+                        st.error(f"Scheduling failed: {exc}")
+            elif current_status == "PENDING_APPROVAL":
+                curr_role = st.session_state.get("user_role", "VIEWER")
+                if curr_role in ("ADMIN", "TEAM_LEAD"):
+                    if st.button("✓ Approve Schedule", type="primary", use_container_width=True):
+                        try:
+                            sd_id = dec.get("id", 0) if dec else 0
+                            approve_job_api(selected_id, schedule_id=sd_id, token=token)
+                            st.success(f"Workload `{selected_id}` APPROVED!")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Approval failed: {exc}")
+                else:
+                    st.caption("Awaiting lead approval")
+            elif current_status in ("QUEUED", "RUNNING", "DISPATCHING"):
+                if st.button("⟳ Refresh Live Status", use_container_width=True):
+                    st.cache_data.clear()
+                    st.rerun()

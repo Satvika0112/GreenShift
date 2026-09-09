@@ -22,6 +22,8 @@ from app.shared.models import (
     UserLoginRequest,
     UserResponse,
     TokenResponse,
+    LoginRequest,
+    LoginResponse,
 )
 from app.shared.auth import (
     hash_password,
@@ -189,11 +191,13 @@ def login(
         )
 
     role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
+    tenant_id = getattr(user, "tenant_id", None)
     token = create_access_token(
         user_id=user.id,
         username=user.username,
         role=role_str,
         team_id=user.team_id,
+        tenant_id=tenant_id,
     )
 
     try:
@@ -231,3 +235,61 @@ def list_users(
     """Return all registered user profiles. Restricted to ADMIN role only."""
     users = db.query(UserORM).all()
     return users
+
+
+@router.post(
+    "/login-email",
+    response_model=LoginResponse,
+    summary="Authenticate via email + password (multi-tenant)",
+)
+def login_email(
+    request: Request,
+    body: LoginRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Email-based login for multi-tenant auth.
+    Returns JWT with tenant_id embedded for downstream tenant-scoping.
+    """
+    client_ip = getattr(request.client, "host", None) if request.client else None
+    user = db.query(UserORM).filter(UserORM.email == body.email).first()
+
+    if not user or not verify_password(body.password, user.hashed_password):
+        try:
+            record_login_failure(db, username_attempted=body.email, ip_address=client_ip)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account is deactivated",
+        )
+
+    role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
+    tenant_id = getattr(user, "tenant_id", None)
+    token = create_access_token(
+        user_id=user.id,
+        username=user.username,
+        role=role_str,
+        team_id=user.team_id,
+        tenant_id=tenant_id,
+    )
+
+    try:
+        record_login_success(db, username=user.username, role=role_str, team_id=user.team_id, ip_address=client_ip)
+    except Exception:
+        pass
+
+    return LoginResponse(
+        access_token=token,
+        token_type="bearer",
+        tenant_id=tenant_id,
+        role=role_str,
+        expires_in=settings.jwt_expire_minutes * 60,
+    )

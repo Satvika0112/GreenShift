@@ -4,7 +4,7 @@ GreenShift — Application settings loaded from environment variables / .env fil
 
 from typing import Optional, List
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     )
     jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
     jwt_expire_minutes: int = Field(default=1440, description="JWT token validity in minutes (24 hours)")
+    auth_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable JWT authentication and RBAC. Must be true when ENVIRONMENT=production. "
+            "When false (default), all endpoints are open — acceptable ONLY in development."
+        ),
+    )
     cors_origins: str = Field(
         default="http://localhost:3000,http://localhost:8000,http://localhost:8501,http://127.0.0.1:3000,http://127.0.0.1:8000,http://127.0.0.1:8501",
         description="Comma-separated list of allowed CORS origins for API clients (configured via CORS_ORIGINS)",
@@ -194,6 +201,13 @@ class Settings(BaseSettings):
         description="Allow synthetic tariff data when no CSV is configured",
     )
 
+    @model_validator(mode="after")
+    def _default_auth_enabled_for_env(self) -> "Settings":
+        if "auth_enabled" not in self.model_fields_set:
+            if (self.environment or "").strip().lower() == "production":
+                self.auth_enabled = True
+        return self
+
 
 settings = Settings()
 
@@ -202,6 +216,9 @@ def validate_security_config(cfg: Optional[Settings] = None) -> None:
     """
     Validate application security configuration and secrets.
     Fails fast if production environment is detected with missing or insecure secrets.
+
+    RULE 1: Production must refuse to start with auth disabled.
+    RULE 2: Production must reject the default dev JWT secret.
     """
     if cfg is None:
         cfg = settings
@@ -209,7 +226,7 @@ def validate_security_config(cfg: Optional[Settings] = None) -> None:
     env = (cfg.environment or "").strip().lower()
 
     if env == "production":
-        # 1. Validate JWT Secret Key
+        # 1. Validate JWT Secret length & dev defaults
         if not cfg.jwt_secret_key or cfg.jwt_secret_key in DEV_INSECURE_JWT_SECRETS:
             raise ValueError(
                 "CRITICAL SECURITY ERROR: JWT_SECRET_KEY must be set to a cryptographically "
@@ -228,8 +245,29 @@ def validate_security_config(cfg: Optional[Settings] = None) -> None:
                 )
 
         # 3. Validate CORS
-        if "*" in cfg.cors_origins_list:
+        if "*" in cfg.cors_origins_list or (cfg.cors_origins and cfg.cors_origins.strip() == "*"):
             raise ValueError(
                 "CRITICAL SECURITY ERROR: Wildcard CORS origin ('*') is forbidden in production."
             )
+
+    # ── RULE 1: Production must always have auth enabled ──────────────────────
+    if env == "production" and not cfg.auth_enabled:
+        raise RuntimeError(
+            "FATAL: AUTH_ENABLED=false in production environment. "
+            "GreenShift refuses to start with an open API in production. "
+            "Set AUTH_ENABLED=true or change ENVIRONMENT to 'development'."
+        )
+
+    # ── RULE 2: Auth enabled requires a real JWT secret ───────────────────────
+    _DEV_SECRET = "greenshift-dev-insecure-jwt-secret-do-not-use-in-production"
+    if cfg.auth_enabled and (
+        not cfg.jwt_secret_key
+        or cfg.jwt_secret_key in DEV_INSECURE_JWT_SECRETS
+        or cfg.jwt_secret_key == _DEV_SECRET
+    ):
+        raise RuntimeError(
+            "FATAL: JWT_SECRET_KEY is still the development default. "
+            "Set a strong random secret via JWT_SECRET_KEY env var. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
 

@@ -251,8 +251,9 @@ Triggers DISPATCH agent manually (normally triggered by DECIDE).
 ### Job Status
 
 ```
-SUBMITTED → SCHEDULED → QUEUED → RUNNING → COMPLETED
-                                         → FAILED
+SUBMITTED → SCHEDULED → READY → CLAIMING → QUEUED → RUNNING → COMPLETED
+                            │                               → FAILED
+                            └── lease expires → READY
 ```
 
 ### Event Types

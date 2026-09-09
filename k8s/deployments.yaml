@@ -40,7 +40,7 @@ spec:
               readOnly: true
           startupProbe:
             httpGet:
-              path: /live
+              path: /health
               port: 8000
             initialDelaySeconds: 2
             periodSeconds: 5
@@ -48,7 +48,7 @@ spec:
             failureThreshold: 10
           readinessProbe:
             httpGet:
-              path: /ready
+              path: /health
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -56,7 +56,7 @@ spec:
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /live
+              path: /health
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 15
@@ -185,7 +185,7 @@ metadata:
     app: greenshift
     component: dispatcher
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: greenshift
@@ -209,6 +209,11 @@ spec:
                 name: greenshift-config
             - secretRef:
                 name: greenshift-api-secrets
+          env:
+            - name: WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           resources:
             requests:
               cpu: "100m"
@@ -334,7 +339,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:15-alpine
+          image: postgres:16-alpine
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5432

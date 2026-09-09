@@ -43,10 +43,11 @@ router = APIRouter()
 def submit_new_job(
     request: Request,
     body: JobSubmitRequest,
+    auto_schedule: bool = Query(False, description="Automatically trigger Carbon-Aware scheduling upon submission"),
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR)),
 ):
-    """Submit a new deferrable compute job."""
+    """Submit a new deferrable compute job with input validation and lifecycle state tracking."""
     from app.shared.timezone import normalize_to_utc
     try:
         user_role_val = current_user.role.value if isinstance(current_user.role, UserRole) else str(current_user.role)
@@ -62,6 +63,27 @@ def submit_new_job(
             raise HTTPException(status_code=400, detail="Deadline must be in the future")
         body.deadline = normalized_deadline
         job = ingest_job(db, body)
+
+        # Record validation audit event
+        try:
+            from app.trust.ledger import append_event
+            append_event(db, EventType.JOB_VALIDATED, job_id=job.job_id, payload={
+                "team_id": job.team_id,
+                "region": job.region,
+                "deadline": job.deadline.isoformat(),
+                "runtime_minutes": job.runtime_minutes,
+            })
+        except Exception:
+            pass
+
+        if auto_schedule:
+            try:
+                from app.decide.service import schedule_and_store
+                schedule_and_store(db, job, record_audit=True)
+                db.refresh(job)
+            except Exception as sched_err:
+                logger.warning(f"Immediate auto-scheduling failed for {job.job_id}: {sched_err}")
+
         return JobSubmitResponse(
             job_id=job.job_id,
             status=job.status,
@@ -241,11 +263,19 @@ def get_job_detail(
         }
 
     if job.kubernetes_execution:
+        try:
+            from app.dispatch.dispatcher import refresh_job_status
+            job.kubernetes_execution = refresh_job_status(db, job.kubernetes_execution)
+        except Exception:
+            pass
         ke = job.kubernetes_execution
+        result["status"] = ke.gs_status
+        result["kubernetes_job_name"] = ke.kubernetes_job_name
+        result["pod_name"] = ke.pod_name or f"{ke.kubernetes_job_name}-pod"
         result["kubernetes"] = {
             "kubernetes_job_name": ke.kubernetes_job_name,
             "kubernetes_namespace": ke.kubernetes_namespace,
-            "pod_name": ke.pod_name,
+            "pod_name": ke.pod_name or f"{ke.kubernetes_job_name}-pod",
             "planned_start": ke.planned_start.isoformat(),
             "actual_start": ke.actual_start.isoformat() if ke.actual_start else None,
             "actual_end": ke.actual_end.isoformat() if ke.actual_end else None,
@@ -283,6 +313,74 @@ def get_job_history(
     detail = get_job_detail(job_id, db, current_user=current_user)
     detail["audit_events"] = [e.model_dump() for e in audit_trail]
     return detail
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=dict, summary="Cancel an active or pending workload")
+def cancel_workload(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """
+    Cancel a job in SUBMITTED, VALIDATED, SCHEDULED, or PENDING_APPROVAL status.
+    Enforces RBAC authorization: Admin, Operator, or matching Team Lead.
+    """
+    job = get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+    if user_role not in (UserRole.ADMIN.value, UserRole.OPERATOR.value):
+        if user_role == UserRole.TEAM_LEAD.value:
+            user_team = (current_user.team_id or "").strip().lower()
+            job_team = (job.team_id or "").strip().lower()
+            if not user_team or user_team != job_team:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Cannot cancel workload belonging to team '{job.team_id}'",
+                )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Viewer role cannot cancel workloads",
+            )
+
+    if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel job in terminal status '{job.status}'",
+        )
+
+    now = utcnow()
+    job.status = JobStatus.CANCELLED
+    job.updated_at = now
+    if job.kubernetes_execution:
+        job.kubernetes_execution.gs_status = JobStatus.CANCELLED
+        job.kubernetes_execution.updated_at = now
+    db.commit()
+
+    try:
+        from app.trust.ledger import append_event
+        append_event(
+            db,
+            EventType.JOB_CANCELLED,
+            job_id=job.job_id,
+            payload={
+                "cancelled_by": current_user.username,
+                "role": user_role,
+                "team_id": job.team_id,
+                "reason": "Cancelled by authorized user",
+            },
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to record audit event for job cancellation: {exc}")
+
+    logger.info("Job %s CANCELLED by %s (%s)", job_id, current_user.username, user_role)
+    return {
+        "job_id": job_id,
+        "status": JobStatus.CANCELLED.value,
+        "message": f"Job {job_id} cancelled successfully",
+    }
 
 
 @router.get("/analytics/carbon/{region}")
@@ -589,6 +687,35 @@ def get_carbon_data_endpoint(
             }
             for p in data
         ],
+    }
+
+
+@router.get("/carbon/current", response_model=dict)
+def get_current_carbon_endpoint(
+    region: str = Query("IN-TG", description="Grid region code"),
+    db: Session = Depends(get_db),
+):
+    """Fetch the latest carbon reading for a specific region."""
+    now = utcnow()
+    try:
+        data = fetch_and_store_carbon(db, region, now, now + timedelta(hours=1))
+        if data:
+            p = data[0]
+            return {
+                "region": region,
+                "carbon_gco2_kwh": p.carbon_gco2_kwh,
+                "timestamp": p.timestamp.isoformat(),
+                "source": p.source,
+                "is_fallback": p.is_fallback,
+            }
+    except Exception:
+        pass
+    return {
+        "region": region,
+        "carbon_gco2_kwh": 380.0,
+        "timestamp": now.isoformat(),
+        "source": "default",
+        "is_fallback": True,
     }
 
 

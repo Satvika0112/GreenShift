@@ -239,8 +239,11 @@ def get_cached_carbon_data(
                 if (start_time is None or p.timestamp >= start_time - timedelta(minutes=30))
                 and (end_time is None or p.timestamp <= end_time + timedelta(minutes=30))
             ]
-            if filtered:
-                points = filtered
+            if not filtered:
+                record_carbon_cache_miss(canonical_region)
+                logger.info("Carbon cache MISS | region=%s (no points in requested window)", canonical_region)
+                return None
+            points = filtered
 
         now = utcnow()
         for p in points:

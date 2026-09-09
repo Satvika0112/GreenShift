@@ -35,9 +35,11 @@ def get_metrics(
     if format.lower() == "json" or (accept and "application/json" in accept and format.lower() != "prometheus"):
         return metrics.get_summary()
 
-    prometheus_content = metrics.to_prometheus_format()
+    import prometheus_client
+    prom_registry_content = prometheus_client.generate_latest().decode("utf-8")
+    custom_content = metrics.to_prometheus_format()
     return PlainTextResponse(
-        content=prometheus_content,
+        content=prom_registry_content + "\n" + custom_content,
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )
 

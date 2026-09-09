@@ -64,7 +64,13 @@ def setup_route_protection_db():
     except Exception:
         pass
 
-    yield
+    from app.shared.config import settings
+    prev_auth = settings.auth_enabled
+    settings.auth_enabled = True
+    try:
+        yield
+    finally:
+        settings.auth_enabled = prev_auth
 
     _app.dependency_overrides.pop(get_db, None)
 

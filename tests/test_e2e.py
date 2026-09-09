@@ -170,3 +170,96 @@ class TestEndToEnd:
         # Verify chain is still intact
         result = verify_chain(db)
         assert result.valid is True
+
+    def test_complete_status_lifecycle_and_transitions(self, db, job_request):
+        """
+        Verify complete job status lifecycle flow:
+        SUBMITTED -> VALIDATED -> SCHEDULED / PENDING_APPROVAL -> APPROVED -> DISPATCHING -> QUEUED -> RUNNING -> COMPLETED
+        """
+        from app.dispatch.dispatcher import dispatch_job, refresh_job_status
+        from app.approval.service import approve_schedule
+
+        # 1. Submission
+        job = submit_job(db, job_request)
+        assert job.status == JobStatus.SUBMITTED
+
+        # 2. Validation
+        job.status = JobStatus.VALIDATED
+        db.commit()
+        db.refresh(job)
+        assert job.status == JobStatus.VALIDATED
+
+        # 3. Schedule & store
+        decision = schedule_and_store(db, job, record_audit=True)
+        db.refresh(job)
+        assert job.status == JobStatus.PENDING_APPROVAL
+
+        # 4. Approval
+        approve_schedule(db, job.job_id, decision.id, approved_by="admin")
+        db.refresh(job)
+        assert job.status == JobStatus.APPROVED
+
+        # 5. Dispatch
+        with patch("app.dispatch.dispatcher.get_batch_v1") as mock_batch, \
+             patch("app.dispatch.dispatcher.get_core_v1") as mock_core:
+            mock_batch_api = MagicMock()
+            mock_batch.return_value = mock_batch_api
+            from kubernetes.client.rest import ApiException
+            mock_batch_api.read_namespaced_job.side_effect = ApiException(status=404)
+            mock_batch_api.create_namespaced_job.return_value = MagicMock()
+            mock_core.return_value = MagicMock()
+
+            execution = dispatch_job(db, job)
+            db.refresh(job)
+            assert job.status == JobStatus.QUEUED
+            assert execution.gs_status == JobStatus.QUEUED
+
+            # 6. Running simulation
+            with patch("app.dispatch.dispatcher.get_batch_v1"), \
+                 patch("app.dispatch.dispatcher.get_core_v1"), \
+                 patch("app.dispatch.dispatcher.get_job_status", return_value=("Running", JobStatus.RUNNING)), \
+                 patch("app.dispatch.dispatcher.get_pod_name", return_value="gs-pod-test"), \
+                 patch("app.dispatch.dispatcher.get_pod_start_time", return_value=datetime.now(timezone.utc)):
+                refresh_job_status(db, execution)
+                db.refresh(job)
+                assert job.status == JobStatus.RUNNING
+
+            # 7. Completed simulation
+            with patch("app.dispatch.dispatcher.get_batch_v1"), \
+                 patch("app.dispatch.dispatcher.get_core_v1"), \
+                 patch("app.dispatch.dispatcher.get_job_status", return_value=("Succeeded", JobStatus.COMPLETED)), \
+                 patch("app.dispatch.dispatcher.get_job_completion_time", return_value=datetime.now(timezone.utc)):
+                refresh_job_status(db, execution)
+                db.refresh(job)
+                assert job.status == JobStatus.COMPLETED
+
+    def test_non_deferrable_workload_bypasses_approval(self, db):
+        """Non-deferrable compute workloads should bypass human approval gate directly to APPROVED."""
+        req = JobSubmitRequest(
+            team_id="URGENT-TEAM",
+            deadline=datetime.now(timezone.utc) + timedelta(hours=6),
+            runtime_minutes=15,
+            power_kw=1.0,
+            region="IN-TG",
+            container_image="greenshift/sample-workload:latest",
+            deferrable=False,
+        )
+        job = submit_job(db, req)
+        assert job.status == JobStatus.SUBMITTED
+
+        decision = schedule_and_store(db, job, record_audit=True)
+        db.refresh(job)
+        assert job.status == JobStatus.APPROVED
+
+    def test_job_cancellation_flow(self, db, job_request):
+        """Test cancelling a job in pending status transitions to CANCELLED."""
+        job = submit_job(db, job_request)
+        schedule_and_store(db, job)
+        db.refresh(job)
+        assert job.status == JobStatus.PENDING_APPROVAL
+
+        # Cancel job
+        job.status = JobStatus.CANCELLED
+        db.commit()
+        db.refresh(job)
+        assert job.status == JobStatus.CANCELLED

@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager
 import re
 import uuid
 from fastapi import FastAPI, Request, Response
@@ -27,13 +29,67 @@ API_CSP_POLICY = (
     "object-src 'none';"
 )
 
+async def _background_orchestrator():
+    """Periodically schedule pending jobs and tick the dispatcher loop."""
+    logger.info("GreenShift background orchestrator started")
+    from app.shared.database import SessionLocal
+    from app.decide.service import process_pending_jobs
+    from app.dispatch.service import dispatch_loop_tick
+
+    while True:
+        try:
+            await asyncio.sleep(5)
+            db = SessionLocal()
+            try:
+                process_pending_jobs(db)
+                dispatch_loop_tick(db)
+            finally:
+                db.close()
+        except asyncio.CancelledError:
+            logger.info("GreenShift background orchestrator cancelled")
+            break
+        except Exception as exc:
+            logger.error("Background orchestrator tick error: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("GreenShift API starting up")
+    validate_security_config(settings)
+    init_db()
+    try:
+        from app.shared.database import SessionLocal
+        from app.shared.auth import seed_default_users
+        db = SessionLocal()
+        seed_default_users(db)
+        db.close()
+    except Exception as exc:
+        logger.warning(f"Default user seeding skipped: {exc}")
+    logger.info("Database initialised")
+
+    bg_task = asyncio.create_task(_background_orchestrator())
+
+    yield
+
+    logger.info("GreenShift API shutting down")
+    bg_task.cancel()
+    try:
+        await bg_task
+    except asyncio.CancelledError:
+        pass
+
+
 app = FastAPI(
     title="GreenShift API",
     description="Carbon-aware Kubernetes compute scheduling platform",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
+
+from prometheus_fastapi_instrumentator import Instrumentator
+instrumentator = Instrumentator().instrument(app)
 
 # Rate Limiter Configuration
 app.state.limiter = limiter
@@ -96,21 +152,17 @@ async def security_and_request_tracing_middleware(request: Request, call_next):
     return response
 
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("GreenShift API starting up")
-    # Fail fast if security configuration is invalid (e.g. missing production secrets)
-    validate_security_config(settings)
-    init_db()
-    try:
-        from app.shared.database import SessionLocal
-        from app.shared.auth import seed_default_users
-        db = SessionLocal()
-        seed_default_users(db)
-        db.close()
-    except Exception as exc:
-        logger.warning(f"Default user seeding skipped: {exc}")
-    logger.info("Database initialised")
+# ─── Root Endpoint ─────────────────────────────────────────────
+@app.get("/", tags=["Health"], summary="Root Health Check")
+async def root():
+    """
+    Root endpoint: returns basic service confirmation and running status.
+    """
+    return {
+        "status": "ok",
+        "service": "GreenShift API",
+        "message": "GreenShift backend is running",
+    }
 
 
 # ─── Routers — registered by each agent ───────────────────────
@@ -192,5 +244,26 @@ try:
 except ImportError:
     logger.warning("Metrics router not yet implemented")
 
+# Fleet Impact & Variance Analytics
+try:
+    from app.api.routers import impact as impact_router
+    app.include_router(impact_router.router, prefix="/api/v1", tags=["Impact"])
+    app.include_router(impact_router.router, prefix="", tags=["Impact"])
+except ImportError:
+    logger.warning("Impact router not yet implemented")
 
+# Contention-Aware Batch Scheduler & ML Forecaster
+try:
+    from app.api.routers import scheduler as scheduler_router
+    app.include_router(scheduler_router.router, prefix="/api/v1", tags=["Scheduler"])
+    app.include_router(scheduler_router.router, prefix="", tags=["Scheduler"])
+except ImportError:
+    logger.warning("Scheduler router not yet implemented")
 
+# Admin — User & API Key Management (Phase 1 Multi-Tenant)
+try:
+    from app.api.routers import admin_router
+    app.include_router(admin_router.router, prefix="/api/v1/admin", tags=["Admin"])
+    app.include_router(admin_router.router, prefix="/admin", tags=["Admin"])
+except ImportError:
+    logger.warning("Admin router not yet implemented")

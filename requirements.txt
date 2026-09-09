@@ -26,6 +26,9 @@ streamlit==1.40.0
 pandas==2.2.2
 plotly==5.22.0
 
+# Machine Learning / Forecasting
+scikit-learn>=1.3.0
+
 # Environment / config
 python-dotenv==1.0.1
 
@@ -53,3 +56,5 @@ pytz==2024.1
 tenacity==8.3.0      # retry logic for API calls
 cachetools==5.3.3    # in-memory caching for API responses
 redis>=5.0.0         # Redis distributed cache client for Carbon API
+prometheus-fastapi-instrumentator==7.0.0
+prometheus-client>=0.20.0

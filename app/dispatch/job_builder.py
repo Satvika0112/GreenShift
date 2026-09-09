@@ -7,7 +7,7 @@ using the official Kubernetes Python client object model.
 """
 
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 from kubernetes.client import (
     V1Job,
@@ -18,6 +18,12 @@ from kubernetes.client import (
     V1Container,
     V1ResourceRequirements,
     V1EnvVar,
+    V1Affinity,
+    V1NodeAffinity,
+    V1PreferredSchedulingTerm,
+    V1NodeSelectorTerm,
+    V1NodeSelectorRequirement,
+    V1NodeSelector,
 )
 
 from app.shared.config import settings
@@ -31,14 +37,16 @@ def build_kubernetes_job(
     job: JobORM,
     decision: ScheduleDecisionORM,
     namespace: str = None,
+    preferred_node: Optional[str] = None,
 ) -> V1Job:
     """
     Build a V1Job object for a GreenShift job.
 
     Args:
-        job:       JobORM record (provides container_image, cpu_request, etc.)
-        decision:  ScheduleDecisionORM (provides timing and metadata)
-        namespace: Target namespace (defaults to settings.k8s_namespace)
+        job:            JobORM record (provides container_image, cpu_request, etc.)
+        decision:       ScheduleDecisionORM (provides timing and metadata)
+        namespace:      Target namespace (defaults to settings.k8s_namespace)
+        preferred_node: Optional node name to prefer scheduling on via node affinity
 
     Returns:
         kubernetes.client.V1Job ready to be submitted to the API.
@@ -48,6 +56,20 @@ def build_kubernetes_job(
 
     k8s_name = f"gs-{k8s_safe_name(job.job_id)}"
     duration_seconds = str(job.runtime_minutes * 60)
+
+    # Build container resources
+    gpu_req = getattr(job, "gpu_request", 0) or 0
+    requests_dict = {
+        "cpu":    job.cpu_request    or "500m",
+        "memory": job.memory_request or "512Mi",
+    }
+    limits_dict = {
+        "cpu":    _scale_cpu(job.cpu_request    or "500m"),
+        "memory": _scale_memory(job.memory_request or "512Mi"),
+    }
+    if gpu_req > 0:
+        requests_dict["nvidia.com/gpu"] = str(gpu_req)
+        limits_dict["nvidia.com/gpu"] = str(gpu_req)
 
     # Build container
     container = V1Container(
@@ -63,16 +85,53 @@ def build_kubernetes_job(
             V1EnvVar(name="SELECTED_START",     value=decision.selected_start.isoformat()),
         ],
         resources=V1ResourceRequirements(
-            requests={
-                "cpu":    job.cpu_request    or "500m",
-                "memory": job.memory_request or "512Mi",
-            },
-            limits={
-                "cpu":    _scale_cpu(job.cpu_request    or "500m"),
-                "memory": _scale_memory(job.memory_request or "512Mi"),
-            },
+            requests=requests_dict,
+            limits=limits_dict,
         ),
     )
+
+    # Node affinity configuration
+    preferred_terms = []
+    if preferred_node:
+        preferred_terms.append(
+            V1PreferredSchedulingTerm(
+                weight=100,
+                preference=V1NodeSelectorTerm(
+                    match_expressions=[
+                        V1NodeSelectorRequirement(
+                            key="kubernetes.io/hostname",
+                            operator="In",
+                            values=[preferred_node],
+                        )
+                    ]
+                ),
+            )
+        )
+
+    required_node_selector = None
+    if gpu_req > 0:
+        required_node_selector = V1NodeSelector(
+            node_selector_terms=[
+                V1NodeSelectorTerm(
+                    match_expressions=[
+                        V1NodeSelectorRequirement(
+                            key="nvidia.com/gpu.present",
+                            operator="In",
+                            values=["true"],
+                        )
+                    ]
+                )
+            ]
+        )
+
+    affinity = None
+    if preferred_terms or required_node_selector:
+        affinity = V1Affinity(
+            node_affinity=V1NodeAffinity(
+                preferred_during_scheduling_ignored_during_execution=preferred_terms or None,
+                required_during_scheduling_ignored_during_execution=required_node_selector,
+            )
+        )
 
     # Build Job
     k8s_job = V1Job(
@@ -109,12 +168,13 @@ def build_kubernetes_job(
                     service_account_name="default",
                     security_context=None,  # set by pod security policy / admission
                     containers=[container],
+                    affinity=affinity,
                 ),
             ),
         ),
     )
 
-    logger.debug("Built Kubernetes Job: %s (image=%s)", k8s_name, job.container_image)
+    logger.debug("Built Kubernetes Job: %s (image=%s, preferred_node=%s)", k8s_name, job.container_image, preferred_node)
     return k8s_job
 
 

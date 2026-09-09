@@ -186,13 +186,19 @@ def get_system_health() -> Dict[str, Any]:
         "carbon_data": carbon_health,
     }
 
+    checks = {
+        "api": "ok",
+        "database": "ok" if db_health.get("status") == "healthy" else "degraded",
+        "kubernetes": "ok" if k8s_health.get("status") == "healthy" else "unavailable",
+    }
+
     # Determine overall status
-    if db_health["status"] == "unhealthy" or carbon_health["status"] == "unhealthy":
-        overall_status = "unhealthy"
+    if db_health.get("status") == "unhealthy" or carbon_health.get("status") == "unhealthy":
+        overall_status = "degraded"
     elif (
-        redis_health["status"] == "degraded"
-        or k8s_health["status"] == "degraded"
-        or carbon_health["status"] == "degraded"
+        redis_health.get("status") == "degraded"
+        or k8s_health.get("status") == "degraded"
+        or carbon_health.get("status") == "degraded"
     ):
         overall_status = "degraded"
     else:
@@ -202,6 +208,7 @@ def get_system_health() -> Dict[str, Any]:
         "status": overall_status,
         "service": "greenshift",
         "timestamp": utcnow().isoformat(),
+        "checks": checks,
         "components": components,
     }
 

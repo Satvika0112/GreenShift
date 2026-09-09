@@ -55,6 +55,8 @@ def trigger_dispatch(
         "kubernetes_job_name": execution.kubernetes_job_name,
         "namespace": execution.kubernetes_namespace,
         "status": execution.gs_status,
+        "gs_status": execution.gs_status,
+        "pod_name": execution.pod_name or f"{execution.kubernetes_job_name}-pod",
     }
 
 
@@ -94,6 +96,34 @@ def get_dispatch_status(
         "created_at": execution.created_at.isoformat() if execution.created_at else None,
         "updated_at": execution.updated_at.isoformat() if execution.updated_at else None,
     }
+
+
+@router.get("/dispatch/executions")
+def list_dispatch_executions(
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """Retrieve all execution records."""
+    from app.shared.models import KubernetesExecutionORM
+    executions = db.query(KubernetesExecutionORM).order_by(KubernetesExecutionORM.created_at.desc()).limit(100).all()
+    return [
+        {
+            "job_id": e.job_id,
+            "execution_id": e.id,
+            "kubernetes_job_name": e.kubernetes_job_name,
+            "namespace": e.kubernetes_namespace,
+            "pod_name": e.pod_name,
+            "planned_start": e.planned_start.isoformat() if e.planned_start else None,
+            "actual_start": e.actual_start.isoformat() if e.actual_start else None,
+            "actual_end": e.actual_end.isoformat() if e.actual_end else None,
+            "k8s_status": e.k8s_status,
+            "gs_status": e.gs_status,
+            "error_message": e.error_message,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+            "updated_at": e.updated_at.isoformat() if e.updated_at else None,
+        }
+        for e in executions
+    ]
 
 
 @router.get("/kubernetes/health")
@@ -140,10 +170,16 @@ def get_cluster_state(
                     "status": n.status,
                     "cpu_capacity_cores": n.cpu_capacity_cores,
                     "cpu_allocatable_cores": n.cpu_allocatable_cores,
+                    "cpu_used_cores": n.cpu_used_cores,
+                    "cpu_free_cores": n.cpu_free_cores,
                     "memory_capacity_mib": n.memory_capacity_mib,
                     "memory_allocatable_mib": n.memory_allocatable_mib,
+                    "memory_used_mib": n.memory_used_mib,
+                    "memory_free_mib": n.memory_free_mib,
                     "gpu_capacity": n.gpu_capacity,
                     "gpu_allocatable": n.gpu_allocatable,
+                    "gpu_used": n.gpu_used,
+                    "gpu_free": n.gpu_free,
                     "roles": n.roles,
                 }
                 for n in snapshot.nodes
@@ -152,4 +188,41 @@ def get_cluster_state(
     except Exception as exc:
         logger.error(f"Error collecting cluster state: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while collecting Kubernetes cluster telemetry.")
+
+
+@router.get("/dispatch/workers")
+def get_active_workers(
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """Show active dispatcher workers and their claim stats."""
+    from sqlalchemy import func
+    from app.shared.models import JobORM
+
+    workers = (
+        db.query(
+            JobORM.claimed_by,
+            func.count(JobORM.job_id).label("active_claims"),
+            func.min(JobORM.claimed_at).label("oldest_claim"),
+        )
+        .filter(JobORM.status == JobStatus.CLAIMING)
+        .filter(JobORM.claimed_by.isnot(None))
+        .group_by(JobORM.claimed_by)
+        .all()
+    )
+
+    return {
+        "active_workers": [
+            {
+                "worker_id": w.claimed_by,
+                "active_claims": w.active_claims,
+                "oldest_claim": w.oldest_claim.isoformat() if w.oldest_claim else None,
+            }
+            for w in workers
+        ],
+        "dispatch_queue": {
+            "ready": db.query(JobORM).filter(JobORM.status == JobStatus.READY).count(),
+            "claiming": db.query(JobORM).filter(JobORM.status == JobStatus.CLAIMING).count(),
+        },
+    }
 

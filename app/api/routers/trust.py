@@ -67,3 +67,20 @@ def get_job_audit_trail(
         logger.error(f"Error retrieving audit trail for job {job_id}: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while retrieving the job audit trail.")
 
+
+@router.get("/trust/anchor/verify")
+def verify_audit_anchor(db: Session = Depends(get_db)):
+    """Verify the latest external audit anchor against the database chain."""
+    from app.trust.anchor import verify_anchor
+    return verify_anchor(db)
+
+
+@router.post("/trust/anchor/create")
+def create_audit_anchor(db: Session = Depends(get_db)):
+    """Manually create an audit anchor point."""
+    from app.trust.anchor import write_anchor
+    result = write_anchor(db)
+    if result:
+        return {"status": "created", "anchor": result}
+    return {"status": "empty_chain", "message": "No audit events to anchor"}
+
