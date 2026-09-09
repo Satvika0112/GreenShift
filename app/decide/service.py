@@ -118,8 +118,9 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
         existing_sd.scheduling_method         = decision.scheduling_method or "single_greedy"
         existing_sd.slot_utilization_pct      = decision.slot_utilization_pct
         existing_sd.demand_predicted          = decision.demand_predicted
-        existing_sd.spilled_from_preferred    = decision.spilled_from_preferred or False
-        existing_sd.ml_advisor_used           = decision.ml_advisor_used or False
+        existing_sd.candidates_json          = decision.candidates
+        existing_sd.rejected_candidates_json = decision.rejected_candidates
+        existing_sd.recommended_candidate_json = decision.recommended_candidate
     else:
         orm = ScheduleDecisionORM(
             job_id                   = decision.job_id,
@@ -158,6 +159,9 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
             demand_predicted          = decision.demand_predicted,
             spilled_from_preferred    = decision.spilled_from_preferred or False,
             ml_advisor_used           = decision.ml_advisor_used or False,
+            candidates_json          = decision.candidates,
+            rejected_candidates_json = decision.rejected_candidates,
+            recommended_candidate_json = decision.recommended_candidate,
         )
         db.add(orm)
 

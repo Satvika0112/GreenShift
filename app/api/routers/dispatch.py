@@ -34,11 +34,10 @@ def trigger_dispatch(
 ):
     """
     Manually trigger Kubernetes dispatch for a scheduled job.
-    Strictly validates user authorization, job approval status, and schedule ownership.
+    Strictly validates tenant isolation, user authorization, job approval status, and schedule ownership.
     """
-    job = get_job(db, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    from app.api.tenant_scope import get_tenant_jobs
+    job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
 
     try:
         execution = dispatch_job(db, job, user=current_user)
@@ -67,10 +66,9 @@ def get_dispatch_status(
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
-    """Get the current Kubernetes execution status for a job."""
-    job = get_job(db, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    """Get the current Kubernetes execution status for a job with tenant isolation."""
+    from app.api.tenant_scope import get_tenant_jobs
+    job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
     if job.kubernetes_execution is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} has not been dispatched yet")
 

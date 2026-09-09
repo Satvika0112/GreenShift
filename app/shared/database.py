@@ -171,10 +171,13 @@ def run_schema_migrations() -> None:
         ("carbon_data", "em_zone",           "VARCHAR", "VARCHAR"),
         ("carbon_data", "confidence_status", "VARCHAR", "VARCHAR"),
         ("carbon_data", "is_fallback",       "BOOLEAN", "BOOLEAN"),
-        ("carbon_data", "fallback_reason",   "VARCHAR", "VARCHAR"),
-        # Phase 1 Multi-Tenant: tenant_id on users and jobs
+        # Phase 1 & 2 Multi-Tenant: tenant_id & approval_status on users and jobs
         ("users", "tenant_id",  "VARCHAR", "VARCHAR"),
+        ("users", "approval_status", "VARCHAR", "VARCHAR"),
         ("jobs",  "tenant_id",  "VARCHAR", "VARCHAR"),
+        ("schedule_decisions", "candidates_json", "TEXT", "TEXT"),
+        ("schedule_decisions", "rejected_candidates_json", "TEXT", "TEXT"),
+        ("schedule_decisions", "recommended_candidate_json", "TEXT", "TEXT"),
     ]
 
     with engine.begin() as conn:
@@ -240,6 +243,35 @@ def run_schema_migrations() -> None:
                             logger.info("Schema migration: successfully updated SQLite jobs status check constraint")
             except Exception as exc:
                 logger.debug("SQLite check constraint migration skipped: %s", exc)
+
+        # Ensure SQLite users check constraint includes all role types
+        if not is_pg:
+            try:
+                row = conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")).fetchone()
+                if row and row[0] and "PLATFORM_ADMIN" not in row[0]:
+                    import re
+                    conn.execute(text("PRAGMA foreign_keys=OFF;"))
+                    new_sql = re.sub(
+                        r"CONSTRAINT\s+ck_users_role_valid\s+CHECK\s*\(.*?\)\)",
+                        "CONSTRAINT ck_users_role_valid CHECK (role IN ('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'USER', 'VIEWER', 'PLATFORM_ADMIN', 'COMPANY_ADMIN', 'COMPANY_USER'))",
+                        row[0],
+                        flags=re.DOTALL,
+                    )
+                    if new_sql == row[0]:
+                        old_c = "CHECK (role IN ('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'VIEWER'))"
+                        new_c = "CHECK (role IN ('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'USER', 'VIEWER', 'PLATFORM_ADMIN', 'COMPANY_ADMIN', 'COMPANY_USER'))"
+                        new_sql = row[0].replace(old_c, new_c)
+                    new_sql = new_sql.replace('CREATE TABLE "users"', 'CREATE TABLE "users_new"').replace('CREATE TABLE users', 'CREATE TABLE users_new')
+                    conn.execute(text(new_sql))
+                    conn.execute(text("INSERT INTO users_new SELECT * FROM users;"))
+                    conn.execute(text("DROP TABLE users;"))
+                    conn.execute(text("ALTER TABLE users_new RENAME TO users;"))
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username);"))
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email);"))
+                    conn.execute(text("PRAGMA foreign_keys=ON;"))
+                    logger.info("Schema migration: successfully updated SQLite users role check constraint")
+            except Exception as exc:
+                logger.warning("SQLite users check constraint migration error: %s", exc)
 
 
 def init_db(max_retries: int = 15, delay_seconds: float = 2.0) -> None:

@@ -82,10 +82,19 @@ def validate_job_for_dispatch(job: JobORM, user: Optional[object] = None) -> Non
     if user is not None:
         user_role = getattr(user, "role", None)
         role_str = str(user_role.value if hasattr(user_role, "value") else user_role).upper()
-        if role_str == "ADMIN":
+        user_tenant = getattr(user, "tenant_id", None)
+
+        # Cross-tenant check for all non-global admins
+        if user_tenant and job.tenant_id and user_tenant != job.tenant_id:
+            raise DispatchPermissionError(
+                f"User from company '{getattr(user, 'company_name', None) or user_tenant}' cannot dispatch job for company '{job.company_name or job.tenant_id}'",
+                status_code=403,
+            )
+
+        if role_str in ("PLATFORM_ADMIN", "ADMIN"):
             pass  # Admin has full dispatch access
-        elif role_str == "OPERATOR":
-            pass  # Operator has execution/operational rights
+        elif role_str in ("COMPANY_ADMIN", "OPERATOR"):
+            pass  # Company admin and operator have dispatch access
         elif role_str == "TEAM_LEAD":
             user_team = (getattr(user, "team_id", None) or "").strip().lower()
             job_team = (job.team_id or "").strip().lower()

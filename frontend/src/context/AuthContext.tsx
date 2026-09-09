@@ -11,6 +11,8 @@ interface AuthContextType {
   logout: () => void;
   hasRole: (roles: UserRole[]) => boolean;
   isAdmin: boolean;
+  isPlatformAdmin: boolean;
+  isCompanyAdmin: boolean;
   isTeamLead: boolean;
   isOperator: boolean;
   isViewer: boolean;
@@ -21,9 +23,10 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Known seed credentials for the existing GreenShift backend
 export const PRESET_CREDENTIALS = [
-  { key: 'admin', label: 'Admin', username: 'admin', password: 'admin123', role: 'ADMIN', team: 'engineering' },
-  { key: 'lead_a', label: 'Lead A', username: 'lead_a', password: 'lead123', role: 'TEAM_LEAD', team: 'team-a' },
-  { key: 'lead_b', label: 'Lead B', username: 'lead_b', password: 'lead123', role: 'TEAM_LEAD', team: 'team-b' },
+  { key: 'admin', label: 'Platform Admin', username: 'admin', password: 'admin123', role: 'PLATFORM_ADMIN', team: 'platform' },
+  { key: 'company_admin', label: 'Company Admin', username: 'company_admin', password: 'admin123', role: 'COMPANY_ADMIN', team: 'team-acme' },
+  { key: 'company_user', label: 'Company User', username: 'company_user', password: 'user123', role: 'COMPANY_USER', team: 'team-acme' },
+  { key: 'lead_a', label: 'Lead A', username: 'lead_a', password: 'lead123', role: 'COMPANY_ADMIN', team: 'team-a' },
   { key: 'operator', label: 'Operator', username: 'operator', password: 'operator123', role: 'OPERATOR', team: 'operations' },
   { key: 'viewer', label: 'Viewer', username: 'viewer', password: 'viewer123', role: 'VIEWER', team: 'general' },
 ];
@@ -101,16 +104,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const hasRole = (roles: UserRole[]) => {
-    if (!user) return false;
-    if (user.role === 'ADMIN') return true;
-    return roles.includes(user.role);
-  };
-
-  const isAdmin = user?.role === 'ADMIN';
+  const isPlatformAdmin = user?.role === 'PLATFORM_ADMIN' || (user?.role === 'ADMIN' && !user?.tenant_id);
+  const isCompanyAdmin = isPlatformAdmin || user?.role === 'COMPANY_ADMIN' || (user?.role === 'ADMIN' && !!user?.tenant_id);
+  const isAdmin = isCompanyAdmin;
   const isTeamLead = user?.role === 'TEAM_LEAD';
   const isOperator = user?.role === 'OPERATOR';
   const isViewer = user?.role === 'VIEWER';
+
+  const hasRole = (roles: UserRole[]) => {
+    if (!user) return false;
+    if (isPlatformAdmin) return true;
+    return roles.includes(user.role);
+  };
 
   return (
     <AuthContext.Provider
@@ -123,6 +128,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logout,
         hasRole,
         isAdmin,
+        isPlatformAdmin,
+        isCompanyAdmin,
         isTeamLead,
         isOperator,
         isViewer,

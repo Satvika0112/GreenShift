@@ -20,8 +20,9 @@ from app.approval.service import (
     decline_schedule,
     get_job_approvals,
     get_pending_approvals,
+    resubmit_workload,
 )
-from app.shared.auth import get_current_user
+from app.shared.auth import get_current_user, is_platform_admin
 from app.shared.database import get_db
 from app.shared.rate_limiter import limiter
 from app.shared.models import (
@@ -62,10 +63,10 @@ def api_approve_schedule(
 ):
     """
     Explicitly approve a proposed schedule for a job.
-    Enforces server-side RBAC authorization:
-      - ADMIN: Full approval access across all teams.
-      - TEAM_LEAD: Authorized only for jobs belonging to their own team.
-      - OPERATOR / VIEWER: Forbidden (403).
+    Enforces server-side RBAC and tenant authorization:
+      - PLATFORM_ADMIN / ADMIN: Full approval access across all companies.
+      - COMPANY_ADMIN / TEAM_LEAD: Authorized only for jobs belonging to their company/team.
+      - COMPANY_USER / OPERATOR / VIEWER: Forbidden (403).
     """
     try:
         return approve_schedule(
@@ -112,10 +113,11 @@ def api_decline_schedule(
 ):
     """
     Decline a proposed schedule for a job.
-    Enforces server-side RBAC authorization:
-      - ADMIN: Full decline access across all teams.
-      - TEAM_LEAD: Authorized only for jobs belonging to their own team.
-      - OPERATOR / VIEWER: Forbidden (403).
+    Requires a non-empty decline reason.
+    Enforces server-side RBAC and tenant authorization:
+      - PLATFORM_ADMIN / ADMIN: Full decline access across all companies.
+      - COMPANY_ADMIN / TEAM_LEAD: Authorized only for jobs belonging to their company/team.
+      - COMPANY_USER / OPERATOR / VIEWER: Forbidden (403).
     """
     try:
         return decline_schedule(
@@ -140,6 +142,49 @@ def api_decline_schedule(
         )
 
 
+@router.post(
+    "/approval/{job_id}/resubmit",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Resubmit a declined, cancelled, or failed workload",
+)
+@router.post(
+    "/approvals/{job_id}/resubmit",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+@limiter.limit("30/minute")
+def api_resubmit_workload(
+    request: Request,
+    job_id: str,
+    current_user: UserORM = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Reset a DECLINED, CANCELLED, or FAILED workload back to SUBMITTED status so it can be re-scheduled.
+    """
+    try:
+        job = resubmit_workload(db=db, job_id=job_id, user=current_user)
+        return {
+            "job_id": job.job_id,
+            "status": job.status.value,
+            "message": f"Workload {job.job_id} successfully resubmitted for scheduling.",
+        }
+    except ApprovalNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except (ApprovalValidationError, ApprovalPermissionError) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Resubmit failed for job {job_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while resubmitting the workload.",
+        )
+
+
 @router.get(
     "/approvals/pending",
     response_model=List[PendingApprovalItem],
@@ -152,21 +197,20 @@ def api_decline_schedule(
 )
 def api_get_pending_approvals(
     team_id: Optional[str] = Query(None, description="Filter pending approvals by team ID"),
+    tenant_id: Optional[str] = Query(None, description="Filter pending approvals by tenant ID (Platform Admin only)"),
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
-    """Retrieve all jobs waiting for human approval with proposed schedules."""
+    """Retrieve all jobs waiting for human approval with proposed schedules and tenant isolation."""
     try:
-        user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-        if user_role == UserRole.ADMIN.value:
+        if is_platform_admin(current_user):
+            effective_tenant_id = tenant_id
             effective_team_id = team_id
         else:
-            # Non-admin users must only receive pending approvals for current_user.team_id
-            if not current_user.team_id:
-                return []
+            effective_tenant_id = current_user.tenant_id
             effective_team_id = current_user.team_id
 
-        return get_pending_approvals(db, team_id=effective_team_id)
+        return get_pending_approvals(db, team_id=effective_team_id, tenant_id=effective_tenant_id)
     except Exception as exc:
         logger.error(f"Error fetching pending approvals: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while retrieving pending approvals.")
@@ -182,28 +226,35 @@ def api_get_pending_approvals(
 )
 def api_get_declined_approvals(
     team_id: Optional[str] = Query(None, description="Filter declined approvals by team ID"),
+    tenant_id: Optional[str] = Query(None, description="Filter declined approvals by tenant ID (Platform Admin only)"),
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
-    """Retrieve all declined workloads."""
+    """Retrieve all declined workloads with tenant isolation."""
     try:
         query = (
             db.query(ApprovalORM)
             .join(ApprovalORM.job)
             .filter(ApprovalORM.decision == "DECLINED")
         )
-        user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-        if user_role != UserRole.ADMIN.value:
-            effective_team_id = current_user.team_id or ""
-            query = query.filter(JobORM.team_id == effective_team_id)
-        elif team_id:
-            query = query.filter(JobORM.team_id == team_id)
+        if is_platform_admin(current_user):
+            if tenant_id:
+                query = query.filter(JobORM.tenant_id == tenant_id)
+            if team_id:
+                query = query.filter(JobORM.team_id == team_id)
+        else:
+            if current_user.tenant_id:
+                query = query.filter(JobORM.tenant_id == current_user.tenant_id)
+            if current_user.team_id:
+                query = query.filter(JobORM.team_id == current_user.team_id)
 
         approvals = query.order_by(ApprovalORM.created_at.desc()).all()
         return [
             {
                 "job_id": a.job_id,
                 "team_id": a.job.team_id if a.job else "N/A",
+                "tenant_id": a.job.tenant_id if a.job else None,
+                "company_name": a.job.company_name if a.job else None,
                 "declined_at": a.created_at.isoformat() if a.created_at else "",
                 "declined_by": a.approved_by,
                 "reason": a.reason,
@@ -231,22 +282,10 @@ def api_get_job_approvals(
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
-    """Retrieve all approvals or declines recorded for a given job."""
+    """Retrieve all approvals or declines recorded for a given job with strict tenant isolation."""
     try:
-        from app.ingest.jobs import get_job
-        job = get_job(db, job_id)
-        if job is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job '{job_id}' not found")
-
-        user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-        if user_role != UserRole.ADMIN.value:
-            user_team = (current_user.team_id or "").strip().lower()
-            job_team = (job.team_id or "").strip().lower()
-            if not user_team or user_team != job_team:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Access forbidden: User from team '{current_user.team_id}' cannot view approvals for job belonging to team '{job.team_id}'",
-                )
+        from app.api.tenant_scope import get_tenant_jobs
+        job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
 
         approvals = get_job_approvals(db, job_id)
         return [
@@ -255,7 +294,7 @@ def api_get_job_approvals(
                 job_id=a.job_id,
                 schedule_decision_id=a.schedule_decision_id,
                 decision=a.decision,
-                job_status=a.job.status if a.job else "UNKNOWN",
+                job_status=job.status,
                 reason=a.reason,
                 approved_by=a.approved_by,
                 created_at=a.created_at,

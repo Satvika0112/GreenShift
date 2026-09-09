@@ -72,14 +72,19 @@ def register(
             )
 
     hashed_pw = hash_password(body.password)
-    # Security enforcement: Public self-registration ALWAYS assigns UserRole.VIEWER
+    # When auth is enabled (production), self-registration creates inactive users pending approval
+    # When auth is disabled (local dev), user is immediately active
+    is_active = not settings.auth_enabled
+    approval_status = "PENDING" if settings.auth_enabled else "APPROVED"
+
     user = UserORM(
         username=body.username,
         email=body.email,
         hashed_password=hashed_pw,
         role=UserRole.VIEWER,
         team_id=body.team_id,
-        is_active=True,
+        is_active=is_active,
+        approval_status=approval_status,
     )
     db.add(user)
     db.commit()
@@ -87,7 +92,14 @@ def register(
 
     role_str = UserRole.VIEWER.value
     try:
-        record_user_registered(db, username=user.username, role=role_str, team_id=user.team_id)
+        record_user_registered(
+            db,
+            username=user.username,
+            role=role_str,
+            team_id=user.team_id,
+            status=approval_status,
+            tenant_id=user.tenant_id,
+        )
     except Exception:
         pass
 
@@ -99,6 +111,7 @@ def register(
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a user with an assigned role (Admin only)",
+    deprecated=True,
 )
 @limiter.limit("30/minute")
 def admin_create_user(
@@ -136,6 +149,7 @@ def admin_create_user(
         hashed_password=hashed_pw,
         role=assigned_role,
         team_id=body.team_id,
+        approval_status="APPROVED",
         is_active=True,
     )
     db.add(user)
@@ -144,7 +158,14 @@ def admin_create_user(
 
     role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
     try:
-        record_user_registered(db, username=user.username, role=role_str, team_id=user.team_id)
+        record_user_registered(
+            db,
+            username=user.username,
+            role=role_str,
+            team_id=user.team_id,
+            status="APPROVED",
+            tenant_id=user.tenant_id,
+        )
     except Exception:
         pass
 
@@ -180,24 +201,43 @@ def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not user.is_active:
+    appr_status = getattr(user, "approval_status", "APPROVED") or "APPROVED"
+
+    if not user.is_active or appr_status == "PENDING":
+        if not user.is_active and appr_status == "APPROVED":
+            reason = "User account is deactivated"
+        else:
+            reason = "Account pending approval"
         try:
-            record_login_failure(db, username_attempted=body.username, reason="User account is deactivated", ip_address=client_ip)
+            record_login_failure(db, username_attempted=body.username, reason=reason, ip_address=client_ip)
         except Exception:
             pass
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is deactivated",
+            detail=reason,
+        )
+
+    if appr_status == "REJECTED":
+        try:
+            record_login_failure(db, username_attempted=body.username, reason="User account was rejected", ip_address=client_ip)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account registration was declined",
         )
 
     role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
     tenant_id = getattr(user, "tenant_id", None)
+    company_name = user.company_name if hasattr(user, "company_name") else None
     token = create_access_token(
         user_id=user.id,
         username=user.username,
         role=role_str,
         team_id=user.team_id,
         tenant_id=tenant_id,
+        company_name=company_name,
+        approval_status=appr_status,
     )
 
     try:
@@ -226,15 +266,18 @@ def get_me(current_user: UserORM = Depends(get_current_user)):
 @router.get(
     "/users",
     response_model=List[UserResponse],
-    summary="List all users (Admin only)",
+    summary="List all users (Legacy alias -> redirects to /api/v1/admin/users)",
+    deprecated=True,
 )
-def list_users(
+def list_users_legacy(
     db: Session = Depends(get_db),
-    current_admin: UserORM = Depends(require_roles(UserRole.ADMIN)),
+    current_admin: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN)),
 ):
-    """Return all registered user profiles. Restricted to ADMIN role only."""
-    users = db.query(UserORM).all()
-    return users
+    """Deprecated legacy endpoint: please use /api/v1/admin/users."""
+    query = db.query(UserORM)
+    if current_admin.tenant_id and current_admin.role not in (UserRole.ADMIN, UserRole.PLATFORM_ADMIN):
+        query = query.filter(UserORM.tenant_id == current_admin.tenant_id)
+    return query.all()
 
 
 @router.post(
@@ -265,20 +308,43 @@ def login_email(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not user.is_active:
+    appr_status = getattr(user, "approval_status", "APPROVED") or "APPROVED"
+
+    if not user.is_active or appr_status == "PENDING":
+        if not user.is_active and appr_status == "APPROVED":
+            reason = "User account is deactivated"
+        else:
+            reason = "Account pending approval"
+        try:
+            record_login_failure(db, username_attempted=body.email, reason=reason, ip_address=client_ip)
+        except Exception:
+            pass
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User account is deactivated",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=reason,
+        )
+
+    if appr_status == "REJECTED":
+        try:
+            record_login_failure(db, username_attempted=body.email, reason="User account was rejected", ip_address=client_ip)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account registration was declined",
         )
 
     role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
     tenant_id = getattr(user, "tenant_id", None)
+    company_name = user.company_name if hasattr(user, "company_name") else None
     token = create_access_token(
         user_id=user.id,
         username=user.username,
         role=role_str,
         team_id=user.team_id,
         tenant_id=tenant_id,
+        company_name=company_name,
+        approval_status=appr_status,
     )
 
     try:

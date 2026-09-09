@@ -31,17 +31,22 @@ router = APIRouter()
 @router.get("/report/summary")
 def get_report_summary(
     team_id: Optional[str] = Query(None, description="Filter by team ID"),
+    tenant_id: Optional[str] = Query(None, description="Filter by tenant ID (Platform Admin only)"),
     start_date: Optional[datetime] = Query(None, description="Filter from date (ISO8601)"),
     end_date: Optional[datetime] = Query(None, description="Filter to date (ISO8601)"),
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
     """
-    Generate a BRSR-style JSON sustainability report.
+    Generate a BRSR-style JSON sustainability report with tenant scoping.
     Includes per-job carbon, cost, SLA metrics and aggregate summary.
     """
+    from app.shared.auth import is_platform_admin
+    if not is_platform_admin(current_user) and tenant_id and current_user.tenant_id and tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Cannot access reports for other tenants")
+    effective_tenant = tenant_id if is_platform_admin(current_user) else current_user.tenant_id
     try:
-        return generate_report(db, team_id=team_id, start_date=start_date, end_date=end_date)
+        return generate_report(db, team_id=team_id, start_date=start_date, end_date=end_date, tenant_id=effective_tenant)
     except Exception as exc:
         logger.error(f"Error generating report summary: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while generating the sustainability report.")
@@ -50,15 +55,20 @@ def get_report_summary(
 @router.get("/report/csv", response_class=PlainTextResponse)
 def get_report_csv(
     team_id: Optional[str] = Query(None),
+    tenant_id: Optional[str] = Query(None, description="Filter by tenant ID (Platform Admin only)"),
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
     """
-    Download BRSR report as CSV.
+    Download BRSR report as CSV with tenant scoping.
     Suitable for BRSR annual report data submission.
     """
+    from app.shared.auth import is_platform_admin
+    if not is_platform_admin(current_user) and tenant_id and current_user.tenant_id and tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Cannot access reports for other tenants")
+    effective_tenant = tenant_id if is_platform_admin(current_user) else current_user.tenant_id
     try:
-        csv_content = generate_csv(db, team_id=team_id)
+        csv_content = generate_csv(db, team_id=team_id, tenant_id=effective_tenant)
         return PlainTextResponse(
             content=csv_content,
             media_type="text/csv",
@@ -76,13 +86,18 @@ def get_report_csv(
 
 @router.get("/report/markdown", response_class=PlainTextResponse)
 def get_report_markdown(
+    tenant_id: Optional[str] = Query(None, description="Filter by tenant ID (Platform Admin only)"),
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
-    """Generate BRSR summary as Markdown text."""
+    """Generate BRSR summary as Markdown text with tenant scoping."""
+    from app.shared.auth import is_platform_admin
+    if not is_platform_admin(current_user) and tenant_id and current_user.tenant_id and tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Cannot access reports for other tenants")
+    effective_tenant = tenant_id if is_platform_admin(current_user) else current_user.tenant_id
     try:
         return PlainTextResponse(
-            content=generate_markdown_summary(db),
+            content=generate_markdown_summary(db, tenant_id=effective_tenant),
             media_type="text/markdown",
         )
     except Exception as exc:

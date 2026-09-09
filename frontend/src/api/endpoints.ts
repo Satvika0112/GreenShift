@@ -53,17 +53,11 @@ export const authApi = {
     }
   },
 
-  getUsers: async (): Promise<User[]> => {
-    try {
-      const res = await apiClient.get<User[]>('/api/v1/auth/users');
-      return res.data;
-    } catch (err: any) {
-      if (err.response?.status === 404) {
-        const res = await apiClient.get<User[]>('/api/v1/admin/users');
-        return res.data;
-      }
-      throw err;
-    }
+  getUsers: async (tenantId?: string): Promise<User[]> => {
+    const res = await apiClient.get<User[]>('/api/v1/admin/users', {
+      params: tenantId ? { tenant_id: tenantId } : undefined,
+    });
+    return res.data;
   },
 
   register: async (userData: {
@@ -72,35 +66,28 @@ export const authApi = {
     password: string;
     team_id?: string;
   }): Promise<User> => {
-    try {
-      const res = await apiClient.post<User>('/api/v1/auth/register', userData);
-      return res.data;
-    } catch (err: any) {
-      if (err.response?.status === 404) {
-        const res = await apiClient.post<User>('/auth/register', userData);
-        return res.data;
-      }
-      throw err;
-    }
+    const res = await apiClient.post<User>('/api/v1/auth/register', userData);
+    return res.data;
   },
 
   adminCreateUser: async (userData: {
-    username: string;
+    username?: string;
     email: string;
     password: string;
     role: string;
     team_id?: string;
+    tenant_id?: string;
   }): Promise<User> => {
-    try {
-      const res = await apiClient.post<User>('/api/v1/admin/users', userData);
-      return res.data;
-    } catch (err: any) {
-      if (err.response?.status === 404) {
-        const res = await apiClient.post<User>('/api/v1/auth/admin/create-user', userData);
-        return res.data;
-      }
-      throw err;
-    }
+    const res = await apiClient.post<User>('/api/v1/admin/users', userData);
+    return res.data;
+  },
+
+  updateUserStatus: async (
+    userId: number | string,
+    data: { is_active?: boolean; approval_status?: string; role?: string }
+  ): Promise<User> => {
+    const res = await apiClient.patch<User>(`/api/v1/admin/users/${userId}/status`, data);
+    return res.data;
   },
 
   deactivateUser: async (userId: number | string): Promise<{ user_id: number | string; status: string }> => {
@@ -108,18 +95,45 @@ export const authApi = {
     return res.data;
   },
 
-  listApiKeys: async (): Promise<any[]> => {
-    const res = await apiClient.get('/api/v1/admin/api-keys');
+  listApiKeys: async (tenantId?: string): Promise<any[]> => {
+    const res = await apiClient.get('/api/v1/admin/api-keys', {
+      params: tenantId ? { tenant_id: tenantId } : undefined,
+    });
     return res.data;
   },
 
-  createApiKey: async (data: { label: string; role: string }): Promise<any> => {
+  createApiKey: async (data: { label: string; role: string; tenant_id?: string }): Promise<any> => {
     const res = await apiClient.post('/api/v1/admin/api-keys', data);
     return res.data;
   },
 
   deleteApiKey: async (keyId: string): Promise<any> => {
     const res = await apiClient.delete(`/api/v1/admin/api-keys/${keyId}`);
+    return res.data;
+  },
+};
+
+// ==========================================
+// COMPANIES / TENANTS (ADMIN)
+// ==========================================
+export const companyApi = {
+  getCompanies: async (): Promise<any[]> => {
+    const res = await apiClient.get('/api/v1/admin/companies');
+    return res.data;
+  },
+
+  getCompany: async (companyId: string): Promise<any> => {
+    const res = await apiClient.get(`/api/v1/admin/companies/${companyId}`);
+    return res.data;
+  },
+
+  createCompany: async (data: { id?: string; name: string; is_active?: boolean }): Promise<any> => {
+    const res = await apiClient.post('/api/v1/admin/companies', data);
+    return res.data;
+  },
+
+  updateCompany: async (companyId: string, data: { name?: string; is_active?: boolean }): Promise<any> => {
+    const res = await apiClient.put(`/api/v1/admin/companies/${companyId}`, data);
     return res.data;
   },
 };

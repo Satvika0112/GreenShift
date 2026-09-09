@@ -10,7 +10,7 @@ from __future__ import annotations
 import enum
 import json
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import (
@@ -96,22 +96,39 @@ class EventType(str, enum.Enum):
     AUTH_LOGIN_FAILURE   = "AUTH_LOGIN_FAILURE"
     AUTH_ACCESS_DENIED   = "AUTH_ACCESS_DENIED"
     AUTH_USER_REGISTERED = "AUTH_USER_REGISTERED"
+    AUTH_USER_ACTIVATED  = "AUTH_USER_ACTIVATED"
+    AUTH_USER_DEACTIVATED = "AUTH_USER_DEACTIVATED"
+    CONFIG_CHANGED       = "CONFIG_CHANGED"
+    TENANT_CREATED       = "TENANT_CREATED"
+    API_KEY_CREATED      = "API_KEY_CREATED"
+    API_KEY_REVOKED      = "API_KEY_REVOKED"
+    AUDIT_VERIFICATION_FAILED = "AUDIT_VERIFICATION_FAILED"
+    JOB_RESUBMITTED      = "JOB_RESUBMITTED"
+
+
+class UserApprovalStatus(str, enum.Enum):
+    APPROVED = "APPROVED"
+    PENDING  = "PENDING"
+    REJECTED = "REJECTED"
 
 
 class UserRole(str, enum.Enum):
-    ADMIN     = "ADMIN"
-    OPERATOR  = "OPERATOR"
-    USER      = "USER"      # Renamed from TEAM_LEAD in Phase 1 multi-tenant
-    TEAM_LEAD = "TEAM_LEAD" # Kept for backward compat with existing DB rows and tests
-    VIEWER    = "VIEWER"
+    PLATFORM_ADMIN = "PLATFORM_ADMIN"
+    COMPANY_ADMIN  = "COMPANY_ADMIN"
+    COMPANY_USER   = "COMPANY_USER"
+    ADMIN          = "ADMIN"         # Platform Admin alias
+    OPERATOR       = "OPERATOR"
+    USER           = "USER"          # Company User alias
+    TEAM_LEAD      = "TEAM_LEAD"     # Company Admin / Lead alias
+    VIEWER         = "VIEWER"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SQLAlchemy ORM — Tenant
+# SQLAlchemy ORM — Tenant / Company
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TenantORM(Base):
-    """Multi-tenant organisation (provisioning-only — no API creation endpoint)."""
+    """Multi-tenant organisation / Company."""
 
     __tablename__ = "tenants"
 
@@ -122,10 +139,11 @@ class TenantORM(Base):
 
     users    = relationship("UserORM", back_populates="tenant", foreign_keys="UserORM.tenant_id")
     api_keys = relationship("APIKeyORM", back_populates="tenant")
+    jobs     = relationship("JobORM", back_populates="tenant", foreign_keys="JobORM.tenant_id")
 
 
 # RULE 3: API keys can NEVER have ADMIN role
-API_KEY_ALLOWED_ROLES = {UserRole.OPERATOR, UserRole.USER, UserRole.VIEWER}
+API_KEY_ALLOWED_ROLES = {UserRole.OPERATOR, UserRole.USER, UserRole.VIEWER, UserRole.COMPANY_USER}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -138,7 +156,7 @@ class UserORM(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(
-            "role IN ('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'USER', 'VIEWER')",
+            "role IN ('PLATFORM_ADMIN', 'COMPANY_ADMIN', 'COMPANY_USER', 'ADMIN', 'TEAM_LEAD', 'OPERATOR', 'USER', 'VIEWER')",
             name="ck_users_role_valid",
         ),
     )
@@ -148,13 +166,28 @@ class UserORM(Base):
     email           = Column(String(255), nullable=False, unique=True, index=True)
     hashed_password = Column(String(255), nullable=False)
     role            = Column(SAEnum(UserRole), default=UserRole.VIEWER, nullable=False, index=True)
-    team_id         = Column(String, nullable=True, index=True)   # team within org — NOT removed
+    approval_status = Column(String(20), default="APPROVED", nullable=False, index=True)
+    team_id         = Column(String, nullable=True, index=True)   # team within org
     tenant_id       = Column(String, ForeignKey("tenants.id"), nullable=True, index=True)  # org
     is_active       = Column(Boolean, default=True, nullable=False)
     created_at      = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     updated_at      = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
 
     tenant = relationship("TenantORM", back_populates="users", foreign_keys=[tenant_id])
+
+    @property
+    def is_approved(self) -> bool:
+        return (self.approval_status or "APPROVED") == "APPROVED"
+
+    @property
+    def company_name(self) -> Optional[str]:
+        if self.tenant:
+            return self.tenant.name
+        return getattr(self, "_company_name", None)
+
+    @company_name.setter
+    def company_name(self, value: Optional[str]) -> None:
+        self._company_name = value
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -268,6 +301,21 @@ class JobORM(Base):
         viewonly=True,
         order_by="AuditEventORM.sequence.asc()",
     )
+    tenant = relationship(
+        "TenantORM",
+        back_populates="jobs",
+        foreign_keys=[tenant_id],
+    )
+
+    @property
+    def company_name(self) -> Optional[str]:
+        if self.tenant:
+            return self.tenant.name
+        return getattr(self, "_company_name", None)
+
+    @company_name.setter
+    def company_name(self, value: Optional[str]) -> None:
+        self._company_name = value
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -327,6 +375,9 @@ class ScheduleDecisionORM(Base):
     rejection_summary         = Column(JSON, nullable=True)
     scheduler_objective       = Column(String, nullable=True, default="CARBON_FIRST")
     deterministic_rank        = Column(Integer, nullable=True, default=1)
+    candidates_json           = Column(JSON, nullable=True)
+    rejected_candidates_json  = Column(JSON, nullable=True)
+    recommended_candidate_json = Column(JSON, nullable=True)
 
     # Contention-aware scheduling metadata
     scheduling_method       = Column(String, nullable=True, default="single_greedy")
@@ -731,6 +782,9 @@ class ScheduleDecision(BaseModel):
     rejection_reasons:         Optional[List[str]] = Field(default_factory=list)
     deterministic_ranking:     Optional[int] = 1
     deterministic_rank:        Optional[int] = 1
+    recommended_candidate:     Optional[Dict[str, Any]] = None
+    candidates:                Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    rejected_candidates:       Optional[List[Dict[str, Any]]] = Field(default_factory=list)
 
     # Regional & Currency context
     region_id:            Optional[str] = "IN-TG"
@@ -879,6 +933,7 @@ class UserRegisterRequest(BaseModel):
         description="User role (ignored on public /auth/register where all users receive VIEWER; honored only for authenticated admin user creation)",
     )
     team_id: Optional[str] = Field(default=None, description="Optional team identifier")
+    tenant_id: Optional[str] = Field(default=None, description="Optional company / tenant identifier")
 
 
 class UserLoginRequest(BaseModel):
@@ -886,16 +941,18 @@ class UserLoginRequest(BaseModel):
 
     username: Optional[str] = Field(None, description="Username or email")
     username_or_email: Optional[str] = Field(None, description="Username or email alias")
+    email: Optional[str] = Field(None, description="Email alias")
     password: str = Field(..., description="User password")
 
     @model_validator(mode="before")
     @classmethod
     def resolve_username(cls, data: object) -> object:
         if isinstance(data, dict):
-            u = data.get("username") or data.get("username_or_email")
+            u = data.get("username") or data.get("username_or_email") or data.get("email")
             if u:
                 data["username"] = u
                 data["username_or_email"] = u
+                data["email"] = u
             elif not data.get("username"):
                 raise ValueError("Username or email is required")
         return data
@@ -911,6 +968,9 @@ class UserResponse(BaseModel):
     email: str
     role: UserRole
     team_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    company_name: Optional[str] = None
+    approval_status: Optional[str] = "APPROVED"
     is_active: bool
     created_at: datetime
 
@@ -922,6 +982,38 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: UserResponse
+
+
+class CompanyResponse(BaseModel):
+    """Company / Tenant profile response."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    is_active: bool
+    created_at: datetime
+    user_count: Optional[int] = 0
+    workload_count: Optional[int] = 0
+
+
+class CompanyCreateRequest(BaseModel):
+    """Platform Admin request to create a new company/tenant."""
+    id: Optional[str] = Field(None, description="Company identifier slug (e.g. tenant-acme)")
+    name: str = Field(..., min_length=2, max_length=100, description="Company display name")
+    is_active: bool = True
+
+
+class CompanyUpdateRequest(BaseModel):
+    """Update company details."""
+    name: Optional[str] = Field(None, min_length=2, max_length=100)
+    is_active: Optional[bool] = None
+
+
+class UserStatusUpdateRequest(BaseModel):
+    """Admin request to update user approval, role, or active status."""
+    approval_status: Optional[str] = Field(None, description="APPROVED, PENDING, REJECTED")
+    is_active: Optional[bool] = Field(None, description="Account active state")
+    role: Optional[UserRole] = Field(None, description="Assigned role")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -946,10 +1038,11 @@ class LoginResponse(BaseModel):
 class UserCreateRequest(BaseModel):
     """ADMIN-only user creation within own tenant."""
     email: str = Field(..., description="User email address")
-    password: str = Field(..., min_length=8, description="Password (min 8 chars)")
+    password: str = Field(..., min_length=6, description="Password")
     role: UserRole = Field(default=UserRole.VIEWER)
     username: Optional[str] = Field(None, description="Optional username; defaults to email prefix")
     team_id: Optional[str] = Field(None, description="Optional team within the tenant")
+    tenant_id: Optional[str] = Field(None, description="Target tenant ID (Platform Admin only)")
 
 
 class TenantUserResponse(BaseModel):
@@ -970,6 +1063,7 @@ class APIKeyCreateRequest(BaseModel):
     """ADMIN-only API key creation. Role must not be ADMIN."""
     label: Optional[str] = Field(None, description="Human-readable label e.g. 'CI pipeline'")
     role: UserRole = Field(default=UserRole.OPERATOR, description="Role for API key (cannot be ADMIN)")
+    tenant_id: Optional[str] = Field(None, description="Target tenant ID (Platform Admin only)")
 
 
 class APIKeyCreateResponse(BaseModel):

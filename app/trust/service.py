@@ -369,6 +369,8 @@ def record_user_registered(
     username: str,
     role: str,
     team_id: Optional[str] = None,
+    status: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> None:
     """Record an AUTH_USER_REGISTERED audit event without password hash."""
     payload = {
@@ -377,7 +379,43 @@ def record_user_registered(
     }
     if team_id:
         payload["team_id"] = team_id
+    if status:
+        payload["status"] = status
+    if tenant_id:
+        payload["tenant_id"] = tenant_id
     append_event(db, EventType.AUTH_USER_REGISTERED, payload=payload)
+
+
+def record_user_activated(
+    db: Session,
+    username: str,
+    activated_by: str,
+    tenant_id: Optional[str] = None,
+) -> None:
+    """Record an AUTH_USER_ACTIVATED audit event."""
+    payload = {
+        "username": username,
+        "activated_by": activated_by,
+    }
+    if tenant_id:
+        payload["tenant_id"] = tenant_id
+    append_event(db, EventType.AUTH_USER_ACTIVATED, payload=payload)
+
+
+def record_user_deactivated(
+    db: Session,
+    username: str,
+    deactivated_by: str,
+    tenant_id: Optional[str] = None,
+) -> None:
+    """Record an AUTH_USER_DEACTIVATED audit event."""
+    payload = {
+        "username": username,
+        "deactivated_by": deactivated_by,
+    }
+    if tenant_id:
+        payload["tenant_id"] = tenant_id
+    append_event(db, EventType.AUTH_USER_DEACTIVATED, payload=payload)
 
 
 def run_trust_loop() -> None:

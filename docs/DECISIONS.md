@@ -297,4 +297,29 @@ Custom counters/gauges for scheduler, dispatcher, audit, and ML advisor.
 Structured JSON logging in production. Enhanced /health with DB and K8s checks.
 Grafana and OpenTelemetry deferred to Phase 2.
 
+---
+
+## ADR-011: Closed Self-Registration and Consolidated Admin User Provisioning (P0-BE-1 & P0-BE-4)
+
+**Status:** ACCEPTED  
+**Date:** 2026-09-09  
+
+### Context
+Public self-registration via `POST /auth/register` previously created active users with immediate login privileges. Furthermore, user creation logic was fragmented across `POST /auth/register`, `POST /admin/users`, and `POST /auth/admin/create-user`, with inconsistent role boundaries, missing tenant scoping, and lack of activation audit trails.
+
+### Decision
+1. **Public Registration Inactivation (P0-BE-1)**:
+   - When `AUTH_ENABLED=true` (production), `POST /auth/register` assigns `UserRole.VIEWER`, sets `is_active=False`, and marks `approval_status="PENDING"`.
+   - The `/auth/login` and `/auth/login-email` endpoints reject unapproved or deactivated accounts with HTTP 403 (`"Account pending approval"` or `"User account is deactivated"`).
+   - `AUTH_USER_REGISTERED` audit events record the registration with pending status.
+2. **Authoritative Admin User Management (P0-BE-4)**:
+   - Established `POST /admin/users` as the single authoritative path for user creation.
+   - Company Admins can only provision users within their own tenant and cannot create `PLATFORM_ADMIN` or `ADMIN` users.
+   - Platform Admins can provision users across any tenant and designate tenant administrators.
+   - `PATCH /admin/users/{user_id}/status` emits `AUTH_USER_ACTIVATED` and `AUTH_USER_DEACTIVATED` audit events.
+   - `POST /auth/admin/create-user` is deprecated and aligned to the authoritative flow.
+   - `app/dashboard/api_client.py` updated to exclusively target `/admin/users`.
+3. **Multi-Tenant Seed Provisioning**:
+   - Enhanced `scripts/seed_tenants.py` to provision initial administrators for all standard tenants (`tenant-default`, `tenant-acme`, `tenant-globex`) with active, approved statuses.
+
 

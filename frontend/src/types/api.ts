@@ -19,6 +19,9 @@ export type JobStatus =
   | 'CANCELLED';
 
 export type UserRole = 
+  | 'PLATFORM_ADMIN'
+  | 'COMPANY_ADMIN'
+  | 'COMPANY_USER'
   | 'ADMIN'
   | 'OPERATOR'
   | 'TEAM_LEAD'
@@ -33,6 +36,8 @@ export interface User {
   role: UserRole;
   team_id: string;
   tenant_id?: string | null;
+  company_name?: string | null;
+  approval_status?: string;
   is_active: boolean;
   created_at?: string;
 }

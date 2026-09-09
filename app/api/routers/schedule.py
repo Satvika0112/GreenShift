@@ -22,24 +22,14 @@ router = APIRouter()
 def trigger_schedule(
     job_id: str,
     db: Session = Depends(get_db),
-    current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR)),
+    current_user: UserORM = Depends(get_current_user),
 ):
     """
     Manually trigger scheduling for a specific job.
-    Normally scheduling is triggered automatically by the DECIDE background loop.
-    Enforces RBAC: ADMIN, TEAM_LEAD (own team only), OPERATOR.
+    Enforces tenant isolation and RBAC authorization.
     """
-    job = get_job(db, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
-    user_role_val = current_user.role.value if isinstance(current_user.role, UserRole) else str(current_user.role)
-    if user_role_val == "TEAM_LEAD" and current_user.team_id:
-        if job.team_id and job.team_id != current_user.team_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Team lead for team '{current_user.team_id}' cannot schedule jobs for team '{job.team_id}'",
-            )
+    from app.api.tenant_scope import get_tenant_jobs
+    job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
 
     if job.status not in (JobStatus.SUBMITTED,):
         raise HTTPException(
@@ -58,6 +48,18 @@ def trigger_schedule(
 
     from app.shared.timezone import format_dual_time
 
+    rec_cand = getattr(decision, "recommended_candidate", None) or getattr(decision, "recommended_candidate_json", None)
+    if not rec_cand:
+        rec_cand = {
+            "slot_start": decision.selected_start.isoformat(),
+            "slot_end": decision.selected_end.isoformat(),
+            "carbon_intensity": decision.carbon_intensity,
+            "carbon_emission": decision.carbon_emission,
+            "electricity_cost": decision.electricity_cost,
+            "rank": 1,
+            "score": round(1.0 / (1.0 + (decision.carbon_emission or 0.0)), 4),
+        }
+
     return {
         "id": decision.id,
         "schedule_id": decision.id,
@@ -94,6 +96,9 @@ def trigger_schedule(
             "selected_start": format_dual_time(decision.selected_start, region=decision.region_id),
             "selected_end": format_dual_time(decision.selected_end, region=decision.region_id),
         },
+        "recommended_candidate": rec_cand,
+        "candidates": getattr(decision, "candidates", None) or getattr(decision, "candidates_json", None) or [rec_cand],
+        "rejected_candidates": getattr(decision, "rejected_candidates", None) or getattr(decision, "rejected_candidates_json", None) or [],
     }
 
 
@@ -104,16 +109,27 @@ def get_schedule_explainability(
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
-    """Retrieve schedule decision and explainability details for a job."""
-    job = get_job(db, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    """Retrieve schedule decision and explainability details for a job with strict tenant isolation."""
+    from app.api.tenant_scope import get_tenant_jobs
+    job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
 
     decision = job.schedule_decision
     if decision is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} has not been scheduled yet")
 
     from app.shared.timezone import format_dual_time
+
+    rec_cand = getattr(decision, "recommended_candidate_json", None) or getattr(decision, "recommended_candidate", None)
+    if not rec_cand:
+        rec_cand = {
+            "slot_start": decision.selected_start.isoformat(),
+            "slot_end": decision.selected_end.isoformat(),
+            "carbon_intensity": decision.carbon_intensity,
+            "carbon_emission": decision.carbon_emission,
+            "electricity_cost": decision.electricity_cost,
+            "rank": 1,
+            "score": round(1.0 / (1.0 + (decision.carbon_emission or 0.0)), 4),
+        }
 
     return {
         "id": decision.id,
@@ -151,6 +167,9 @@ def get_schedule_explainability(
             "selected_start": format_dual_time(decision.selected_start, region=decision.region_id),
             "selected_end": format_dual_time(decision.selected_end, region=decision.region_id),
         },
+        "recommended_candidate": rec_cand,
+        "candidates": getattr(decision, "candidates_json", None) or getattr(decision, "candidates", None) or [rec_cand],
+        "rejected_candidates": getattr(decision, "rejected_candidates_json", None) or getattr(decision, "rejected_candidates", None) or [],
     }
 
 

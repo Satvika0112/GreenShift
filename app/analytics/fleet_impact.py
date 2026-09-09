@@ -137,6 +137,7 @@ def _calculate_p90(values: List[float]) -> float:
 def compute_fleet_impact(
     db: Session,
     team_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
     region_id: Optional[str] = None,
     job_type: Optional[str] = None,
     experiment_id: Optional[str] = None,
@@ -146,6 +147,8 @@ def compute_fleet_impact(
     Handles filters, null values, currency conversion, and distribution analysis.
     """
     filters_applied: Dict[str, str] = {}
+    if tenant_id:
+        filters_applied["tenant_id"] = tenant_id
     if team_id:
         filters_applied["team_id"] = team_id
     if region_id:
@@ -155,6 +158,8 @@ def compute_fleet_impact(
 
     query = db.query(ScheduleDecisionORM, JobORM).join(JobORM, ScheduleDecisionORM.job_id == JobORM.job_id)
 
+    if tenant_id:
+        query = query.filter(JobORM.tenant_id == tenant_id)
     if team_id:
         query = query.filter(JobORM.team_id == team_id)
     if region_id:
@@ -168,6 +173,8 @@ def compute_fleet_impact(
 
     # Total jobs query count respecting filters
     job_query = db.query(JobORM)
+    if tenant_id:
+        job_query = job_query.filter(JobORM.tenant_id == tenant_id)
     if team_id:
         job_query = job_query.filter(JobORM.team_id == team_id)
     if region_id:

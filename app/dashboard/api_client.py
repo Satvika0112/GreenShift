@@ -108,9 +108,9 @@ def admin_create_user_api(
         "team_id": team_id,
     }
     headers = get_auth_headers(token)
-    r = httpx.post(f"{API_URL}/api/v1/auth/admin/create-user", json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
+    r = httpx.post(f"{API_URL}/api/v1/admin/users", json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
     if r.status_code == 404:
-        r = httpx.post(f"{API_URL}/auth/admin/create-user", json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
+        r = httpx.post(f"{API_URL}/admin/users", json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
     if r.status_code >= 400:
         detail = r.json().get("detail", r.text) if "application/json" in r.headers.get("content-type", "") else r.text
         raise RuntimeError(f"HTTP {r.status_code}: {detail}")
@@ -122,7 +122,9 @@ def fetch_users(token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Retrieve all users if endpoint available or query database fallback."""
     try:
         headers = get_auth_headers(token)
-        r = httpx.get(f"{API_URL}/api/v1/auth/users", headers=headers, timeout=DEFAULT_TIMEOUT)
+        r = httpx.get(f"{API_URL}/api/v1/admin/users", headers=headers, timeout=DEFAULT_TIMEOUT)
+        if r.status_code == 404:
+            r = httpx.get(f"{API_URL}/admin/users", headers=headers, timeout=DEFAULT_TIMEOUT)
         if r.status_code == 200:
             return r.json()
     except Exception:

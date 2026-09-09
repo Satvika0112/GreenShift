@@ -75,16 +75,20 @@ COST_EPSILON = 1e-6    # Precision threshold for electricity cost comparison
 
 
 class CandidateRejectionReason:
-    CARBON_BUDGET_EXCEEDED = "CARBON_BUDGET_EXCEEDED"
-    DEADLINE_VIOLATION = "DEADLINE_VIOLATION"
+    CARBON_THRESHOLD = "CARBON_THRESHOLD"
+    CARBON_BUDGET_EXCEEDED = "CARBON_THRESHOLD"
+    DEADLINE_VIOLATION = "SLA_VIOLATION"
     SLA_VIOLATION = "SLA_VIOLATION"
     INSUFFICIENT_CPU = "INSUFFICIENT_CPU"
     INSUFFICIENT_RAM = "INSUFFICIENT_RAM"
-    INSUFFICIENT_MEMORY = "INSUFFICIENT_RAM"  # Backward-compatible alias
-    INSUFFICIENT_GPU = "INSUFFICIENT_GPU"
-    REGION_INELIGIBLE = "REGION_INELIGIBLE"
+    INSUFFICIENT_MEMORY = "INSUFFICIENT_RAM"
+    GPU_UNAVAILABLE = "GPU_UNAVAILABLE"
+    INSUFFICIENT_GPU = "GPU_UNAVAILABLE"
+    POLICY_RESTRICTION = "POLICY_RESTRICTION"
+    REGION_INELIGIBLE = "POLICY_RESTRICTION"
     CARBON_DATA_UNAVAILABLE = "CARBON_DATA_UNAVAILABLE"
     COST_DATA_UNAVAILABLE = "COST_DATA_UNAVAILABLE"
+    COST_THRESHOLD = "COST_THRESHOLD"
 
 
 @dataclass
@@ -478,6 +482,48 @@ def _execute_schedule_job(
     best_tariff_usd = best.tariff_usd if best.tariff_usd is not None else 0.0
     best_native_rate = _get_native_rate_at_slot(region_id, plan, best_start, best_tariff_usd)
 
+    # Build candidates explainability array
+    candidates_list = []
+    for rank_idx, cand in enumerate(feasible_candidates, start=1):
+        candidates_list.append({
+            "slot_start": cand.start_time.isoformat(),
+            "slot_end": cand.end_time.isoformat(),
+            "carbon_intensity": round(cand.carbon_intensity or 0.0, 2),
+            "carbon_emission": round(cand.carbon_emission_kg or 0.0, 6),
+            "electricity_cost": round(cand.electricity_cost or 0.0, 6),
+            "tariff_rate": round(cand.tariff_usd or 0.0, 6),
+            "feasible": True,
+            "rank": rank_idx,
+            "score": round(1.0 / (1.0 + (cand.carbon_emission_kg or 0.0)), 4),
+        })
+
+    # Build rejected candidates explainability array
+    rejected_candidates_list = []
+    for cand in evaluations:
+        if not cand.feasible:
+            rejected_candidates_list.append({
+                "slot_start": cand.start_time.isoformat(),
+                "slot_end": cand.end_time.isoformat(),
+                "feasible": False,
+                "rejection_reasons": cand.rejection_reasons,
+                "primary_rejection_reason": cand.rejection_reasons[0] if cand.rejection_reasons else "CONSTRAINT_VIOLATION",
+                "carbon_intensity": round(cand.carbon_intensity or 0.0, 2) if cand.carbon_intensity is not None else None,
+                "carbon_emission": round(cand.carbon_emission_kg or 0.0, 6) if cand.carbon_emission_kg is not None else None,
+                "electricity_cost": round(cand.electricity_cost or 0.0, 6) if cand.electricity_cost is not None else None,
+            })
+
+    # Recommended candidate dictionary
+    recommended_candidate = {
+        "slot_start": best_start.isoformat(),
+        "slot_end": best_end.isoformat(),
+        "carbon_intensity": round(best_intensity, 2),
+        "carbon_emission": round(best_carbon, 6),
+        "electricity_cost": round(best_cost, 6),
+        "rank": 1,
+        "score": round(1.0 / (1.0 + best_carbon), 4),
+        "reason": "Optimal carbon-first window meeting all SLA and resource constraints",
+    }
+
     # 8. Decision Explainability Summary
     candidates_evaluated = len(evaluations)
     feasible_candidates_count = len(feasible_candidates)
@@ -589,4 +635,7 @@ def _execute_schedule_job(
         cost_reduction_pct=impact.cost_reduction_pct,
         scheduling_delay_hours=impact.scheduling_delay_hours,
         sla_met=impact.sla_met,
+        candidates=candidates_list,
+        rejected_candidates=rejected_candidates_list,
+        recommended_candidate=recommended_candidate,
     )

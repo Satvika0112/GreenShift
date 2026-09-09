@@ -16,7 +16,12 @@ from app.shared.utils import generate_job_id, utcnow
 logger = logging.getLogger(__name__)
 
 
-def submit_job(db: Session, request: JobSubmitRequest) -> JobORM:
+def submit_job(
+    db: Session,
+    request: JobSubmitRequest,
+    tenant_id: Optional[str] = None,
+    company_name: Optional[str] = None,
+) -> JobORM:
     """
     Register a new job in the job registry.
 
@@ -27,6 +32,8 @@ def submit_job(db: Session, request: JobSubmitRequest) -> JobORM:
     Args:
         db:      SQLAlchemy session
         request: Validated job submission request
+        tenant_id: Optional tenant isolation ID
+        company_name: Optional tenant company display name
 
     Returns:
         Newly created JobORM instance (status=SUBMITTED)
@@ -50,9 +57,14 @@ def submit_job(db: Session, request: JobSubmitRequest) -> JobORM:
     if energy_kwh is None or energy_kwh <= 0:
         energy_kwh = request.power_kw * (request.runtime_minutes / 60.0)
 
+    effective_tenant_id = tenant_id or getattr(request, "tenant_id", None)
+    effective_company_name = company_name or getattr(request, "company_name", None)
+
     job = JobORM(
         job_id               = job_id,
         team_id              = request.team_id,
+        tenant_id            = effective_tenant_id,
+        company_name         = effective_company_name,
         submitted_at         = submitted_at,
         deadline             = deadline,
         runtime_minutes      = request.runtime_minutes,

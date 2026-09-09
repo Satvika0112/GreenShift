@@ -20,46 +20,223 @@ from sqlalchemy.orm import Session
 from app.shared.auth import (
     AuthenticatedIdentity,
     get_current_identity,
+    get_current_user,
     hash_password,
+    is_platform_admin,
+    is_company_admin,
     require_admin,
+    require_platform_admin,
+    require_company_admin,
 )
 from app.shared.database import get_db
+from app.trust.service import (
+    record_user_registered,
+    record_user_activated,
+    record_user_deactivated,
+)
 from app.shared.models import (
     API_KEY_ALLOWED_ROLES,
     APIKeyCreateRequest,
     APIKeyCreateResponse,
     APIKeyListItem,
     APIKeyORM,
+    CompanyCreateRequest,
+    CompanyResponse,
+    CompanyUpdateRequest,
+    JobORM,
+    TenantORM,
     TenantUserResponse,
+    UserApprovalStatus,
     UserCreateRequest,
     UserORM,
+    UserResponse,
     UserRole,
+    UserStatusUpdateRequest,
 )
 
 router = APIRouter(tags=["Admin"])
+
+
+# ─── Company Management ───────────────────────────────────────────────────────
+
+@router.get(
+    "/companies",
+    response_model=List[CompanyResponse],
+    summary="List companies / tenants",
+)
+def list_companies(
+    db: Session = Depends(get_db),
+    identity: AuthenticatedIdentity = Depends(require_company_admin),
+):
+    """
+    List companies:
+    - Platform Admin: lists all registered companies with user and workload counts.
+    - Company Admin: lists only their own company.
+    """
+    if is_platform_admin(identity):
+        tenants = db.query(TenantORM).order_by(TenantORM.created_at.desc()).all()
+    else:
+        tenants = db.query(TenantORM).filter(TenantORM.id == identity.tenant_id).all()
+
+    result = []
+    for t in tenants:
+        user_count = db.query(UserORM).filter(UserORM.tenant_id == t.id).count()
+        workload_count = db.query(JobORM).filter(JobORM.tenant_id == t.id).count()
+        result.append(
+            CompanyResponse(
+                id=t.id,
+                name=t.name,
+                is_active=t.is_active,
+                created_at=t.created_at,
+                user_count=user_count,
+                workload_count=workload_count,
+            )
+        )
+    return result
+
+
+@router.post(
+    "/companies",
+    response_model=CompanyResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new company / tenant (Platform Admin only)",
+)
+def create_company(
+    body: CompanyCreateRequest,
+    db: Session = Depends(get_db),
+    identity: AuthenticatedIdentity = Depends(require_platform_admin),
+):
+    """Platform Admin creates a new tenant organization."""
+    # Generate tenant ID if not supplied
+    company_id = body.id or f"tenant-{body.name.lower().replace(' ', '-')}"
+    existing = db.query(TenantORM).filter(
+        (TenantORM.id == company_id) | (TenantORM.name == body.name)
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Company with ID '{company_id}' or name '{body.name}' already exists",
+        )
+
+    tenant = TenantORM(
+        id=company_id,
+        name=body.name,
+        is_active=body.is_active,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(tenant)
+    db.commit()
+    db.refresh(tenant)
+
+    return CompanyResponse(
+        id=tenant.id,
+        name=tenant.name,
+        is_active=tenant.is_active,
+        created_at=tenant.created_at,
+        user_count=0,
+        workload_count=0,
+    )
+
+
+@router.get(
+    "/companies/{company_id}",
+    response_model=CompanyResponse,
+    summary="Get details of a company",
+)
+def get_company(
+    company_id: str,
+    db: Session = Depends(get_db),
+    identity: AuthenticatedIdentity = Depends(require_company_admin),
+):
+    """Get company details. Enforces company isolation."""
+    if not is_platform_admin(identity) and identity.tenant_id != company_id:
+        raise HTTPException(status_code=404, detail=f"Company '{company_id}' not found")
+
+    tenant = db.get(TenantORM, company_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail=f"Company '{company_id}' not found")
+
+    user_count = db.query(UserORM).filter(UserORM.tenant_id == tenant.id).count()
+    workload_count = db.query(JobORM).filter(JobORM.tenant_id == tenant.id).count()
+    return CompanyResponse(
+        id=tenant.id,
+        name=tenant.name,
+        is_active=tenant.is_active,
+        created_at=tenant.created_at,
+        user_count=user_count,
+        workload_count=workload_count,
+    )
+
+
+@router.put(
+    "/companies/{company_id}",
+    response_model=CompanyResponse,
+    summary="Update company details",
+)
+def update_company(
+    company_id: str,
+    body: CompanyUpdateRequest,
+    db: Session = Depends(get_db),
+    identity: AuthenticatedIdentity = Depends(require_company_admin),
+):
+    """Update company details. Platform Admin or matching Company Admin."""
+    if not is_platform_admin(identity) and identity.tenant_id != company_id:
+        raise HTTPException(status_code=404, detail=f"Company '{company_id}' not found")
+
+    tenant = db.get(TenantORM, company_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail=f"Company '{company_id}' not found")
+
+    if body.name is not None:
+        tenant.name = body.name
+    if body.is_active is not None:
+        # Only platform admin can deactivate a company
+        if not is_platform_admin(identity):
+            raise HTTPException(status_code=403, detail="Only Platform Admins can change company active status")
+        tenant.is_active = body.is_active
+
+    db.commit()
+    db.refresh(tenant)
+
+    user_count = db.query(UserORM).filter(UserORM.tenant_id == tenant.id).count()
+    workload_count = db.query(JobORM).filter(JobORM.tenant_id == tenant.id).count()
+    return CompanyResponse(
+        id=tenant.id,
+        name=tenant.name,
+        is_active=tenant.is_active,
+        created_at=tenant.created_at,
+        user_count=user_count,
+        workload_count=workload_count,
+    )
 
 
 # ─── User Management ──────────────────────────────────────────────────────────
 
 @router.post(
     "/users",
-    response_model=TenantUserResponse,
+    response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a user within the admin's tenant",
+    summary="Create a user",
 )
 def create_user(
     body: UserCreateRequest,
     db: Session = Depends(get_db),
-    identity: Optional[AuthenticatedIdentity] = Depends(require_admin),
+    identity: AuthenticatedIdentity = Depends(require_company_admin),
 ):
     """
-    ADMIN only. Creates a user scoped to the admin's own tenant.
-    RULE 4: Cannot create users in other tenants.
+    Creates a user.
+    - Platform Admin can create users for any company.
+    - Company Admin can only create users within their own company.
+    - Company Admin cannot create PLATFORM_ADMIN or ADMIN users.
     """
-    # Derive username from email prefix if not provided
+    if body.role in (UserRole.PLATFORM_ADMIN, UserRole.ADMIN) and not is_platform_admin(identity):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Platform Admins can assign PLATFORM_ADMIN or ADMIN roles",
+        )
+
     username = body.username or body.email.split("@")[0]
 
-    # Check uniqueness
     existing = db.query(UserORM).filter(
         (UserORM.email == body.email) | (UserORM.username == username)
     ).first()
@@ -69,7 +246,22 @@ def create_user(
             detail=f"User with email '{body.email}' or username '{username}' already exists",
         )
 
-    tenant_id = identity.tenant_id if identity else None
+    if is_platform_admin(identity):
+        target_tenant = getattr(body, "tenant_id", None) or (identity.tenant_id if identity else None)
+    else:
+        if getattr(body, "tenant_id", None) and identity and body.tenant_id != identity.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Company Admins cannot create users in other tenants",
+            )
+        target_tenant = identity.tenant_id if identity else None
+
+    # Resolve company name if tenant is set
+    company_name = None
+    if target_tenant:
+        t = db.get(TenantORM, target_tenant)
+        if t:
+            company_name = t.name
 
     user = UserORM(
         username=username,
@@ -77,48 +269,141 @@ def create_user(
         hashed_password=hash_password(body.password),
         role=body.role,
         team_id=body.team_id,
-        tenant_id=tenant_id,
+        tenant_id=target_tenant,
+        company_name=company_name,
+        approval_status=UserApprovalStatus.APPROVED.value,
         is_active=True,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
+    try:
+        record_user_registered(
+            db,
+            username=user.username,
+            role=role_str,
+            team_id=user.team_id,
+            status=UserApprovalStatus.APPROVED.value,
+            tenant_id=user.tenant_id,
+        )
+    except Exception:
+        pass
+
     return user
 
 
 @router.get(
     "/users",
-    response_model=List[TenantUserResponse],
-    summary="List users in the admin's tenant",
+    response_model=List[UserResponse],
+    summary="List users",
 )
 def list_users(
+    tenant_id: Optional[str] = None,
     db: Session = Depends(get_db),
-    identity: Optional[AuthenticatedIdentity] = Depends(require_admin),
+    identity: AuthenticatedIdentity = Depends(require_company_admin),
 ):
-    """ADMIN only. Lists all users in the admin's own tenant."""
+    """
+    Lists users:
+    - Platform Admin can list all users or filter by tenant_id.
+    - Company Admin lists only users in their own company.
+    """
     query = db.query(UserORM)
-    if identity and identity.tenant_id:
-        query = query.filter(UserORM.tenant_id == identity.tenant_id)
+    if is_platform_admin(identity):
+        if tenant_id:
+            query = query.filter(UserORM.tenant_id == tenant_id)
+    else:
+        if tenant_id and identity and tenant_id != identity.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Company Admins cannot view users in other tenants",
+            )
+        query = query.filter(UserORM.tenant_id == (identity.tenant_id if identity else None))
+
     return query.order_by(UserORM.created_at.desc()).all()
+
+
+@router.patch(
+    "/users/{user_id}/status",
+    response_model=UserResponse,
+    summary="Update user approval, active state, or role",
+)
+@router.put(
+    "/users/{user_id}/status",
+    response_model=UserResponse,
+    include_in_schema=False,
+)
+def update_user_status(
+    user_id: int,
+    body: UserStatusUpdateRequest,
+    db: Session = Depends(get_db),
+    identity: AuthenticatedIdentity = Depends(require_company_admin),
+):
+    """
+    Approve, reject, activate, deactivate, or assign roles to users.
+    Company Admin can only manage users in their own company.
+    """
+    user = db.get(UserORM, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+
+    if not is_platform_admin(identity) and user.tenant_id != identity.tenant_id:
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+
+    old_active = user.is_active
+    old_approval = user.approval_status
+
+    if body.approval_status is not None:
+        status_norm = body.approval_status.upper()
+        if status_norm not in ("APPROVED", "PENDING", "REJECTED"):
+            raise HTTPException(status_code=400, detail="Invalid approval status. Must be APPROVED, PENDING, or REJECTED")
+        user.approval_status = status_norm
+        if status_norm == "APPROVED":
+            user.is_active = True
+        elif status_norm == "REJECTED":
+            user.is_active = False
+
+    if body.is_active is not None:
+        user.is_active = body.is_active
+
+    if body.role is not None:
+        # Only platform admin can grant PLATFORM_ADMIN or ADMIN
+        if body.role in (UserRole.PLATFORM_ADMIN, UserRole.ADMIN) and not is_platform_admin(identity):
+            raise HTTPException(status_code=403, detail="Only Platform Admins can assign PLATFORM_ADMIN or ADMIN role")
+        user.role = body.role
+
+    db.commit()
+    db.refresh(user)
+
+    admin_username = getattr(identity, "username", "admin") if identity else "admin"
+    try:
+        if (not old_active or old_approval == "PENDING") and user.is_active and user.approval_status == "APPROVED":
+            record_user_activated(db, username=user.username, activated_by=admin_username, tenant_id=user.tenant_id)
+        elif old_active and not user.is_active:
+            record_user_deactivated(db, username=user.username, deactivated_by=admin_username, tenant_id=user.tenant_id)
+    except Exception:
+        pass
+
+    return user
 
 
 @router.delete(
     "/users/{user_id}",
     response_model=dict,
-    summary="Deactivate a user in the admin's tenant",
+    summary="Deactivate a user",
 )
 def deactivate_user(
     user_id: int,
     db: Session = Depends(get_db),
-    identity: Optional[AuthenticatedIdentity] = Depends(require_admin),
+    identity: AuthenticatedIdentity = Depends(require_company_admin),
 ):
-    """ADMIN only. Deactivates (soft-deletes) a user. Cross-tenant → 404."""
+    """Deactivates a user. Cross-tenant -> 404."""
     user = db.get(UserORM, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail=f"User {user_id} not found")
 
-    # Tenant isolation: 404 for cross-tenant
-    if identity and user.tenant_id and user.tenant_id != identity.tenant_id:
+    if not is_platform_admin(identity) and user.tenant_id != identity.tenant_id:
         raise HTTPException(status_code=404, detail=f"User {user_id} not found")
 
     if not user.is_active:
@@ -126,6 +411,13 @@ def deactivate_user(
 
     user.is_active = False
     db.commit()
+
+    admin_username = getattr(identity, "username", "admin") if identity else "admin"
+    try:
+        record_user_deactivated(db, username=user.username, deactivated_by=admin_username, tenant_id=user.tenant_id)
+    except Exception:
+        pass
+
     return {"user_id": user_id, "status": "deactivated"}
 
 
@@ -140,21 +432,22 @@ def deactivate_user(
 def create_api_key(
     body: APIKeyCreateRequest,
     db: Session = Depends(get_db),
-    identity: Optional[AuthenticatedIdentity] = Depends(require_admin),
+    identity: Optional[AuthenticatedIdentity] = Depends(require_company_admin),
 ):
     """
-    ADMIN only. Creates an API key for the admin's tenant.
+    Creates an API key for the admin's tenant.
+    Platform Admin can specify any tenant; Company Admin is locked to own tenant.
 
-    RULE 3: Role cannot be ADMIN — API keys are for automation only.
+    RULE 3: Role cannot be administrative (ADMIN, PLATFORM_ADMIN, COMPANY_ADMIN) — API keys are for automation only.
     Raw key is returned once and never stored; store it securely.
     """
     # RULE 3 enforcement
-    if body.role == UserRole.ADMIN:
+    if body.role in (UserRole.ADMIN, UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "API keys cannot have ADMIN role. "
-                "Use OPERATOR, USER, or VIEWER for service accounts."
+                "API keys cannot have administrative roles (ADMIN, PLATFORM_ADMIN, COMPANY_ADMIN). "
+                "Use OPERATOR, USER, VIEWER, or COMPANY_USER for service accounts."
             ),
         )
 
@@ -164,11 +457,21 @@ def create_api_key(
             detail=f"Invalid role for API key. Allowed: {[r.value for r in API_KEY_ALLOWED_ROLES]}",
         )
 
-    tenant_id = identity.tenant_id if identity else "tenant-default"
-    if not tenant_id:
+    if is_platform_admin(identity):
+        target_tenant = getattr(body, "tenant_id", None) or (identity.tenant_id if identity else None) or "tenant-default"
+    else:
+        if getattr(body, "tenant_id", None) and identity and body.tenant_id != identity.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Company Admins cannot create API keys for other tenants",
+            )
+        target_tenant = (identity.tenant_id if identity else None) or "tenant-default"
+
+    # Verify tenant exists
+    if not db.get(TenantORM, target_tenant):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Admin user has no associated tenant. Run the seed script first.",
+            detail=f"Tenant '{target_tenant}' does not exist.",
         )
 
     # Generate secure random key
@@ -180,7 +483,7 @@ def create_api_key(
     api_key_orm = APIKeyORM(
         id=key_id,
         key_hash=key_hash,
-        tenant_id=tenant_id,
+        tenant_id=target_tenant,
         role=body.role,
         label=body.label,
         is_active=True,
@@ -191,8 +494,8 @@ def create_api_key(
     return APIKeyCreateResponse(
         key_id=key_id,
         api_key=raw_key,   # Shown ONCE — never stored
-        tenant_id=tenant_id,
-        role=body.role.value,
+        tenant_id=target_tenant,
+        role=body.role.value if hasattr(body.role, "value") else str(body.role),
         label=body.label,
         created_at=now,
     )
@@ -203,13 +506,24 @@ def create_api_key(
     summary="List API keys for the admin's tenant",
 )
 def list_api_keys(
+    tenant_id: Optional[str] = None,
     db: Session = Depends(get_db),
-    identity: Optional[AuthenticatedIdentity] = Depends(require_admin),
+    identity: Optional[AuthenticatedIdentity] = Depends(require_company_admin),
 ):
     """ADMIN only. Lists all API keys for the admin's tenant (hashes never returned)."""
     query = db.query(APIKeyORM)
-    if identity and identity.tenant_id:
-        query = query.filter(APIKeyORM.tenant_id == identity.tenant_id)
+    if is_platform_admin(identity):
+        if tenant_id:
+            query = query.filter(APIKeyORM.tenant_id == tenant_id)
+    else:
+        if tenant_id and identity and tenant_id != identity.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Company Admins cannot view API keys in other tenants",
+            )
+        target_tenant = (identity.tenant_id if identity else None) or "tenant-default"
+        query = query.filter(APIKeyORM.tenant_id == target_tenant)
+
     keys = query.order_by(APIKeyORM.created_at.desc()).all()
     return [
         {
@@ -233,15 +547,15 @@ def list_api_keys(
 def revoke_api_key(
     key_id: str,
     db: Session = Depends(get_db),
-    identity: Optional[AuthenticatedIdentity] = Depends(require_admin),
+    identity: Optional[AuthenticatedIdentity] = Depends(require_company_admin),
 ):
-    """ADMIN only. Revokes (deactivates) an API key. Cross-tenant → 404."""
+    """ADMIN only. Revokes (deactivates) an API key. Cross-tenant -> 404."""
     api_key = db.get(APIKeyORM, key_id)
     if api_key is None:
         raise HTTPException(status_code=404, detail=f"API key {key_id} not found")
 
     # Tenant isolation
-    if identity and api_key.tenant_id != identity.tenant_id:
+    if not is_platform_admin(identity) and identity and api_key.tenant_id != identity.tenant_id:
         raise HTTPException(status_code=404, detail=f"API key {key_id} not found")
 
     if not api_key.is_active:

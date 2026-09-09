@@ -58,33 +58,38 @@ class ApprovalPermissionError(ValueError):
 
 def check_user_approval_permission(job: JobORM, user: Optional[UserORM] = None) -> None:
     """
-    Enforces server-side RBAC authorization rules:
-      - ADMIN: Full access to approve/decline any job across all teams.
-      - TEAM_LEAD: Can approve/decline only jobs matching user.team_id.
-      - OPERATOR: Cannot approve schedules unless explicitly configured (raises 403).
-      - VIEWER: Read-only access (raises 403).
+    Enforces server-side RBAC and tenant authorization rules:
+      - PLATFORM_ADMIN / ADMIN: Full access to approve/decline any job across all companies.
+      - COMPANY_ADMIN / TEAM_LEAD: Can approve/decline only jobs matching user's tenant_id / team_id.
+      - COMPANY_USER / OPERATOR / VIEWER: Cannot approve schedules (raises 403).
     """
     if user is None:
         return  # Service-level backwards compatibility if no user context is passed
 
     user_role = user.role.value if hasattr(user.role, "value") else str(user.role)
 
-    if user_role == UserRole.ADMIN.value:
+    # Platform Admin has global permissions
+    if user_role in (UserRole.PLATFORM_ADMIN.value, UserRole.ADMIN.value) and not user.tenant_id:
         return
 
-    if user_role == UserRole.TEAM_LEAD.value:
-        user_team = (user.team_id or "").strip().lower()
-        job_team = (job.team_id or "").strip().lower()
-        if not user_team or user_team != job_team:
+    # Company Admin / Team Lead
+    if user_role in (UserRole.PLATFORM_ADMIN.value, UserRole.ADMIN.value, UserRole.COMPANY_ADMIN.value, UserRole.TEAM_LEAD.value):
+        if user.tenant_id and job.tenant_id and user.tenant_id != job.tenant_id:
             raise ApprovalPermissionError(
-                f"Team lead of team '{user.team_id}' is not authorized to approve/decline jobs for team '{job.team_id}'",
+                f"User from company '{user.company_name or user.tenant_id}' cannot approve/decline jobs for '{job.company_name or job.tenant_id}'",
                 status_code=403,
             )
+        if user_role == UserRole.TEAM_LEAD.value and user.team_id and job.team_id:
+            if user.team_id.strip().lower() != job.team_id.strip().lower():
+                raise ApprovalPermissionError(
+                    f"Team lead of team '{user.team_id}' is not authorized to approve/decline jobs for team '{job.team_id}'",
+                    status_code=403,
+                )
         return
 
-    if user_role == UserRole.OPERATOR.value:
+    if user_role in (UserRole.COMPANY_USER.value, UserRole.USER.value, UserRole.OPERATOR.value):
         raise ApprovalPermissionError(
-            "Role 'OPERATOR' is not authorized to approve or decline schedules",
+            f"Role '{user_role}' is not authorized to approve or decline schedules",
             status_code=403,
         )
 
@@ -252,6 +257,12 @@ def decline_schedule(
     DECLINED is a business decision, not a technical failure.
     No Kubernetes job will be dispatched.
     """
+    if not reason or not reason.strip():
+        raise ApprovalValidationError(
+            "A non-empty decline reason is required to decline a workload schedule.",
+            status_code=400,
+        )
+
     job, sd = validate_approval_request(db, job_id, schedule_id, "DECLINED")
     check_user_approval_permission(job, user)
 
@@ -291,7 +302,7 @@ def decline_schedule(
         job_id=job.job_id,
         schedule_decision_id=sd.id,
         decision="DECLINED",
-        reason=reason or "Execution window declined by operator",
+        reason=reason.strip(),
         approved_by=approved_by or "admin",
         created_at=now,
         updated_at=now,
@@ -336,6 +347,58 @@ def decline_schedule(
     )
 
 
+def resubmit_workload(
+    db: Session,
+    job_id: str,
+    user: Optional[UserORM] = None,
+) -> JobORM:
+    """
+    Resubmit a workload that was previously DECLINED, CANCELLED, or FAILED.
+    Transitions status back to SUBMITTED and removes stale decision.
+    """
+    job = db.get(JobORM, job_id)
+    if not job:
+        raise ApprovalNotFoundError(f"Job '{job_id}' not found")
+
+    check_user_approval_permission(job, user)
+
+    if job.status not in (JobStatus.DECLINED, JobStatus.CANCELLED, JobStatus.FAILED):
+        raise ApprovalValidationError(
+            f"Cannot resubmit job '{job_id}' in status '{job.status}'. Only DECLINED, CANCELLED, or FAILED jobs can be resubmitted.",
+            status_code=400,
+        )
+
+    now = utcnow()
+    job.status = JobStatus.SUBMITTED
+    job.updated_at = now
+    # Detach previous schedule decision so scheduler can re-evaluate
+    if job.schedule_decision:
+        db.delete(job.schedule_decision)
+    db.commit()
+    db.refresh(job)
+
+    try:
+        from app.trust.ledger import append_event
+        from app.shared.models import EventType
+        append_event(
+            db,
+            EventType.JOB_SUBMITTED,
+            job_id=job.job_id,
+            payload={
+                "action": "RESUBMITTED",
+                "resubmitted_by": user.username if user else "admin",
+                "tenant_id": job.tenant_id,
+                "company_name": job.company_name,
+                "team_id": job.team_id,
+            },
+        )
+    except Exception as exc:
+        logger.warning("Audit record failed for job %s resubmission: %s", job.job_id, exc)
+
+    logger.info("Job %s RESUBMITTED by %s", job_id, user.username if user else "admin")
+    return job
+
+
 def get_job_approvals(db: Session, job_id: str) -> List[ApprovalORM]:
     """Retrieve all approval/decline history for a specific job."""
     return (
@@ -346,17 +409,23 @@ def get_job_approvals(db: Session, job_id: str) -> List[ApprovalORM]:
     )
 
 
-def get_pending_approvals(db: Session, team_id: Optional[str] = None) -> List[PendingApprovalItem]:
+def get_pending_approvals(
+    db: Session,
+    team_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> List[PendingApprovalItem]:
     """
     Retrieve all jobs currently awaiting human approval (status == PENDING_APPROVAL)
     with their schedule decisions and converted local/UTC timestamps.
-    Optionally filters by team_id.
+    Optionally filters by team_id and/or tenant_id.
     """
     query = (
         db.query(JobORM)
         .join(JobORM.schedule_decision)
         .filter(JobORM.status == JobStatus.PENDING_APPROVAL)
     )
+    if tenant_id:
+        query = query.filter(JobORM.tenant_id == tenant_id)
     if team_id:
         query = query.filter(JobORM.team_id == team_id)
 

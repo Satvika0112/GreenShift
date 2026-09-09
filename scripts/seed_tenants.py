@@ -18,6 +18,8 @@ RULE 4: This is the ONLY way to create tenants (no /admin/tenants API endpoint).
 
 import os
 import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 import uuid
 from datetime import datetime, timezone
 
@@ -35,13 +37,15 @@ from app.shared.auth import hash_password
 
 # ─── Default tenant and user definitions ──────────────────────────────────────
 
-DEFAULT_TENANT = {
-    "id": "tenant-default",
-    "name": "GreenShift Dev Org",
-}
+DEFAULT_TENANTS = [
+    {"id": "tenant-default", "name": "GreenShift Dev Org"},
+    {"id": "tenant-acme", "name": "Acme Compute Corp"},
+    {"id": "tenant-globex", "name": "Globex Cloud Services"},
+]
 
 DEFAULT_USERS = [
     {
+        "tenant_id": "tenant-default",
         "username": "admin",
         "email": "admin@greenshift.dev",
         "password": "GreenShift-Admin-ChangeMeNow!",
@@ -49,6 +53,7 @@ DEFAULT_USERS = [
         "team_id": "platform",
     },
     {
+        "tenant_id": "tenant-default",
         "username": "operator",
         "email": "operator@greenshift.dev",
         "password": "GreenShift-Operator-ChangeMeNow!",
@@ -56,11 +61,28 @@ DEFAULT_USERS = [
         "team_id": "platform",
     },
     {
+        "tenant_id": "tenant-default",
         "username": "viewer",
         "email": "viewer@greenshift.dev",
         "password": "GreenShift-Viewer-ChangeMeNow!",
         "role": UserRole.VIEWER,
         "team_id": "general",
+    },
+    {
+        "tenant_id": "tenant-acme",
+        "username": "acme_admin",
+        "email": "admin@acme.com",
+        "password": "Acme-Admin-ChangeMeNow!",
+        "role": UserRole.ADMIN,
+        "team_id": "team-acme",
+    },
+    {
+        "tenant_id": "tenant-globex",
+        "username": "globex_admin",
+        "email": "admin@globex.com",
+        "password": "Globex-Admin-ChangeMeNow!",
+        "role": UserRole.ADMIN,
+        "team_id": "team-globex",
     },
 ]
 
@@ -71,36 +93,46 @@ def ensure_tables():
     print("✓ Tables ensured")
 
 
-def seed_tenant(db: Session) -> TenantORM:
-    """Create the default tenant if it doesn't exist."""
-    tenant = db.get(TenantORM, DEFAULT_TENANT["id"])
-    if tenant:
-        print(f"  → Tenant '{tenant.id}' already exists — skipped")
-        return tenant
+def seed_tenants(db: Session) -> list:
+    """Create default tenants if they do not exist."""
+    tenants = []
+    for dt in DEFAULT_TENANTS:
+        tenant = db.get(TenantORM, dt["id"])
+        if tenant:
+            print(f"  → Tenant '{tenant.id}' already exists — skipped")
+            tenants.append(tenant)
+            continue
 
-    tenant = TenantORM(
-        id=DEFAULT_TENANT["id"],
-        name=DEFAULT_TENANT["name"],
-        is_active=True,
-    )
-    db.add(tenant)
-    db.commit()
-    db.refresh(tenant)
-    print(f"  ✓ Created tenant: {tenant.id} ({tenant.name})")
-    return tenant
+        tenant = TenantORM(
+            id=dt["id"],
+            name=dt["name"],
+            is_active=True,
+        )
+        db.add(tenant)
+        db.commit()
+        db.refresh(tenant)
+        print(f"  ✓ Created tenant: {tenant.id} ({tenant.name})")
+        tenants.append(tenant)
+    return tenants
 
 
-def seed_users(db: Session, tenant_id: str) -> list:
-    """Create default users if they don't exist."""
+def seed_users(db: Session) -> list:
+    """Create default users and company admins if they don't exist."""
     created = []
     for u in DEFAULT_USERS:
         existing = db.query(UserORM).filter(UserORM.email == u["email"]).first()
         if existing:
-            # Backfill tenant_id if missing
+            # Backfill tenant_id and approval_status if missing
+            updated = False
             if not existing.tenant_id:
-                existing.tenant_id = tenant_id
+                existing.tenant_id = u["tenant_id"]
+                updated = True
+            if not getattr(existing, "approval_status", None):
+                existing.approval_status = "APPROVED"
+                updated = True
+            if updated:
                 db.commit()
-                print(f"  → Backfilled tenant_id for user '{existing.username}'")
+                print(f"  → Updated tenant/approval for user '{existing.username}'")
             else:
                 print(f"  → User '{existing.username}' already exists — skipped")
             continue
@@ -111,7 +143,8 @@ def seed_users(db: Session, tenant_id: str) -> list:
             hashed_password=hash_password(u["password"]),
             role=u["role"],
             team_id=u["team_id"],
-            tenant_id=tenant_id,
+            tenant_id=u["tenant_id"],
+            approval_status="APPROVED",
             is_active=True,
         )
         db.add(user)
@@ -149,18 +182,18 @@ def main():
     db = SessionLocal()
 
     try:
-        print("\n[1/3] Seeding tenant...")
-        tenant = seed_tenant(db)
+        print("\n[1/3] Seeding tenants...")
+        tenants = seed_tenants(db)
 
-        print(f"\n[2/3] Seeding users for tenant '{tenant.id}'...")
-        created_users = seed_users(db, tenant.id)
+        print(f"\n[2/3] Seeding admin users across tenants...")
+        created_users = seed_users(db)
 
         print(f"\n[3/3] Backfilling existing jobs...")
-        jobs_updated = backfill_job_tenant_ids(db, tenant.id)
+        jobs_updated = backfill_job_tenant_ids(db, "tenant-default")
 
         print("\n" + "=" * 50)
         print("✅ Provisioning complete!")
-        print(f"   Tenant: {tenant.id}")
+        print(f"   Tenants ensured: {len(tenants)}")
         print(f"   Users created: {len(created_users)}")
         print(f"   Jobs backfilled: {jobs_updated}")
 

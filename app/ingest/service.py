@@ -125,7 +125,12 @@ def fetch_and_store_tariff(
 # Job submission pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
-def ingest_job(db: Session, request: JobSubmitRequest) -> JobORM:
+def ingest_job(
+    db: Session,
+    request: JobSubmitRequest,
+    tenant_id: Optional[str] = None,
+    company_name: Optional[str] = None,
+) -> JobORM:
     """
     Full ingest pipeline for a new job:
     1. Register job
@@ -134,7 +139,7 @@ def ingest_job(db: Session, request: JobSubmitRequest) -> JobORM:
     4. Return the registered job (scheduling happens separately in DECIDE)
     """
     # 1. Register job
-    job = submit_job(db, request)
+    job = submit_job(db, request, tenant_id=tenant_id, company_name=company_name)
 
     # 2. Record audit event
     try:

@@ -281,6 +281,7 @@ def generate_report(
     team_id: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    tenant_id: Optional[str] = None,
 ) -> dict:
     """
     Generate a full BRSR-style sustainability report.
@@ -290,11 +291,14 @@ def generate_report(
         team_id:    Filter by team (optional).
         start_date: Filter jobs submitted on/after this date (optional).
         end_date:   Filter jobs submitted on/before this date (optional).
+        tenant_id:  Filter jobs by tenant (optional).
 
     Returns:
         dict with keys: metadata, summary, jobs, audit
     """
     query = db.query(JobORM)
+    if tenant_id:
+        query = query.filter(JobORM.tenant_id == tenant_id)
     if team_id:
         query = query.filter(JobORM.team_id == team_id)
     if start_date:
@@ -348,6 +352,7 @@ def generate_csv(
     team_id: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    tenant_id: Optional[str] = None,
 ) -> str:
     """
     Generate a CSV string of the full job-level report.
@@ -356,7 +361,7 @@ def generate_csv(
     Returns:
         CSV string (utf-8).
     """
-    report = generate_report(db, team_id=team_id, start_date=start_date, end_date=end_date)
+    report = generate_report(db, team_id=team_id, start_date=start_date, end_date=end_date, tenant_id=tenant_id)
     rows = report["jobs"]
 
     if not rows:
@@ -369,9 +374,9 @@ def generate_csv(
     return output.getvalue()
 
 
-def generate_markdown_summary(db: Session) -> str:
+def generate_markdown_summary(db: Session, tenant_id: Optional[str] = None) -> str:
     """Generate a markdown summary of the sustainability report."""
-    report = generate_report(db)
+    report = generate_report(db, tenant_id=tenant_id)
     s = report["summary"]
     m = report["metadata"]
 

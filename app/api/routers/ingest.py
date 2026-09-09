@@ -28,6 +28,7 @@ from app.shared.models import (
     TariffDataPoint,
     UserORM,
     UserRole,
+    EventType,
 )
 from app.shared.utils import utcnow, get_logger
 
@@ -45,30 +46,37 @@ def submit_new_job(
     body: JobSubmitRequest,
     auto_schedule: bool = Query(False, description="Automatically trigger Carbon-Aware scheduling upon submission"),
     db: Session = Depends(get_db),
-    current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR)),
+    current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR, UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER, UserRole.PLATFORM_ADMIN)),
 ):
-    """Submit a new deferrable compute job with input validation and lifecycle state tracking."""
+    """Submit a new deferrable compute job with input validation, tenant isolation, and lifecycle state tracking."""
     from app.shared.timezone import normalize_to_utc
     try:
         user_role_val = current_user.role.value if isinstance(current_user.role, UserRole) else str(current_user.role)
-        if user_role_val == "TEAM_LEAD" and current_user.team_id:
+        if user_role_val in ("TEAM_LEAD", "COMPANY_USER") and current_user.team_id:
             if body.team_id and body.team_id != current_user.team_id:
                 raise HTTPException(
                     status_code=403,
-                    detail=f"Team lead for team '{current_user.team_id}' cannot submit jobs for team '{body.team_id}'",
+                    detail=f"User for team '{current_user.team_id}' cannot submit jobs for team '{body.team_id}'",
                 )
         req_tz = getattr(body, "timezone", None)
         normalized_deadline = normalize_to_utc(body.deadline, region=body.region, timezone_name=req_tz)
         if normalized_deadline <= utcnow():
             raise HTTPException(status_code=400, detail="Deadline must be in the future")
         body.deadline = normalized_deadline
-        job = ingest_job(db, body)
+        job = ingest_job(
+            db,
+            body,
+            tenant_id=current_user.tenant_id,
+            company_name=current_user.company_name,
+        )
 
         # Record validation audit event
         try:
             from app.trust.ledger import append_event
             append_event(db, EventType.JOB_VALIDATED, job_id=job.job_id, payload={
                 "team_id": job.team_id,
+                "tenant_id": job.tenant_id,
+                "company_name": job.company_name,
                 "region": job.region,
                 "deadline": job.deadline.isoformat(),
                 "runtime_minutes": job.runtime_minutes,
@@ -125,29 +133,30 @@ def bulk_load_jobs_from_csv(
 @router.get("/jobs", response_model=List[dict])
 def list_all_jobs(
     team_id: Optional[str] = Query(None),
+    tenant_id: Optional[str] = Query(None, description="Filter by tenant ID (Platform Admin only)"),
     status: Optional[JobStatus] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
-    """List jobs, optionally filtered by team_id and/or status."""
+    """List jobs with strict tenant isolation. Platform Admins can see all or filter by tenant."""
     try:
-        user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-        if user_role == UserRole.ADMIN.value:
-            effective_team_id = team_id
-        else:
-            # Non-admin users (TEAM_LEAD, OPERATOR, VIEWER) must only see their own team's data.
-            # A client-provided team_id query parameter must NOT allow bypassing this restriction.
-            if not current_user.team_id:
-                return []
-            effective_team_id = current_user.team_id
-
-        jobs = list_jobs(db, team_id=effective_team_id, status=status, limit=limit)
+        from app.api.tenant_scope import get_tenant_jobs
+        jobs = get_tenant_jobs(
+            db=db,
+            identity=current_user,
+            tenant_id=tenant_id,
+            team_id=team_id,
+            status=status,
+            limit=limit,
+        )
         res = []
         for j in jobs:
             item = {
                 "job_id": j.job_id,
                 "team_id": j.team_id,
+                "tenant_id": j.tenant_id,
+                "company_name": j.company_name,
                 "job_type": j.job_type,
                 "priority": j.priority,
                 "status": j.status,
@@ -190,24 +199,15 @@ def get_job_detail(
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
-    """Get full details for a specific job."""
-    job = get_job(db, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
-    user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-    if user_role != UserRole.ADMIN.value:
-        user_team = (current_user.team_id or "").strip().lower()
-        job_team = (job.team_id or "").strip().lower()
-        if not user_team or user_team != job_team:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: User from team '{current_user.team_id}' cannot view job belonging to team '{job.team_id}'",
-            )
+    """Get full details for a specific job with strict tenant isolation."""
+    from app.api.tenant_scope import get_tenant_jobs
+    job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
 
     result = {
         "job_id": job.job_id,
         "team_id": job.team_id,
+        "tenant_id": job.tenant_id,
+        "company_name": job.company_name,
         "job_type": job.job_type,
         "priority": job.priority,
         "status": job.status,
@@ -260,6 +260,9 @@ def get_job_detail(
             "cost_reduction_pct": getattr(sd, "cost_reduction_pct", None),
             "scheduling_delay_hours": getattr(sd, "scheduling_delay_hours", None),
             "sla_met": getattr(sd, "sla_met", True),
+            "candidates": getattr(sd, "candidates_json", None),
+            "rejected_candidates": getattr(sd, "rejected_candidates_json", None),
+            "recommended_candidate": getattr(sd, "recommended_candidate_json", None),
         }
 
     if job.kubernetes_execution:
@@ -292,20 +295,9 @@ def get_job_history(
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
-    """Get the complete operational lifecycle history and audit trail for a job."""
-    job = get_job(db, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
-    user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-    if user_role != UserRole.ADMIN.value:
-        user_team = (current_user.team_id or "").strip().lower()
-        job_team = (job.team_id or "").strip().lower()
-        if not user_team or user_team != job_team:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: User from team '{current_user.team_id}' cannot view job history belonging to team '{job.team_id}'",
-            )
+    """Get the complete operational lifecycle history and audit trail for a job with tenant isolation."""
+    from app.api.tenant_scope import get_tenant_jobs
+    job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
 
     from app.trust.ledger import get_job_audit
     audit_trail = get_job_audit(db, job_id)
@@ -323,27 +315,18 @@ def cancel_workload(
 ):
     """
     Cancel a job in SUBMITTED, VALIDATED, SCHEDULED, or PENDING_APPROVAL status.
-    Enforces RBAC authorization: Admin, Operator, or matching Team Lead.
+    Enforces tenant isolation and RBAC authorization.
     """
-    job = get_job(db, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    from app.api.tenant_scope import get_tenant_jobs
+    from app.shared.auth import is_platform_admin, is_company_admin
+    job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
 
     user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-    if user_role not in (UserRole.ADMIN.value, UserRole.OPERATOR.value):
-        if user_role == UserRole.TEAM_LEAD.value:
-            user_team = (current_user.team_id or "").strip().lower()
-            job_team = (job.team_id or "").strip().lower()
-            if not user_team or user_team != job_team:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Cannot cancel workload belonging to team '{job.team_id}'",
-                )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Viewer role cannot cancel workloads",
-            )
+    if not (is_platform_admin(current_user) or is_company_admin(current_user) or user_role in ("OPERATOR", "ADMIN")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Role lacks authorization to cancel workloads",
+        )
 
     if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
         raise HTTPException(
@@ -369,6 +352,8 @@ def cancel_workload(
                 "cancelled_by": current_user.username,
                 "role": user_role,
                 "team_id": job.team_id,
+                "tenant_id": job.tenant_id,
+                "company_name": job.company_name,
                 "reason": "Cancelled by authorized user",
             },
         )
