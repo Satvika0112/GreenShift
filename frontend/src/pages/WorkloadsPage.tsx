@@ -1,89 +1,95 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search,
   PlusCircle,
-  Cpu,
-  Send,
-  XCircle,
   Eye,
+  XCircle,
   RefreshCw,
+  Layers,
+  Activity,
+  CheckCircle2,
+  CheckCheck,
+  RotateCcw,
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
+import { KPICard } from '../components/common/KPICard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
 import { InlineBanner } from '../components/common/InlineBanner';
-import { workloadsApi, schedulingApi, dispatchApi, sustainabilityApi } from '../api/endpoints';
-import { Job } from '../types/api';
+import { workloadsApi, schedulingApi } from '../api/endpoints';
+import { Job, JobStatus } from '../types/api';
 import { useAuth } from '../context/AuthContext';
+import { useWorkloads } from '../hooks/useWorkloads';
+import { useDashboardSummary } from '../hooks/useDashboard';
+import {
+  formatCarbonKg,
+  formatCost,
+  formatDateTime,
+  formatPriority,
+  recommendedStartDisplay,
+  deriveApprovalStatus,
+  APPROVAL_LABELS,
+  ApprovalDisplayStatus,
+  contextualActionForStatus,
+  workloadDisplayName,
+} from '../utils/workloadDisplay';
+
+const STATUS_OPTIONS: JobStatus[] = [
+  'SUBMITTED', 'VALIDATED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'READY',
+  'QUEUED', 'CLAIMING', 'DISPATCHING', 'RUNNING', 'COMPLETED', 'DECLINED', 'REJECTED', 'FAILED', 'CANCELLED',
+];
+
+// Backend-validated priority values (app.shared.models field description:
+// "CRITICAL/HIGH/MEDIUM/LOW") — real enum values, not invented ones.
+const PRIORITY_OPTIONS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+
+const APPROVAL_OPTIONS: ApprovalDisplayStatus[] = ['PENDING', 'APPROVED', 'DECLINED', 'NOT_REQUIRED'];
+
+type SortKey = 'submitted' | 'deadline' | 'priority' | 'status';
+
+const PRIORITY_RANK: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
 
 export const WorkloadsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user, isAdmin } = useAuth();
+  const { user, isPlatformAdmin } = useAuth();
+  const isCompanyUserRole = user?.role === 'COMPANY_USER';
+  const isCompanyAdminRole = user?.role === 'COMPANY_ADMIN';
 
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [teamFilter, setTeamFilter] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [regionFilter, setRegionFilter] = useState<string>('ALL');
-  const [availableRegions, setAvailableRegions] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [priorityFilter, setPriorityFilter] = useState('ALL');
+  const [jobTypeFilter, setJobTypeFilter] = useState('ALL');
+  const [regionFilter, setRegionFilter] = useState('ALL');
+  const [approvalFilter, setApprovalFilter] = useState('ALL');
+  const [sortKey, setSortKey] = useState<SortKey>('submitted');
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [schedulingJobId, setSchedulingJobId] = useState<string | null>(null);
 
-  const fetchJobs = async () => {
-    setIsLoading(true);
+  const summaryQ = useDashboardSummary();
+  const workloadsQ = useWorkloads({ teamId: isPlatformAdmin && teamFilter !== 'ALL' ? teamFilter : undefined });
+  const jobs = workloadsQ.data || [];
+
+  const handleRefresh = () => {
+    summaryQ.refetch();
+    workloadsQ.refetch();
+  };
+
+  const handleFindSchedule = async (jobId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSchedulingJobId(jobId);
     setActionMessage(null);
     try {
-      const [resJobs, resRegions] = await Promise.allSettled([
-        workloadsApi.getJobs({
-          team_id: isAdmin ? undefined : user?.team_id,
-          limit: 200,
-        }),
-        sustainabilityApi.getRegions(),
-      ]);
-
-      if (resJobs.status === 'fulfilled') {
-        setJobs(resJobs.value || []);
-      } else if (resJobs.status === 'rejected') {
-        setActionMessage({ type: 'error', text: 'Failed to load workloads from backend.' });
-      }
-      if (resRegions.status === 'fulfilled') {
-        setAvailableRegions((resRegions.value || []).map((r) => r.region_id));
-      }
-    } catch (err: any) {
-      setActionMessage({ type: 'error', text: 'Failed to load workloads from backend.' });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchJobs();
-  }, [user]);
-
-  const handleTriggerSchedule = async (jobId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
       await schedulingApi.scheduleJob(jobId, true);
-      setActionMessage({ type: 'success', text: `Optimal schedule calculated for ${jobId}.` });
-      await fetchJobs();
-      navigate(`/scheduling?jobId=${jobId}`);
+      setActionMessage({ type: 'success', text: `Schedule calculated for ${jobId}.` });
+      await workloadsQ.refetch();
     } catch (err: any) {
-      const msg = err.response?.data?.detail || 'Scheduling failed.';
-      setActionMessage({ type: 'error', text: msg });
-    }
-  };
-
-  const handleDispatch = async (jobId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      const res = await dispatchApi.dispatchJob(jobId);
-      setActionMessage({ type: 'success', text: `Job ${jobId} successfully dispatched to Kubernetes (${res.kubernetes_job_name || 'k8s-runner'}).` });
-      await fetchJobs();
-    } catch (err: any) {
-      const msg = err.response?.data?.detail || 'Dispatch failed.';
-      setActionMessage({ type: 'error', text: msg });
+      setActionMessage({ type: 'error', text: err.response?.data?.detail || 'Scheduling failed.' });
+    } finally {
+      setSchedulingJobId(null);
     }
   };
 
@@ -93,39 +99,80 @@ export const WorkloadsPage: React.FC = () => {
     try {
       await workloadsApi.cancelJob(jobId);
       setActionMessage({ type: 'success', text: `Workload ${jobId} has been cancelled.` });
-      await fetchJobs();
+      await workloadsQ.refetch();
     } catch (err: any) {
-      const msg = err.response?.data?.detail || 'Cancel failed.';
-      setActionMessage({ type: 'error', text: msg });
+      setActionMessage({ type: 'error', text: err.response?.data?.detail || 'Cancel failed.' });
     }
   };
 
-  // Filter workloads
-  const filteredJobs = jobs.filter((job) => {
-    const term = searchTerm.toLowerCase();
-    const matchesSearch =
-      job.job_id.toLowerCase().includes(term) ||
-      (job.name && job.name.toLowerCase().includes(term)) ||
-      (job.container_image && job.container_image.toLowerCase().includes(term)) ||
-      (job.job_type && job.job_type.toLowerCase().includes(term));
+  const uniqueJobTypes = useMemo(() => Array.from(new Set(jobs.map((j) => j.job_type).filter(Boolean))) as string[], [jobs]);
+  const uniqueRegions = useMemo(() => Array.from(new Set(jobs.map((j) => j.region).filter(Boolean))), [jobs]);
+  const uniqueTeams = useMemo(() => Array.from(new Set(jobs.map((j) => j.team_id).filter(Boolean))), [jobs]);
 
-    const matchesStatus = statusFilter === 'ALL' || job.status === statusFilter;
-    const matchesRegion = regionFilter === 'ALL' || job.region === regionFilter;
+  const filteredJobs = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    let result = jobs.filter((job) => {
+      const matchesSearch =
+        !term ||
+        job.job_id.toLowerCase().includes(term) ||
+        (job.name && job.name.toLowerCase().includes(term)) ||
+        (job.job_type && job.job_type.toLowerCase().includes(term));
+      const matchesStatus = statusFilter === 'ALL' || job.status === statusFilter;
+      const matchesPriority = priorityFilter === 'ALL' || (job.priority && String(job.priority).toUpperCase() === priorityFilter);
+      const matchesJobType = jobTypeFilter === 'ALL' || job.job_type === jobTypeFilter;
+      const matchesRegion = regionFilter === 'ALL' || job.region === regionFilter;
+      const matchesApproval = approvalFilter === 'ALL' || deriveApprovalStatus(job) === approvalFilter;
+      return matchesSearch && matchesStatus && matchesPriority && matchesJobType && matchesRegion && matchesApproval;
+    });
 
-    return matchesSearch && matchesStatus && matchesRegion;
-  });
+    result = [...result].sort((a, b) => {
+      switch (sortKey) {
+        case 'deadline':
+          return new Date(a.deadline).getTime() - new Date(b.deadline).getTime();
+        case 'priority':
+          return (PRIORITY_RANK[String(a.priority).toUpperCase()] ?? 99) - (PRIORITY_RANK[String(b.priority).toUpperCase()] ?? 99);
+        case 'status':
+          return a.status.localeCompare(b.status);
+        case 'submitted':
+        default:
+          return new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime();
+      }
+    });
 
-  const uniqueRegions = Array.from(new Set([...availableRegions, ...jobs.map((j) => j.region)])).filter(Boolean);
+    return result;
+  }, [jobs, searchTerm, statusFilter, priorityFilter, jobTypeFilter, regionFilter, approvalFilter, sortKey]);
+
+  const hasActiveFilters =
+    searchTerm !== '' || statusFilter !== 'ALL' || priorityFilter !== 'ALL' || jobTypeFilter !== 'ALL' || regionFilter !== 'ALL' || approvalFilter !== 'ALL';
+
+  const clearFilters = () => {
+    setSearchTerm('');
+    setStatusFilter('ALL');
+    setPriorityFilter('ALL');
+    setJobTypeFilter('ALL');
+    setRegionFilter('ALL');
+    setApprovalFilter('ALL');
+  };
+
+  const summary = summaryQ.data;
+  const jobCounts = summary?.jobs || {};
+  const summaryLoading = summaryQ.isLoading;
+  const kpiValue = (n: number | undefined) => (summaryLoading ? '—' : n !== undefined ? n : 'DATA UNAVAILABLE');
+
+  const registryTitle = isCompanyUserRole ? 'My Workloads' : isPlatformAdmin ? 'Platform Workloads' : 'Recent Workloads';
+  const emptyDescription = isCompanyUserRole
+    ? "You haven't submitted any workloads yet."
+    : 'No workloads have been submitted yet.';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       <PageHeader
-        title="Workloads Registry"
-        subtitle="Manage and monitor batch compute workloads, execution states, and carbon constraints"
+        title="Workloads"
+        subtitle="Monitor, review, and manage workload execution across GreenShift."
         actions={
           <div style={{ display: 'flex', gap: '0.6rem' }}>
-            <button className="btn btn-secondary" onClick={fetchJobs} disabled={isLoading}>
-              <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+            <button className="btn btn-secondary" onClick={handleRefresh} disabled={workloadsQ.isFetching}>
+              <RefreshCw size={14} className={workloadsQ.isFetching ? 'animate-spin' : ''} />
               <span>Refresh</span>
             </button>
             <button className="btn btn-primary" onClick={() => navigate('/submit')}>
@@ -142,32 +189,29 @@ export const WorkloadsPage: React.FC = () => {
         </InlineBanner>
       )}
 
+      {/* KPI Strip */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
+        <KPICard title="Total Workloads" value={kpiValue(summary?.total_jobs)} subtitle="Visible to your account" icon={Layers} color="emerald" />
+        <KPICard title="Running" value={kpiValue(jobCounts.RUNNING)} subtitle="Currently executing" icon={Activity} color="cyan" />
+        <KPICard title="Pending Approval" value={kpiValue(jobCounts.PENDING_APPROVAL)} subtitle="Awaiting human review" icon={CheckCircle2} color="amber" />
+        <KPICard title="Completed" value={kpiValue(jobCounts.COMPLETED)} subtitle="Finished successfully" icon={CheckCheck} color="emerald" />
+        <KPICard title="Failed" value={kpiValue(jobCounts.FAILED)} subtitle="Failed or aborted" icon={XCircle} color="rose" />
+      </div>
+      {(isCompanyUserRole || isCompanyAdminRole) && (
+        <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: 0 }}>
+          The KPI strip reflects your whole company; the table below reflects your team's own workloads (the backend's current scope for this endpoint).
+        </p>
+      )}
+
       {/* Filter & Search Bar */}
       <GlassCard>
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: '1rem',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          {/* Search Box */}
-          <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
-            <Search
-              size={16}
-              style={{
-                position: 'absolute',
-                left: '12px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                color: 'var(--text-muted)',
-              }}
-            />
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.85rem', alignItems: 'center' }}>
+          <div style={{ position: 'relative', flex: '1 1 240px', minWidth: '220px' }}>
+            <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
             <input
               type="text"
-              placeholder="Search by job ID, type, image..."
+              placeholder="Search workloads by name, ID, or type..."
+              aria-label="Search workloads by name, ID, or type"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="input"
@@ -175,191 +219,98 @@ export const WorkloadsPage: React.FC = () => {
             />
           </div>
 
-          {/* Status Filter */}
+          <FilterSelect label="Status" value={statusFilter} onChange={setStatusFilter} options={STATUS_OPTIONS} />
+          <FilterSelect label="Priority" value={priorityFilter} onChange={setPriorityFilter} options={PRIORITY_OPTIONS} formatOption={formatPriority} />
+          {uniqueJobTypes.length > 0 && (
+            <FilterSelect label="Job Type" value={jobTypeFilter} onChange={setJobTypeFilter} options={uniqueJobTypes} />
+          )}
+          {uniqueRegions.length > 0 && (
+            <FilterSelect label="Region" value={regionFilter} onChange={setRegionFilter} options={uniqueRegions} />
+          )}
+          <FilterSelect
+            label="Approval"
+            value={approvalFilter}
+            onChange={setApprovalFilter}
+            options={APPROVAL_OPTIONS}
+            formatOption={(v) => APPROVAL_LABELS[v as ApprovalDisplayStatus] || v}
+          />
+          {isPlatformAdmin && uniqueTeams.length > 0 && (
+            <FilterSelect label="Team" value={teamFilter} onChange={setTeamFilter} options={uniqueTeams} />
+          )}
+
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Status:</span>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="select"
-              style={{ width: '180px' }}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="SUBMITTED">SUBMITTED</option>
-              <option value="SCHEDULED">SCHEDULED</option>
-              <option value="PENDING_APPROVAL">PENDING APPROVAL</option>
-              <option value="APPROVED">APPROVED</option>
-              <option value="READY">READY</option>
-              <option value="RUNNING">RUNNING</option>
-              <option value="COMPLETED">COMPLETED</option>
-              <option value="FAILED">FAILED</option>
-              <option value="CANCELLED">CANCELLED</option>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Sort:</span>
+            <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} className="select" style={{ width: '150px' }} aria-label="Sort workloads by">
+              <option value="submitted">Submitted</option>
+              <option value="deadline">Deadline</option>
+              <option value="priority">Priority</option>
+              <option value="status">Status</option>
             </select>
           </div>
 
-          {/* Region Filter */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Region:</span>
-            <select
-              value={regionFilter}
-              onChange={(e) => setRegionFilter(e.target.value)}
-              className="select"
-              style={{ width: '150px' }}
-            >
-              <option value="ALL">All Regions</option>
-              {uniqueRegions.map((reg) => (
-                <option key={reg} value={reg}>
-                  {reg}
-                </option>
-              ))}
-            </select>
-          </div>
+          {hasActiveFilters && (
+            <button className="btn btn-secondary btn-sm" onClick={clearFilters}>
+              <RotateCcw size={13} />
+              <span>Clear Filters</span>
+            </button>
+          )}
         </div>
       </GlassCard>
 
       {/* Workloads Table */}
-      <GlassCard title={`Workloads (${filteredJobs.length})`}>
-        {isLoading ? (
+      <GlassCard title={`${registryTitle} (${filteredJobs.length})`}>
+        {workloadsQ.isError ? (
+          <InlineBanner
+            variant="error"
+            action={
+              <button className="btn btn-secondary btn-sm" onClick={() => workloadsQ.refetch()}>
+                <RotateCcw size={13} />
+                <span>Retry</span>
+              </button>
+            }
+          >
+            We couldn't retrieve the workload registry.
+          </InlineBanner>
+        ) : workloadsQ.isLoading ? (
           <LoadingSkeleton rows={6} />
         ) : filteredJobs.length === 0 ? (
           <EmptyState
-            title={jobs.length === 0 ? "No Workloads Yet" : "No Workloads Found"}
-            description={jobs.length === 0 ? "Your team has not submitted any workloads." : "No workloads match the current search or filters."}
-            action={jobs.length === 0 ? {
-              label: "Submit Workload",
-              onClick: () => navigate('/submit'),
-            } : undefined}
+            title={jobs.length === 0 ? 'No workloads yet' : 'No Workloads Found'}
+            description={jobs.length === 0 ? emptyDescription : 'No workloads match your filters.'}
+            action={
+              jobs.length === 0
+                ? { label: 'Submit Workload', onClick: () => navigate('/submit') }
+                : { label: 'Clear Filters', onClick: clearFilters }
+            }
           />
         ) : (
           <div className="data-table-container">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Job ID / Type</th>
+                  <th>Workload</th>
                   <th>Status</th>
+                  <th>Priority</th>
                   <th>Team</th>
-                  <th>Compute Requirements</th>
-                  <th>Carbon Budget</th>
-                  <th>Target Region</th>
-                  <th>Submitted</th>
+                  <th>Region</th>
+                  <th>Deadline</th>
+                  <th>Recommended Start</th>
+                  <th>Carbon</th>
+                  <th>Cost</th>
+                  <th>Approval</th>
                   <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredJobs.map((job) => (
-                  <tr
+                  <WorkloadRow
                     key={job.job_id}
-                    onClick={() => navigate(`/workloads/${job.job_id}`)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td>
-                      <div>
-                        <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
-                          {job.job_id}
-                        </div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                          {job.job_type || 'BATCH'}{job.priority !== undefined && job.priority !== null ? ` • Priority ${job.priority}` : ''}
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <StatusBadge status={job.status} size="sm" />
-                    </td>
-                    <td>
-                      <span style={{ fontSize: '0.78rem', color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>
-                        {job.team_id}
-                      </span>
-                    </td>
-                    <td>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                        {job.runtime_minutes}m • {job.power_kw}kW
-                      </div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                        {job.cpu_request || '—'} CPU • {job.memory_request || '—'}
-                      </div>
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          fontSize: '0.8rem',
-                          fontWeight: 600,
-                          color: '#10b981',
-                          fontFamily: 'var(--font-mono)',
-                        }}
-                      >
-                        {job.carbon_budget_kg ? `${job.carbon_budget_kg} kg` : 'Uncapped'}
-                      </span>
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          fontSize: '0.78rem',
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--text-secondary)',
-                        }}
-                      >
-                        {job.region}
-                      </span>
-                    </td>
-                    <td>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        {job.submitted_at ? new Date(job.submitted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent'}
-                      </div>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'flex-end',
-                          gap: '0.35rem',
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ padding: '0.3rem 0.5rem' }}
-                          title="View Details"
-                          onClick={() => navigate(`/workloads/${job.job_id}`)}
-                        >
-                          <Eye size={13} />
-                        </button>
-
-                        {(job.status === 'SUBMITTED' || job.status === 'VALIDATED') && (
-                          <button
-                            className="btn btn-outline-emerald btn-sm"
-                            style={{ padding: '0.3rem 0.5rem' }}
-                            title="Trigger Optimizer"
-                            onClick={(e) => handleTriggerSchedule(job.job_id, e)}
-                          >
-                            <Cpu size={13} />
-                          </button>
-                        )}
-
-                        {(job.status === 'SCHEDULED' || job.status === 'APPROVED' || job.status === 'READY') && (
-                          <button
-                            className="btn btn-primary btn-sm"
-                            style={{ padding: '0.3rem 0.5rem' }}
-                            title="Dispatch to Kubernetes"
-                            onClick={(e) => handleDispatch(job.job_id, e)}
-                          >
-                            <Send size={13} />
-                          </button>
-                        )}
-
-                        {job.status !== 'COMPLETED' && job.status !== 'CANCELLED' && job.status !== 'FAILED' && (
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            style={{ padding: '0.3rem 0.5rem', color: '#ef4444' }}
-                            title="Cancel Job"
-                            onClick={(e) => handleCancel(job.job_id, e)}
-                          >
-                            <XCircle size={13} />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+                    job={job}
+                    isScheduling={schedulingJobId === job.job_id}
+                    onOpen={() => navigate(`/workloads/${job.job_id}`)}
+                    onFindSchedule={(e) => handleFindSchedule(job.job_id, e)}
+                    onCancel={(e) => handleCancel(job.job_id, e)}
+                  />
                 ))}
               </tbody>
             </table>
@@ -367,5 +318,83 @@ export const WorkloadsPage: React.FC = () => {
         )}
       </GlassCard>
     </div>
+  );
+};
+
+interface FilterSelectProps {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  formatOption?: (v: string) => string;
+}
+
+const FilterSelect: React.FC<FilterSelectProps> = ({ label, value, onChange, options, formatOption }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{label}:</span>
+    <select value={value} onChange={(e) => onChange(e.target.value)} className="select" style={{ width: '150px' }} aria-label={`Filter by ${label}`}>
+      <option value="ALL">All</option>
+      {options.map((opt) => (
+        <option key={opt} value={opt}>
+          {formatOption ? formatOption(opt) : opt.replace('_', ' ')}
+        </option>
+      ))}
+    </select>
+  </div>
+);
+
+interface WorkloadRowProps {
+  job: Job;
+  isScheduling: boolean;
+  onOpen: () => void;
+  onFindSchedule: (e: React.MouseEvent) => void;
+  onCancel: (e: React.MouseEvent) => void;
+}
+
+const WorkloadRow: React.FC<WorkloadRowProps> = ({ job, isScheduling, onOpen, onFindSchedule, onCancel }) => {
+  const approval = deriveApprovalStatus(job);
+  const action = contextualActionForStatus(job.status);
+  const isCancellable = !['COMPLETED', 'CANCELLED', 'FAILED'].includes(job.status);
+
+  return (
+    <tr onClick={onOpen} style={{ cursor: 'pointer' }} data-testid={`workload-row-${job.job_id}`}>
+      <td>
+        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{workloadDisplayName(job)}</div>
+        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{job.job_id}</div>
+      </td>
+      <td><StatusBadge status={job.status} size="sm" /></td>
+      <td><span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{formatPriority(job.priority)}</span></td>
+      <td><span style={{ fontSize: '0.78rem', color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>{job.team_id || '—'}</span></td>
+      <td><span style={{ fontSize: '0.78rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{job.region || '—'}</span></td>
+      <td><span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{formatDateTime(job.deadline)}</span></td>
+      <td><span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{recommendedStartDisplay(job)}</span></td>
+      <td><span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#10b981', fontFamily: 'var(--font-mono)' }}>{formatCarbonKg(job.carbon_emission, { estimated: true })}</span></td>
+      <td><span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>{formatCost(job)}</span></td>
+      <td><span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{APPROVAL_LABELS[approval]}</span></td>
+      <td style={{ textAlign: 'right' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.4rem' }} onClick={(e) => e.stopPropagation()}>
+          <button className="btn btn-secondary btn-sm" style={{ padding: '0.3rem 0.5rem' }} title="View Details" aria-label={`View details for ${job.job_id}`} onClick={onOpen}>
+            <Eye size={13} />
+          </button>
+
+          {action && action.kind === 'find-schedule' && (
+            <button className="btn btn-outline-emerald btn-sm" onClick={onFindSchedule} disabled={isScheduling}>
+              <span>{isScheduling ? 'Scheduling…' : action.label}</span>
+            </button>
+          )}
+          {action && action.kind !== 'find-schedule' && (
+            <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); onOpen(); }}>
+              <span>{action.label}</span>
+            </button>
+          )}
+
+          {isCancellable && (
+            <button className="btn btn-secondary btn-sm" style={{ padding: '0.3rem 0.5rem', color: '#ef4444' }} title="Cancel Job" aria-label={`Cancel ${job.job_id}`} onClick={onCancel}>
+              <XCircle size={13} />
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 };

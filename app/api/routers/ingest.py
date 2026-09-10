@@ -97,6 +97,7 @@ def submit_new_job(
             job_id=job.job_id,
             status=job.status,
             submitted_at=job.submitted_at,
+            name=job.workload_name,
         )
     except HTTPException:
         raise
@@ -155,6 +156,7 @@ def list_all_jobs(
         for j in jobs:
             item = {
                 "job_id": j.job_id,
+                "name": j.workload_name,
                 "team_id": j.team_id,
                 "tenant_id": j.tenant_id,
                 "company_name": j.company_name,
@@ -206,6 +208,7 @@ def get_job_detail(
 
     result = {
         "job_id": job.job_id,
+        "name": job.workload_name,
         "team_id": job.team_id,
         "tenant_id": job.tenant_id,
         "company_name": job.company_name,

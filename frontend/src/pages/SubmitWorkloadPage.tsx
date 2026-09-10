@@ -1,432 +1,173 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  PlusCircle,
-  Sparkles,
-  Zap,
-  Leaf,
-  Clock,
-  HardDrive,
-  Cpu,
-  ArrowRight,
-  CheckCircle2,
-} from 'lucide-react';
+import { PlusCircle } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
-import { GlassCard } from '../components/common/GlassCard';
 import { InlineBanner } from '../components/common/InlineBanner';
-import { workloadsApi, sustainabilityApi } from '../api/endpoints';
-import { CreateJobInput, RegionInfo } from '../types/api';
+import { WorkloadInformationSection } from '../components/submit/WorkloadInformationSection';
+import { ExecutionRequirementsSection } from '../components/submit/ExecutionRequirementsSection';
+import { SchedulingPolicySection } from '../components/submit/SchedulingPolicySection';
+import { SustainabilityConstraintsSection } from '../components/submit/SustainabilityConstraintsSection';
+import { WhatHappensNext } from '../components/submit/WhatHappensNext';
+import { SubmissionSuccess } from '../components/submit/SubmissionSuccess';
+import { workloadsApi } from '../api/endpoints';
+import { CreateJobInput, JobSubmitResult } from '../types/api';
 import { useAuth } from '../context/AuthContext';
+import { useRegions } from '../hooks/useDashboard';
+import {
+  SubmitWorkloadFormState,
+  validateSubmitWorkloadForm,
+  mapSubmitWorkloadError,
+  SubmitWorkloadErrorSummary,
+} from '../utils/submitWorkloadForm';
 
-const PRESET_TEMPLATES = [
-  {
-    name: 'LLM 70B Benchmark Run',
-    container_image: 'docker.io/library/ubuntu:22.04',
-    job_type: 'SIMULATION',
-    runtime_minutes: 180,
-    power_kw: 3.8,
-    cpu_request: '2000m',
-    memory_request: '4096Mi',
-    carbon_budget_kg: 25.0,
-    priority: 'HIGH',
-    region: 'IN-TG',
-  },
-  {
-    name: 'Monte Carlo Financial Risk',
-    container_image: 'docker.io/library/python:3.11-slim',
-    job_type: 'BATCH',
-    runtime_minutes: 90,
-    power_kw: 2.2,
-    cpu_request: '1000m',
-    memory_request: '2048Mi',
-    carbon_budget_kg: 10.0,
-    priority: 'MEDIUM',
-    region: 'IN-GJ',
-  },
-  {
-    name: 'Genomic Alignment Pipeline',
-    container_image: 'docker.io/library/alpine:latest',
-    job_type: 'DATA_PROCESSING',
-    runtime_minutes: 240,
-    power_kw: 4.5,
-    cpu_request: '2000m',
-    memory_request: '8192Mi',
-    carbon_budget_kg: 35.0,
-    priority: 'HIGH',
-    region: 'IN-WB',
-  },
-];
+const INITIAL_FORM: SubmitWorkloadFormState = {
+  workloadName: '',
+  jobType: '',
+  priority: 'MEDIUM',
+  containerImage: '',
+  region: '',
+  runtimeMinutes: '120',
+  powerKw: '3.0',
+  cpuRequest: '500m',
+  memoryRequest: '512Mi',
+  earliestStart: '',
+  deadline: '',
+  deferrable: true,
+  carbonBudgetKg: '',
+};
 
 export const SubmitWorkloadPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [regions, setRegions] = useState<RegionInfo[]>([]);
+  const regionsQ = useRegions();
+  const regions = regionsQ.data || [];
 
-  // Default deadline 24 hours from now in ISO string
-  const defaultDeadline = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 16);
-
-  const [formData, setFormData] = useState({
-    name: '',
-    team_id: user?.team_id || '',
-    region: 'IN-TG',
-    deadline: defaultDeadline,
-    runtime_minutes: 120,
-    power_kw: 3.0,
-    cpu_request: '500m',
-    memory_request: '512Mi',
-    container_image: 'docker.io/library/ubuntu:22.04',
-    carbon_budget_kg: 20.0,
-    priority: 'MEDIUM',
-    job_type: 'DATA_PROCESSING',
-  });
-
+  const [form, setForm] = useState<SubmitWorkloadFormState>(INITIAL_FORM);
+  const [errors, setErrors] = useState<ReturnType<typeof validateSubmitWorkloadForm>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [successJobId, setSuccessJobId] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<SubmitWorkloadErrorSummary | null>(null);
+  const [result, setResult] = useState<JobSubmitResult | null>(null);
 
-  useEffect(() => {
-    const loadRegions = async () => {
-      try {
-        const res = await sustainabilityApi.getRegions();
-        if (Array.isArray(res) && res.length > 0) {
-          setRegions(res);
-        }
-      } catch {
-        // Fallback standard regions
-        setRegions([
-          { region_id: 'IN-TG', country: 'India', region_name: 'Telangana', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-SO', default_plan: 'ToD', supported_tariff_plans: [], aliases: [], is_active: true },
-          { region_id: 'IN-GJ', country: 'India', region_name: 'Gujarat', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-WE', default_plan: 'HTP-I', supported_tariff_plans: [], aliases: [], is_active: true },
-          { region_id: 'IN-WB', country: 'India', region_name: 'West Bengal', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-EA', default_plan: 'ToD', supported_tariff_plans: [], aliases: [], is_active: true },
-          { region_id: 'IN-HP', country: 'India', region_name: 'Himachal Pradesh', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-NO', default_plan: 'Flat', supported_tariff_plans: [], aliases: [], is_active: true },
-          { region_id: 'SE', country: 'Sweden', region_name: 'Nordic Grid (SE-3)', timezone: 'Europe/Stockholm', currency: 'SEK', electricity_maps_zone: 'SE-3', default_plan: 'Spot', supported_tariff_plans: [], aliases: [], is_active: true },
-        ]);
-      }
-    };
-    loadRegions();
-  }, []);
-
-  const applyTemplate = (template: typeof PRESET_TEMPLATES[0]) => {
-    setFormData((prev) => ({
-      ...prev,
-      ...template,
-    }));
+  const updateField = <K extends keyof SubmitWorkloadFormState>(key: K, value: SubmitWorkloadFormState[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  // Energy consumption is a direct physical computation (power x time) and safe
-  // to show client-side. Carbon emissions are NOT estimated here — they depend on
-  // real regional grid intensity the scheduler looks up server-side; fabricating
-  // a carbon number with an arbitrary multiplier would misrepresent the backend.
-  const estimatedKwh = (formData.power_kw * (formData.runtime_minutes / 60)).toFixed(2);
+  const selectedRegion = regions.find((r) => r.region_id === form.region);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name.trim()) {
-      setErrorMsg('Workload name is required');
+    if (isSubmitting) return; // prevent duplicate submission
+
+    // Team ownership always comes from the authenticated identity — never a
+    // form field the user could edit or override.
+    const teamId = user?.team_id;
+    if (!teamId) {
+      setSubmitError({ title: "Couldn't submit workload", messages: ['Your account has no team assigned. Contact your administrator before submitting a workload.'] });
       return;
     }
-    const teamId = user?.team_id || formData.team_id;
-    if (!teamId) {
-      setErrorMsg('Your account has no team assigned. Contact your administrator before submitting a workload.');
+
+    const activeRegionIds = regions.filter((r) => r.is_active).map((r) => r.region_id);
+    const fieldErrors = validateSubmitWorkloadForm(form, activeRegionIds);
+    setErrors(fieldErrors);
+    if (Object.keys(fieldErrors).length > 0) {
+      setSubmitError({ title: 'Please fix the following', messages: Object.values(fieldErrors) });
       return;
     }
 
     setIsSubmitting(true);
-    setErrorMsg(null);
+    setSubmitError(null);
 
     try {
-      // Build ISO UTC string for deadline
-      const deadlineDate = new Date(formData.deadline);
-      if (isNaN(deadlineDate.getTime()) || deadlineDate.getTime() <= Date.now()) {
-        setErrorMsg('Deadline must be a valid future timestamp.');
-        setIsSubmitting(false);
-        return;
-      }
-
       const input: CreateJobInput = {
-        name: formData.name.trim(),
+        workload_name: form.workloadName.trim(),
         team_id: teamId,
-        region: formData.region,
-        deadline: deadlineDate.toISOString(),
-        runtime_minutes: Number(formData.runtime_minutes),
-        power_kw: Number(formData.power_kw),
-        container_image: formData.container_image.trim(),
-        cpu_request: formData.cpu_request.trim(),
-        memory_request: formData.memory_request.trim(),
-        carbon_budget_kg: formData.carbon_budget_kg ? Number(formData.carbon_budget_kg) : undefined,
-        priority: formData.priority,
-        job_type: formData.job_type,
+        region: form.region,
+        // Sent as the raw local wall-clock value — the backend normalizes it
+        // to UTC using the selected region's timezone (app/shared/timezone.py
+        // normalize_to_utc), so this is not converted client-side.
+        deadline: form.deadline,
+        earliest_start_time: form.earliestStart || undefined,
+        runtime_minutes: Number(form.runtimeMinutes),
+        power_kw: Number(form.powerKw),
+        container_image: form.containerImage.trim(),
+        cpu_request: form.cpuRequest.trim(),
+        memory_request: form.memoryRequest.trim(),
+        carbon_budget_kg: form.carbonBudgetKg.trim() ? Number(form.carbonBudgetKg) : undefined,
+        priority: form.priority,
+        job_type: form.jobType,
+        deferrable: form.deferrable,
       };
 
+      // auto_schedule stays false: submission registers the workload only —
+      // it never triggers dispatch or bypasses the approval workflow.
       const created = await workloadsApi.createJob(input, false);
-      const newId = created.job_id;
-      setSuccessJobId(newId);
-    } catch (err: any) {
-      const detail = err.response?.data?.detail;
-      if (Array.isArray(detail)) {
-        // Pydantic validation error array
-        const errorMessages = detail.map((d: any) => `${d.loc?.slice(-1)?.[0] || 'field'}: ${d.msg}`).join('; ');
-        setErrorMsg(`Validation error: ${errorMessages}`);
-      } else if (typeof detail === 'string') {
-        setErrorMsg(detail);
-      } else {
-        setErrorMsg('Failed to submit workload. Verify connection to backend.');
-      }
+      setResult(created);
+    } catch (err) {
+      setSubmitError(mapSubmitWorkloadError(err));
+      // Form values are intentionally preserved on failure (no reset here).
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  if (result) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem', maxWidth: '1000px', margin: '0 auto' }}>
+        <PageHeader title="Submit Workload" subtitle="Configure and submit a workload for carbon-aware execution." />
+        <SubmissionSuccess
+          result={result}
+          onViewScheduling={() => navigate(`/scheduling?jobId=${result.job_id}`)}
+          onViewWorkload={() => navigate(`/workloads/${result.job_id}`)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem', maxWidth: '1000px', margin: '0 auto' }}>
-      <PageHeader
-        title="Submit New Workload"
-        subtitle="Register containerized batch compute with carbon budgets, execution constraints, and SLA deadlines"
-      />
+      <PageHeader title="Submit Workload" subtitle="Configure and submit a workload for carbon-aware execution." />
 
-      {/* Preset Quick-Fill Templates */}
-      <GlassCard title="Quick Templates (1-Click Fill)">
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.85rem' }}>
-          {PRESET_TEMPLATES.map((tmpl) => (
-            <button
-              key={tmpl.name}
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => applyTemplate(tmpl)}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'flex-start',
-                padding: '0.85rem 1rem',
-                gap: '0.25rem',
-                textAlign: 'left',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%', justifyContent: 'space-between' }}>
-                <span style={{ fontWeight: 700, fontSize: '0.84rem' }}>{tmpl.name}</span>
-                <Sparkles size={14} color="#10b981" />
-              </div>
-              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                {tmpl.region} • {tmpl.runtime_minutes}m • {tmpl.power_kw}kW • {tmpl.cpu_request} CPU / {tmpl.memory_request}
-              </span>
-            </button>
-          ))}
-        </div>
-      </GlassCard>
-
-      {/* Success Banner */}
-      {successJobId && (
-        <div
-          style={{
-            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(6, 182, 212, 0.1))',
-            border: '1px solid #10b981',
-            borderRadius: 'var(--radius-md)',
-            padding: '1.5rem',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '1rem',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <CheckCircle2 size={24} color="#10b981" />
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }} noValidate>
+        {submitError && (
+          <InlineBanner variant="error">
             <div>
-              <h3 style={{ color: '#ffffff' }}>Workload Ingested Successfully!</h3>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                Job ID <strong style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>{successJobId}</strong> has been stored in the database under team <strong>{user?.team_id || formData.team_id}</strong>.
-              </p>
+              <strong>{submitError.title}</strong>
+              {submitError.messages.length > 1 ? (
+                <ul style={{ margin: '0.4rem 0 0', paddingLeft: '1.1rem' }}>
+                  {submitError.messages.map((msg, i) => (
+                    <li key={i}>{msg}</li>
+                  ))}
+                </ul>
+              ) : (
+                <div style={{ marginTop: '0.2rem' }}>{submitError.messages[0]}</div>
+              )}
             </div>
-          </div>
+          </InlineBanner>
+        )}
 
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <button
-              className="btn btn-primary"
-              onClick={() => navigate(`/scheduling?jobId=${successJobId}`)}
-            >
-              <Cpu size={15} />
-              <span>Optimize Schedule Now</span>
-              <ArrowRight size={14} />
-            </button>
-            <button className="btn btn-secondary" onClick={() => navigate('/workloads')}>
-              View Workloads Table
-            </button>
-          </div>
-        </div>
-      )}
+        <WorkloadInformationSection form={form} errors={errors} disabled={isSubmitting} onChange={updateField} />
 
-      {/* Main Submission Form */}
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-        <GlassCard title="Workload Configuration">
-          {errorMsg && (
-            <div style={{ marginBottom: '1rem' }}>
-              <InlineBanner variant="error">{errorMsg}</InlineBanner>
-            </div>
-          )}
+        <ExecutionRequirementsSection
+          form={form}
+          errors={errors}
+          disabled={isSubmitting}
+          onChange={updateField}
+          regions={regions}
+          regionsLoading={regionsQ.isLoading}
+          regionsError={regionsQ.isError}
+          onRetryRegions={() => regionsQ.refetch()}
+        />
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
-            <div className="form-group">
-              <label className="form-label">Workload Name *</label>
-              <input
-                type="text"
-                className="input"
-                placeholder="e.g. llm-eval-benchmark-70b"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                required
-              />
-            </div>
+        <SchedulingPolicySection form={form} errors={errors} disabled={isSubmitting} onChange={updateField} regionTimezone={selectedRegion?.timezone} />
 
-            <div className="form-group">
-              <label className="form-label">Container Image URI *</label>
-              <input
-                type="text"
-                className="input"
-                placeholder="docker.io/library/ubuntu:22.04"
-                value={formData.container_image}
-                onChange={(e) => setFormData({ ...formData, container_image: e.target.value })}
-                required
-              />
-            </div>
+        <SustainabilityConstraintsSection form={form} errors={errors} disabled={isSubmitting} onChange={updateField} />
 
-            <div className="form-group">
-              <label className="form-label">Target Grid Region *</label>
-              <select
-                className="select"
-                value={formData.region}
-                onChange={(e) => setFormData({ ...formData, region: e.target.value })}
-              >
-                {regions.map((r) => (
-                  <option key={r.region_id} value={r.region_id}>
-                    {r.region_name} ({r.region_id}) • {r.country}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">SLA Deadline (Local/UTC) *</label>
-              <input
-                type="datetime-local"
-                className="input"
-                value={formData.deadline}
-                onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Runtime Estimate (Minutes) *</label>
-              <input
-                type="number"
-                min="1"
-                max="10080"
-                className="input"
-                value={formData.runtime_minutes}
-                onChange={(e) => setFormData({ ...formData, runtime_minutes: parseInt(e.target.value, 10) || 60 })}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Average Power Draw (kW) *</label>
-              <input
-                type="number"
-                step="0.1"
-                min="0.1"
-                max="100000"
-                className="input"
-                value={formData.power_kw}
-                onChange={(e) => setFormData({ ...formData, power_kw: parseFloat(e.target.value) || 1.0 })}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">CPU Request (e.g. 500m, 2000m, 4) *</label>
-              <input
-                type="text"
-                className="input"
-                placeholder="500m"
-                value={formData.cpu_request}
-                onChange={(e) => setFormData({ ...formData, cpu_request: e.target.value })}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Memory Request (e.g. 512Mi, 4Gi) *</label>
-              <input
-                type="text"
-                className="input"
-                placeholder="512Mi"
-                value={formData.memory_request}
-                onChange={(e) => setFormData({ ...formData, memory_request: e.target.value })}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Carbon Budget Cap (kg CO₂e)</label>
-              <input
-                type="number"
-                step="0.5"
-                min="0"
-                className="input"
-                placeholder="e.g. 20.0 (Leave empty for unconstrained)"
-                value={formData.carbon_budget_kg || ''}
-                onChange={(e) => setFormData({ ...formData, carbon_budget_kg: parseFloat(e.target.value) || 0 })}
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Priority Policy</label>
-              <select
-                className="select"
-                value={formData.priority}
-                onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
-              >
-                <option value="CRITICAL">CRITICAL (Immediate SLA Priority)</option>
-                <option value="HIGH">HIGH (Constrained Shiftability)</option>
-                <option value="MEDIUM">MEDIUM (Standard Deferrable Workload)</option>
-                <option value="LOW">LOW (Highly Deferrable Opportunistic)</option>
-              </select>
-            </div>
-          </div>
-        </GlassCard>
-
-        {/* Energy consumption is a direct physical computation; carbon and cost are
-            intentionally not estimated here — the scheduler computes them from real
-            grid data after submission (see the Scheduling page). */}
-        <div
-          style={{
-            background: 'var(--bg-surface)',
-            border: '1px solid rgba(56, 189, 248, 0.3)',
-            borderRadius: 'var(--radius-md)',
-            padding: '1.25rem 1.5rem',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: '1rem',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-            <Zap size={20} color="#38bdf8" />
-            <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Estimated Energy Consumption</div>
-              <div style={{ fontSize: '1.2rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: '#ffffff' }}>
-                {estimatedKwh} kWh
-              </div>
-            </div>
-          </div>
-
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', maxWidth: '320px', textAlign: 'right' }}>
-            Carbon emissions and electricity cost depend on live regional grid data and are computed by the scheduler after submission — run the optimizer from the Scheduling page to see them.
-          </div>
-        </div>
+        <WhatHappensNext />
 
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <button type="submit" className="btn btn-primary" disabled={isSubmitting}>
             <PlusCircle size={16} className={isSubmitting ? 'animate-spin' : ''} />
-            <span>{isSubmitting ? 'Ingesting Workload...' : 'Submit Workload'}</span>
+            <span>{isSubmitting ? 'Submitting Workload…' : 'Submit Workload'}</span>
           </button>
         </div>
       </form>

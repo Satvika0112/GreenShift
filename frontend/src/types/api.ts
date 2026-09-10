@@ -123,10 +123,15 @@ export interface ScheduleDecision {
   };
 }
 
+// Matches GET /api/v1/approvals/pending exactly (app/shared/models.py
+// PendingApprovalItem). All decision-support fields are optional because
+// they're only populated when the underlying ScheduleDecisionORM/JobORM
+// columns have a value — never fabricated when absent.
 export interface PendingApprovalItem {
   job_id: string;
   workload_name?: string;
   job_type?: string;
+  priority?: string | null;
   team_id: string;
   region: string;
   timezone?: string;
@@ -150,6 +155,33 @@ export interface PendingApprovalItem {
   candidates_evaluated?: number;
   feasible_candidates_count?: number;
   rejection_summary?: Record<string, number>;
+  carbon_budget_kg?: number | null;
+  currency?: string | null;
+  native_cost?: number | null;
+  baseline_carbon_emission_kg?: number | null;
+  baseline_cost_usd?: number | null;
+  baseline_native_cost?: number | null;
+  baseline_start_utc?: string | null;
+  baseline_start_local?: string | null;
+  carbon_avoided_kg?: number | null;
+  cost_difference_usd?: number | null;
+  carbon_reduction_pct?: number | null;
+  sla_met?: boolean | null;
+}
+
+// Matches GET /api/v1/approvals/history exactly (app/shared/models.py
+// ApprovalHistoryItem).
+export interface ApprovalHistoryItem {
+  job_id: string;
+  workload_name?: string | null;
+  decision: 'APPROVED' | 'DECLINED';
+  team_id?: string | null;
+  tenant_id?: string | null;
+  region?: string | null;
+  scheduled_start_utc?: string | null;
+  decided_by?: string | null;
+  decided_at: string;
+  reason?: string | null;
 }
 
 export interface Approval {
@@ -180,6 +212,69 @@ export interface KubernetesExecution {
   error_message?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+// Kubernetes telemetry nested inside GET /jobs/{id} and /jobs/{id}/history —
+// a narrower shape than KubernetesExecution (no execution_id/error_message).
+export interface WorkloadKubernetesInfo {
+  kubernetes_job_name?: string | null;
+  kubernetes_namespace?: string | null;
+  pod_name?: string | null;
+  planned_start?: string | null;
+  actual_start?: string | null;
+  actual_end?: string | null;
+  k8s_status?: string | null;
+  gs_status?: string | null;
+}
+
+// Matches GET /api/v1/jobs/{id} and /jobs/{id}/history exactly
+// (app/api/routers/ingest.py get_job_detail / get_job_history). `status` here
+// reflects the live Kubernetes gs_status once execution exists, which can be
+// more current than the plain Job.status from the list endpoint.
+export interface WorkloadDetail {
+  job_id: string;
+  name?: string;
+  team_id: string;
+  tenant_id?: string | null;
+  company_name?: string | null;
+  job_type?: string;
+  priority?: string | number | null;
+  status: JobStatus;
+  submitted_at: string;
+  earliest_start_time?: string | null;
+  deadline: string;
+  runtime_minutes: number;
+  power_kw: number;
+  energy_kwh?: number | null;
+  deferrable?: boolean;
+  region: string;
+  container_image: string;
+  cpu_request?: string | null;
+  memory_request?: string | null;
+  carbon_budget_kg?: number | null;
+  schedule_decision?: ScheduleDecision;
+  kubernetes?: WorkloadKubernetesInfo;
+  kubernetes_job_name?: string | null;
+  pod_name?: string | null;
+  audit_events?: AuditEvent[];
+}
+
+// Matches GET /api/v1/impact/job/{id}/actual exactly
+// (app/analytics/actual_impact.py ActualImpactResult.to_dict()).
+export interface ActualImpactResult {
+  job_id: string;
+  estimated_carbon_emission_kg: number;
+  estimated_cost_usd: number;
+  estimated_carbon_intensity: number;
+  actual_carbon_emission_kg: number;
+  actual_cost_usd: number;
+  actual_carbon_intensity: number;
+  carbon_estimation_error_pct: number;
+  cost_estimation_error_pct: number;
+  actual_vs_baseline_carbon_saved_kg: number;
+  actual_vs_baseline_carbon_reduction_pct: number;
+  actual_vs_baseline_cost_saved_usd: number;
+  estimation_quality: 'ACCURATE' | 'ACCEPTABLE' | 'POOR';
 }
 
 export interface K8sNode {
@@ -355,10 +450,21 @@ export interface AnchorCreateResult {
   message?: string;
 }
 
+// Matches POST /api/v1/jobs's JobSubmitResponse exactly (app/shared/models.py).
+export interface JobSubmitResult {
+  job_id: string;
+  status: JobStatus;
+  submitted_at: string;
+  name?: string | null;
+}
+
+// Matches POST /api/v1/jobs's JobSubmitRequest exactly (app/shared/models.py)
+// for the fields the Submit Workload UI actually collects.
 export interface CreateJobInput {
-  name?: string;
+  workload_name?: string;
   team_id: string;
   deadline: string;
+  earliest_start_time?: string;
   runtime_minutes: number;
   power_kw: number;
   region: string;
@@ -368,5 +474,7 @@ export interface CreateJobInput {
   carbon_budget_kg?: number;
   priority?: string;
   job_type?: string;
+  deferrable?: boolean;
+  timezone?: string;
   job_id?: string;
 }

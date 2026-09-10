@@ -703,6 +703,7 @@ class JobSubmitRequest(BaseModel):
     """API request body for POST /api/v1/jobs"""
 
     # Core fields (required)
+    workload_name:    Optional[str] = Field(None, max_length=200, description="User-facing workload name, preserved through the lifecycle")
     team_id:          str   = Field(..., min_length=1, max_length=100, description="Team identifier")
     deadline:         datetime = Field(..., description="Latest allowed start+runtime end time (UTC)")
     runtime_minutes:  int   = Field(..., gt=0, le=10080, description="Expected runtime in minutes (max 7 days = 10080 mins)")
@@ -800,6 +801,7 @@ class JobSubmitResponse(BaseModel):
     job_id:       str
     status:       JobStatus
     submitted_at: datetime
+    name:         Optional[str] = None
 
 
 class CarbonDataPoint(BaseModel):
@@ -961,6 +963,7 @@ class PendingApprovalItem(BaseModel):
     job_id: str
     workload_name: Optional[str] = None
     job_type: Optional[str] = None
+    priority: Optional[str] = None
     team_id: str
     region: str
     timezone: Optional[str] = "UTC"
@@ -987,6 +990,39 @@ class PendingApprovalItem(BaseModel):
     rejection_reasons: Optional[List[str]] = Field(default_factory=list)
     deterministic_ranking: Optional[int] = 1
     deterministic_rank: Optional[int] = 1
+    # ── Decision-support fields (Phase 5): all sourced directly from
+    # existing ScheduleDecisionORM / JobORM columns — no new computation. ──
+    carbon_budget_kg: Optional[float] = None
+    currency: Optional[str] = "USD"
+    native_cost: Optional[float] = None
+    baseline_carbon_emission_kg: Optional[float] = None
+    baseline_cost_usd: Optional[float] = None
+    baseline_native_cost: Optional[float] = None
+    baseline_start_utc: Optional[datetime] = None
+    baseline_start_local: Optional[datetime] = None
+    carbon_avoided_kg: Optional[float] = None
+    cost_difference_usd: Optional[float] = None
+    carbon_reduction_pct: Optional[float] = None
+    sla_met: Optional[bool] = None
+
+
+class ApprovalHistoryItem(BaseModel):
+    """A single decided (approved or declined) schedule, for the Approvals
+    History tab. Sourced from ApprovalORM joined with its job and schedule
+    decision — no new storage, no separate audit ledger."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    job_id: str
+    workload_name: Optional[str] = None
+    decision: str  # "APPROVED" or "DECLINED"
+    team_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    region: Optional[str] = None
+    scheduled_start_utc: Optional[datetime] = None
+    decided_by: Optional[str] = None
+    decided_at: datetime
+    reason: Optional[str] = None
 
 
 class UserRegisterRequest(BaseModel):

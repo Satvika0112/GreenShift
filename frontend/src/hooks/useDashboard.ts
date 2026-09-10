@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { monitoringApi, workloadsApi, sustainabilityApi, approvalsApi } from '../api/endpoints';
-import { RegionInfo } from '../types/api';
+import { monitoringApi, workloadsApi, sustainabilityApi, approvalsApi, dispatchApi } from '../api/endpoints';
+import { RegionInfo, KubernetesClusterState } from '../types/api';
 
 export function useDashboardSummary() {
   return useQuery({
@@ -54,17 +54,31 @@ export function useRegionCarbon(regionIds: string[]) {
   });
 }
 
-export function usePendingApprovalsPreview(teamId?: string, isAdmin?: boolean) {
+export function usePendingApprovalsPreview(teamId?: string, isAdmin?: boolean, enabled = true) {
   return useQuery({
     queryKey: ['pendingApprovalsPreview', teamId, isAdmin],
     queryFn: () => approvalsApi.getPendingApprovals(isAdmin ? undefined : teamId),
+    enabled,
   });
 }
 
-export function useSystemHealth() {
+export function useSystemHealth(enabled = true) {
   return useQuery({
     queryKey: ['systemHealth'],
     queryFn: monitoringApi.getSystemHealth,
+    retry: false,
+    refetchInterval: 30000,
+    enabled,
+  });
+}
+
+// Platform-only cluster telemetry — callers should pass `enabled: false` for
+// non-platform-admin roles so this request is never made on their behalf.
+export function useK8sState(enabled: boolean) {
+  return useQuery<KubernetesClusterState>({
+    queryKey: ['k8sClusterState'],
+    queryFn: dispatchApi.getK8sState,
+    enabled,
     retry: false,
     refetchInterval: 30000,
   });

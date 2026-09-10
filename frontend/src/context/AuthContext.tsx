@@ -55,21 +55,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [logout]);
 
-  // Restore authenticated session on initial mount
+  // Restore authenticated session on initial mount only. `login()` already
+  // sets `user` directly from the login response, so re-running this on
+  // every token change would fire a redundant /auth/me call right after a
+  // fresh login and risk clobbering it if that call has any transient hiccup.
   useEffect(() => {
-    const handleAuthExpired = () => {
-      logout();
-    };
-    window.addEventListener('greenshift:auth-expired', handleAuthExpired);
-
     if (token) {
       refreshUser();
     } else {
       setIsLoading(false);
     }
+    // Mount-only: intentionally excludes `token` (see comment above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      logout();
+    };
+    window.addEventListener('greenshift:auth-expired', handleAuthExpired);
     return () => window.removeEventListener('greenshift:auth-expired', handleAuthExpired);
-  }, [token, refreshUser, logout]);
+  }, [logout]);
 
   // Authenticate user against real backend API. Credentials are the only
   // thing that determines identity/role — there is no client-side default

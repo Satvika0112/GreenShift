@@ -18,6 +18,7 @@ from app.approval.service import (
     ApprovalValidationError,
     approve_schedule,
     decline_schedule,
+    get_approval_history,
     get_job_approvals,
     get_pending_approvals,
     resubmit_workload,
@@ -26,6 +27,7 @@ from app.shared.auth import get_current_user, is_platform_admin
 from app.shared.database import get_db
 from app.shared.rate_limiter import limiter
 from app.shared.models import (
+    ApprovalHistoryItem,
     ApprovalORM,
     ApprovalRequest,
     ApprovalResponse,
@@ -265,6 +267,37 @@ def api_get_declined_approvals(
     except Exception as exc:
         logger.error(f"Error fetching declined approvals: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while retrieving declined approvals.")
+
+
+@router.get(
+    "/approvals/history",
+    response_model=List[ApprovalHistoryItem],
+    summary="List all decided (approved and declined) schedule approvals",
+)
+@router.get(
+    "/approval/history",
+    response_model=List[ApprovalHistoryItem],
+    include_in_schema=False,
+)
+def api_get_approval_history(
+    team_id: Optional[str] = Query(None, description="Filter approval history by team ID"),
+    tenant_id: Optional[str] = Query(None, description="Filter approval history by tenant ID (Platform Admin only)"),
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """Retrieve every decided (APPROVED or DECLINED) schedule, with the same tenant/team isolation as the pending queue."""
+    try:
+        if is_platform_admin(current_user):
+            effective_tenant_id = tenant_id
+            effective_team_id = team_id
+        else:
+            effective_tenant_id = current_user.tenant_id
+            effective_team_id = current_user.team_id
+
+        return get_approval_history(db, team_id=effective_team_id, tenant_id=effective_tenant_id)
+    except Exception as exc:
+        logger.error(f"Error fetching approval history: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while retrieving approval history.")
 
 
 @router.get(

@@ -32,9 +32,15 @@ apiClient.interceptors.response.use(
     if (error.response) {
       const status = error.response.status;
       if (status === 401) {
-        // Token expired or invalid: clear session
+        // Token expired or invalid: clear session. If a token was actually
+        // present, this is a session expiry (not just an unauthenticated
+        // request) — flag it so the Login page can explain why it's showing.
+        const hadToken = !!sessionStorage.getItem('greenshift_token');
         sessionStorage.removeItem('greenshift_token');
         sessionStorage.removeItem('greenshift_user');
+        if (hadToken) {
+          sessionStorage.setItem('greenshift_session_expired', '1');
+        }
         window.dispatchEvent(new CustomEvent('greenshift:auth-expired'));
       } else if (status === 403) {
         console.warn('Access forbidden: insufficient permissions for resource');

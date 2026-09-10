@@ -63,6 +63,7 @@ def submit_job(
 
     job = JobORM(
         job_id               = job_id,
+        workload_name        = request.workload_name,
         team_id              = request.team_id,
         tenant_id            = effective_tenant_id,
         company_name         = effective_company_name,

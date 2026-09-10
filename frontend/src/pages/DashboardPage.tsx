@@ -14,6 +14,9 @@ import {
   AlertTriangle,
   Activity,
   ShieldCheck,
+  Server,
+  RotateCcw,
+  LucideIcon,
 } from 'lucide-react';
 import { KPICard } from '../components/common/KPICard';
 import { GlassCard } from '../components/common/GlassCard';
@@ -22,6 +25,7 @@ import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
 import { InlineBanner } from '../components/common/InlineBanner';
 import { PageHeader } from '../components/layout/PageHeader';
+import { LifecycleStrip } from '../components/dashboard/LifecycleStrip';
 import { JobStatus } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -32,6 +36,7 @@ import {
   useRegionCarbon,
   usePendingApprovalsPreview,
   useSystemHealth,
+  useK8sState,
 } from '../hooks/useDashboard';
 
 // Only statuses the backend actually models (app/shared/models.py JobStatus)
@@ -57,16 +62,48 @@ function carbonColor(val: number | undefined): string {
   return '#ef4444';
 }
 
+function clusterHealthColor(status: string | undefined): string {
+  if (status === 'healthy') return '#10b981';
+  if (status === 'degraded') return '#f59e0b';
+  if (status) return '#ef4444';
+  return 'var(--text-muted)';
+}
+
+// Compact inline error + retry, used per-section so one failed query never
+// takes down the rest of the Dashboard.
+const SectionError: React.FC<{ message: string; onRetry: () => void }> = ({ message, onRetry }) => (
+  <InlineBanner
+    variant="error"
+    action={
+      <button className="btn btn-secondary btn-sm" onClick={onRetry}>
+        <RotateCcw size={13} />
+        <span>Retry</span>
+      </button>
+    }
+  >
+    {message}
+  </InlineBanner>
+);
+
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user, isPlatformAdmin, isAdmin } = useAuth();
+  const { user } = useAuth();
+
+  // The authenticated backend role is the ONLY thing that decides which
+  // dashboard experience is shown — never a URL param, localStorage, or a
+  // frontend selection. `user.role` comes from /auth/me via AuthContext.
+  const role = user?.role;
+  const isCompanyUser = role === 'COMPANY_USER';
+  const isCompanyAdmin = role === 'COMPANY_ADMIN';
+  const isPlatformAdmin = role === 'PLATFORM_ADMIN';
 
   const summaryQ = useDashboardSummary();
   const headlineQ = useFleetHeadline();
   const jobsQ = useRecentWorkloads(10);
   const regionsQ = useRegions();
-  const healthQ = useSystemHealth();
-  const pendingQ = usePendingApprovalsPreview(user?.team_id, isAdmin);
+  const healthQ = useSystemHealth(!isCompanyUser);
+  const pendingQ = usePendingApprovalsPreview(user?.team_id, !isCompanyUser, !isCompanyUser);
+  const k8sStateQ = useK8sState(isPlatformAdmin);
 
   const regionIds = (regionsQ.data || []).map((r) => r.region_id);
   const carbonQ = useRegionCarbon(regionIds);
@@ -77,8 +114,7 @@ export const DashboardPage: React.FC = () => {
   const regions = regionsQ.data || [];
   const regionCarbon = carbonQ.data || {};
   const pendingApprovals = pendingQ.data || [];
-
-  const isLoading = summaryQ.isLoading || jobsQ.isLoading;
+  const k8sState = k8sStateQ.data;
 
   const jobCounts = summary?.jobs || {};
   const pendingApprovalCount = jobCounts.PENDING_APPROVAL ?? 0;
@@ -91,12 +127,29 @@ export const DashboardPage: React.FC = () => {
   const avgReduction = headline?.avg_carbon_reduction_pct;
   const slaCompliance = headline?.sla_compliance_pct;
 
+  // Per-metric loading: a KPI shows a placeholder while its own query is
+  // still in flight, never a fabricated zero.
+  const summaryLoading = summaryQ.isLoading;
+  const carbonCostLoading = summaryQ.isLoading && headlineQ.isLoading;
+  const activeDisplay = summaryLoading ? '—' : activeCount;
+  const pendingApprovalDisplay = summaryLoading ? '—' : pendingApprovalCount;
+  const carbonAvoidedDisplay = carbonAvoidedKg !== undefined ? `${carbonAvoidedKg.toFixed(1)} kg` : carbonCostLoading ? '—' : 'DATA UNAVAILABLE';
+  const costSavedDisplay = costSavedUsd !== undefined ? `$${costSavedUsd.toFixed(2)}` : carbonCostLoading ? '—' : 'DATA UNAVAILABLE';
+  const regionsDisplay = regionsQ.isLoading ? '—' : regions.length;
+  const k8sReadyDisplay = k8sStateQ.isLoading ? '—' : k8sState ? `${k8sState.ready_nodes}/${k8sState.total_nodes}` : 'DATA UNAVAILABLE';
+
   const handleRefresh = () => {
     summaryQ.refetch();
     headlineQ.refetch();
     jobsQ.refetch();
     regionsQ.refetch();
-    pendingQ.refetch();
+    if (!isCompanyUser) {
+      pendingQ.refetch();
+      healthQ.refetch();
+    }
+    if (isPlatformAdmin) {
+      k8sStateQ.refetch();
+    }
   };
 
   const attentionItems = [
@@ -105,25 +158,75 @@ export const DashboardPage: React.FC = () => {
     { key: 'declined', count: declinedCount, label: 'Declined Schedules', desc: 'Recommendations declined by an approver', icon: AlertTriangle, color: '#ef4444', onClick: () => navigate('/approvals') },
   ].filter((i) => i.count > 0);
 
+  // ---- Role-specific header, primary action, and workload-list framing ----
+  const headerTitle = isPlatformAdmin ? 'Platform Command Center' : isCompanyAdmin ? 'Company Operations' : 'Workload Operations';
+  const headerSubtitle = isPlatformAdmin
+    ? 'Platform-wide workload, regional grid, and Kubernetes execution health.'
+    : isCompanyAdmin
+      ? `Company-wide workload, approval, and impact overview${user?.company_name ? ` for ${user.company_name}` : ''}.`
+      : 'Your workloads, scheduling recommendations, and carbon-aware execution status.';
+
+  const primaryAction = isCompanyAdmin
+    ? { label: 'Review Approvals', icon: CheckCircle2, onClick: () => navigate('/approvals') }
+    : isPlatformAdmin
+      ? { label: 'Review Regions', icon: Globe, onClick: () => navigate('/regions') }
+      : { label: 'Submit Workload', icon: PlusCircle, onClick: () => navigate('/submit') };
+
+  const workloadsCardTitle = isCompanyUser ? 'My Workloads' : isPlatformAdmin ? 'Recent Platform Activity' : 'Recent Workloads';
+  const workloadsEmptyDescription = isCompanyUser
+    ? "You haven't submitted any workloads yet."
+    : isPlatformAdmin
+      ? 'No workloads have been submitted across the platform yet.'
+      : 'No workloads have been submitted yet.';
+
+  // ---- Role-specific KPI row ----
+  type KPIColor = 'emerald' | 'cyan' | 'indigo' | 'amber' | 'rose';
+  interface KPIItem {
+    key: string;
+    title: string;
+    value: string | number;
+    subtitle: string;
+    icon: LucideIcon;
+    color: KPIColor;
+    onClick: () => void;
+  }
+
+  const kpiCards: KPIItem[] = [
+    { key: 'active', title: 'Active Workloads', value: activeDisplay, subtitle: `${summary?.total_jobs ?? jobs.length} total registered`, icon: Layers, color: 'emerald', onClick: () => navigate('/workloads') },
+    { key: 'carbon', title: 'Carbon Avoided', value: carbonAvoidedDisplay, subtitle: 'Emissions avoided vs immediate-execution baseline', icon: TrendingDown, color: 'cyan', onClick: () => navigate('/impact') },
+    { key: 'cost', title: 'Electricity Cost Saved', value: costSavedDisplay, subtitle: 'Time-of-day tariff optimization', icon: DollarSign, color: 'indigo', onClick: () => navigate('/carbon-cost') },
+  ];
+  if (!isPlatformAdmin) {
+    kpiCards.push({ key: 'approvals', title: 'Pending Approvals', value: pendingApprovalDisplay, subtitle: 'Human-in-the-loop review required', icon: CheckCircle2, color: pendingApprovalCount > 0 ? 'amber' : 'emerald', onClick: () => navigate('/approvals') });
+  }
+  if (!isCompanyUser) {
+    kpiCards.push({ key: 'regions', title: 'Connected Regions', value: regionsDisplay, subtitle: 'All active regional grid layers', icon: Globe, color: 'emerald', onClick: () => navigate('/regions') });
+  }
+  if (isPlatformAdmin) {
+    kpiCards.push({ key: 'k8s', title: 'Kubernetes Ready Nodes', value: k8sReadyDisplay, subtitle: 'Cluster nodes ready to receive workloads', icon: Server, color: k8sState?.connected ? 'emerald' : 'rose', onClick: () => navigate('/health') });
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       {/* Page Header */}
       <PageHeader
-        title="Carbon-Aware Operations Command Center"
-        subtitle={`Constraint-first, carbon-primary workload orchestration across multi-region Kubernetes clusters. Scope: ${isPlatformAdmin ? 'Global Organization (All Teams)' : `Team: ${user?.team_id}`}`}
+        title={headerTitle}
+        subtitle={headerSubtitle}
         actions={
           <div style={{ display: 'flex', gap: '0.6rem' }}>
-            <button className="btn btn-secondary" onClick={handleRefresh} disabled={isLoading}>
-              <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+            <button className="btn btn-secondary" onClick={handleRefresh} disabled={summaryQ.isFetching}>
+              <RefreshCw size={14} className={summaryQ.isFetching ? 'animate-spin' : ''} />
               <span>Refresh</span>
             </button>
-            <button className="btn btn-primary" onClick={() => navigate('/submit')}>
-              <PlusCircle size={15} />
-              <span>Submit Workload</span>
+            <button className="btn btn-primary" onClick={primaryAction.onClick}>
+              <primaryAction.icon size={15} />
+              <span>{primaryAction.label}</span>
             </button>
           </div>
         }
       />
+
+      <LifecycleStrip />
 
       {(summaryQ.isError && headlineQ.isError) && (
         <InlineBanner variant="error">Unable to retrieve fleet metrics from backend. Ensure the API service is running.</InlineBanner>
@@ -168,6 +271,10 @@ export const DashboardPage: React.FC = () => {
         </GlassCard>
       )}
 
+      {attentionItems.length === 0 && !summaryQ.isLoading && (
+        <InlineBanner variant="success">Nothing requires your attention right now.</InlineBanner>
+      )}
+
       {/* Headline Carbon Impact Banner */}
       <div
         style={{
@@ -205,8 +312,10 @@ export const DashboardPage: React.FC = () => {
             </div>
             <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#ffffff', marginTop: '0.1rem' }}>
               {avgReduction !== undefined
-                ? <>Fleet achieved <span style={{ color: '#10b981', fontFamily: 'var(--font-mono)' }}>{avgReduction.toFixed(1)}%</span> carbon reduction vs baseline (immediate) dispatch.</>
-                : 'No impact data available yet from the backend.'}
+                ? <>Carbon-primary scheduling reduced emissions by <span style={{ color: '#10b981', fontFamily: 'var(--font-mono)' }}>{avgReduction.toFixed(1)}%</span> vs. immediate (non-deferred) dispatch.</>
+                : headlineQ.isLoading
+                  ? 'Loading impact data…'
+                  : 'No impact data available yet from the backend.'}
             </div>
           </div>
         </div>
@@ -215,21 +324,21 @@ export const DashboardPage: React.FC = () => {
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Avoided Emissions</div>
             <div style={{ fontSize: '1.1rem', fontWeight: 700, color: carbonAvoidedKg !== undefined ? '#10b981' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-              {carbonAvoidedKg !== undefined ? `${carbonAvoidedKg.toFixed(2)} kg CO₂e` : 'DATA UNAVAILABLE'}
+              {carbonAvoidedDisplay}
             </div>
           </div>
           <div style={{ width: '1px', height: '30px', background: 'var(--border-default)' }} />
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Avoided Cost</div>
             <div style={{ fontSize: '1.1rem', fontWeight: 700, color: costSavedUsd !== undefined ? '#38bdf8' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-              {costSavedUsd !== undefined ? `$${costSavedUsd.toFixed(2)}` : 'DATA UNAVAILABLE'}
+              {costSavedDisplay}
             </div>
           </div>
           <div style={{ width: '1px', height: '30px', background: 'var(--border-default)' }} />
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>SLA Compliance</div>
             <div style={{ fontSize: '1.1rem', fontWeight: 700, color: slaCompliance !== undefined ? '#a78bfa' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-              {slaCompliance !== undefined ? `${slaCompliance.toFixed(1)}%` : 'DATA UNAVAILABLE'}
+              {slaCompliance !== undefined ? `${slaCompliance.toFixed(1)}%` : headlineQ.isLoading ? '—' : 'DATA UNAVAILABLE'}
             </div>
           </div>
         </div>
@@ -237,46 +346,17 @@ export const DashboardPage: React.FC = () => {
 
       {/* KPI Cards Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
-        <KPICard
-          title="Active Workloads"
-          value={activeCount}
-          subtitle={`${summary?.total_jobs ?? jobs.length} total registered`}
-          icon={Layers}
-          color="emerald"
-          onClick={() => navigate('/workloads')}
-        />
-        <KPICard
-          title="Carbon Avoided"
-          value={carbonAvoidedKg !== undefined ? `${carbonAvoidedKg.toFixed(1)} kg` : 'DATA UNAVAILABLE'}
-          subtitle="Emissions avoided vs immediate-execution baseline"
-          icon={TrendingDown}
-          color="cyan"
-          onClick={() => navigate('/impact')}
-        />
-        <KPICard
-          title="Electricity Cost Saved"
-          value={costSavedUsd !== undefined ? `$${costSavedUsd.toFixed(2)}` : 'DATA UNAVAILABLE'}
-          subtitle="Time-of-day tariff optimization"
-          icon={DollarSign}
-          color="indigo"
-          onClick={() => navigate('/carbon-cost')}
-        />
-        <KPICard
-          title="Pending Approvals"
-          value={pendingApprovalCount}
-          subtitle="Human-in-the-loop review required"
-          icon={CheckCircle2}
-          color={pendingApprovalCount > 0 ? 'amber' : 'emerald'}
-          onClick={() => navigate('/approvals')}
-        />
-        <KPICard
-          title="Connected Regions"
-          value={regions.length}
-          subtitle="All active regional grid layers"
-          icon={Globe}
-          color="emerald"
-          onClick={() => navigate('/regions')}
-        />
+        {kpiCards.map((card) => (
+          <KPICard
+            key={card.key}
+            title={card.title}
+            value={card.value}
+            subtitle={card.subtitle}
+            icon={card.icon}
+            color={card.color}
+            onClick={card.onClick}
+          />
+        ))}
       </div>
 
       {/* Workload Pipeline */}
@@ -284,7 +364,9 @@ export const DashboardPage: React.FC = () => {
         title="Workload Pipeline"
         subtitle="Live count of workloads at each lifecycle stage (app.shared.models.JobStatus)"
       >
-        {isLoading ? (
+        {summaryQ.isError ? (
+          <SectionError message="Unable to load workload pipeline data." onRetry={() => summaryQ.refetch()} />
+        ) : summaryQ.isLoading ? (
           <LoadingSkeleton rows={1} height={60} />
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', overflowX: 'auto', gap: '0.4rem', paddingBottom: '0.25rem' }}>
@@ -324,7 +406,7 @@ export const DashboardPage: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 1fr', gap: '1.5rem' }}>
         {/* Left: Active & Recent Workloads */}
         <GlassCard
-          title="Recent Workloads"
+          title={workloadsCardTitle}
           subtitle="Real-time execution state from database"
           actions={
             <button className="btn btn-secondary btn-sm" onClick={() => navigate('/workloads')}>
@@ -333,12 +415,14 @@ export const DashboardPage: React.FC = () => {
             </button>
           }
         >
-          {isLoading ? (
+          {jobsQ.isError ? (
+            <SectionError message="Unable to load workload data." onRetry={() => jobsQ.refetch()} />
+          ) : jobsQ.isLoading ? (
             <LoadingSkeleton rows={4} />
           ) : jobs.length === 0 ? (
             <EmptyState
               title="No Workloads Yet"
-              description="Your team has not submitted any workloads."
+              description={workloadsEmptyDescription}
               action={{
                 label: 'Submit Workload',
                 onClick: () => navigate('/submit'),
@@ -401,6 +485,9 @@ export const DashboardPage: React.FC = () => {
                   ))}
                 </tbody>
               </table>
+              <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.6rem', marginBottom: 0 }}>
+                Open a workload to see its full GreenShift Recommendation vs. immediate-dispatch comparison.
+              </p>
             </div>
           )}
         </GlassCard>
@@ -416,7 +503,9 @@ export const DashboardPage: React.FC = () => {
             </button>
           }
         >
-          {regionsQ.isLoading ? (
+          {regionsQ.isError ? (
+            <SectionError message="Unable to load regional grid data." onRetry={() => regionsQ.refetch()} />
+          ) : regionsQ.isLoading ? (
             <LoadingSkeleton rows={4} />
           ) : regions.length === 0 ? (
             <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
@@ -484,8 +573,68 @@ export const DashboardPage: React.FC = () => {
         </GlassCard>
       </div>
 
-      {/* Pending Approvals preview */}
-      {pendingApprovals.length > 0 && (
+      {/* Kubernetes Cluster Health — Platform Admin only */}
+      {isPlatformAdmin && (
+        <GlassCard
+          title="Kubernetes Cluster Health"
+          subtitle="Live node and resource telemetry across the execution cluster"
+          actions={
+            <button className="btn btn-secondary btn-sm" onClick={() => navigate('/health')}>
+              <span>Full Health Report</span>
+              <ArrowUpRight size={13} />
+            </button>
+          }
+        >
+          {k8sStateQ.isError ? (
+            <SectionError message="Unable to load Kubernetes cluster telemetry." onRetry={() => k8sStateQ.refetch()} />
+          ) : k8sStateQ.isLoading ? (
+            <LoadingSkeleton rows={2} />
+          ) : !k8sState ? (
+            <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+              DATA UNAVAILABLE — Kubernetes telemetry was not returned by the backend.
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '1rem' }}>
+              <div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Cluster Status</div>
+                <div style={{ marginTop: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Activity size={14} color={clusterHealthColor(k8sState.cluster_health)} />
+                  <StatusBadge status={k8sState.cluster_health.toUpperCase()} size="sm" />
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Nodes Ready</div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                  {k8sState.ready_nodes} / {k8sState.total_nodes}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>CPU Used / Allocatable</div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                  {k8sState.used_cpu_cores.toFixed(1)} / {k8sState.allocatable_cpu_cores.toFixed(1)} cores
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Memory Used / Allocatable</div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                  {(k8sState.used_memory_mib / 1024).toFixed(1)} / {(k8sState.allocatable_memory_mib / 1024).toFixed(1)} GiB
+                </div>
+              </div>
+              {k8sState.total_gpus > 0 && (
+                <div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>GPUs Used / Allocatable</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                    {k8sState.used_gpus} / {k8sState.allocatable_gpus}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </GlassCard>
+      )}
+
+      {/* Pending Approvals preview — Company Admin / Platform Admin only */}
+      {!isCompanyUser && pendingApprovals.length > 0 && (
         <GlassCard
           title="Pending Approvals"
           subtitle="GreenShift's recommended windows awaiting your sign-off"
@@ -529,8 +678,9 @@ export const DashboardPage: React.FC = () => {
         </GlassCard>
       )}
 
-      {/* Platform health strip — only shown when the backend actually answered */}
-      {healthQ.data && (
+      {/* Execution health strip — Company Admin / Platform Admin only, and only
+          shown once the backend has actually answered. */}
+      {!isCompanyUser && healthQ.data && (
         <div
           style={{
             display: 'flex',
@@ -545,7 +695,7 @@ export const DashboardPage: React.FC = () => {
           }}
         >
           <Activity size={14} color={healthQ.data.status === 'healthy' ? '#10b981' : healthQ.data.status === 'degraded' ? '#f59e0b' : '#ef4444'} />
-          <span>Platform status:</span>
+          <span>{isPlatformAdmin ? 'Platform status:' : 'Execution health:'}</span>
           <StatusBadge status={healthQ.data.status.toUpperCase()} size="sm" />
           <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
             <ShieldCheck size={13} />

@@ -28,6 +28,7 @@ from app.approval.service import (
     ApprovalValidationError,
     approve_schedule,
     decline_schedule,
+    get_approval_history,
     get_job_approvals,
     get_pending_approvals,
 )
@@ -405,3 +406,124 @@ def test_end_to_end_scenario_b_decline(db, sample_job_req):
     )
     assert ev_dec is not None
     assert "DECLINED" in ev_dec.payload_json
+
+
+class TestPhase5DecisionSupportFields:
+    """Phase 5: get_pending_approvals() must expose the real scheduling
+    decision-support fields already stored on ScheduleDecisionORM/JobORM —
+    no fabrication, no independent recomputation."""
+
+    def test_pending_approval_exposes_real_carbon_and_cost_baseline_fields(self, db, sample_job_req):
+        job = submit_job(db, sample_job_req)
+        schedule_and_store(db, job, record_audit=True)
+        sd = job.schedule_decision
+
+        pending = get_pending_approvals(db)
+        item = next(p for p in pending if p.job_id == job.job_id)
+
+        assert item.carbon_emission_kg == sd.carbon_emission
+        assert item.baseline_carbon_emission_kg == sd.baseline_carbon_emission
+        assert item.carbon_avoided_kg == sd.carbon_avoided
+        assert item.carbon_reduction_pct == sd.carbon_reduction_pct
+        assert item.cost_difference_usd == sd.cost_difference
+        assert item.sla_met == sd.sla_met
+        assert item.currency == (sd.currency or "USD")
+
+    def test_pending_approval_exposes_real_carbon_budget_and_priority(self, db):
+        now = utcnow()
+        req = JobSubmitRequest(
+            job_id="TEST-APPROVAL-BUDGET-001",
+            team_id="team-alpha",
+            deadline=now + timedelta(hours=6),
+            runtime_minutes=60,
+            power_kw=10.0,
+            region="IN-TG",
+            container_image="busybox:latest",
+            carbon_budget_kg=5.0,
+            priority="HIGH",
+        )
+        job = submit_job(db, req)
+        schedule_and_store(db, job, record_audit=True)
+
+        pending = get_pending_approvals(db)
+        item = next(p for p in pending if p.job_id == job.job_id)
+        assert item.carbon_budget_kg == 5.0
+        assert item.priority == "HIGH"
+
+    def test_pending_approval_carbon_budget_is_none_when_not_specified(self, db, sample_job_req):
+        job = submit_job(db, sample_job_req)
+        schedule_and_store(db, job, record_audit=True)
+
+        pending = get_pending_approvals(db)
+        item = next(p for p in pending if p.job_id == job.job_id)
+        assert item.carbon_budget_kg is None
+
+
+class TestApprovalHistoryPhase5:
+    """Phase 5: get_approval_history() must return BOTH approved and
+    declined decisions (not declined-only), with tenant/team isolation
+    matching get_pending_approvals()."""
+
+    def test_history_includes_both_approved_and_declined(self, db):
+        now = utcnow()
+        approved_job = submit_job(db, JobSubmitRequest(
+            job_id="TEST-HIST-APPROVED-001", team_id="team-alpha",
+            deadline=now + timedelta(hours=6), runtime_minutes=30, power_kw=5.0,
+            region="IN-TG", container_image="busybox:latest",
+        ))
+        schedule_and_store(db, approved_job)
+        approve_schedule(db, approved_job.job_id, approved_job.schedule_decision.id, reason="Looks good", approved_by="company_admin")
+
+        declined_job = submit_job(db, JobSubmitRequest(
+            job_id="TEST-HIST-DECLINED-001", team_id="team-alpha",
+            deadline=now + timedelta(hours=6), runtime_minutes=30, power_kw=5.0,
+            region="IN-TG", container_image="busybox:latest",
+        ))
+        schedule_and_store(db, declined_job)
+        decline_schedule(db, declined_job.job_id, declined_job.schedule_decision.id, reason="Deadline conflict", approved_by="company_admin")
+
+        history = get_approval_history(db, team_id="team-alpha")
+        decisions = {h.job_id: h.decision for h in history}
+        assert decisions.get(approved_job.job_id) == "APPROVED"
+        assert decisions.get(declined_job.job_id) == "DECLINED"
+
+        declined_item = next(h for h in history if h.job_id == declined_job.job_id)
+        assert declined_item.reason == "Deadline conflict"
+        assert declined_item.decided_by == "company_admin"
+        assert declined_item.region == "IN-TG"
+        assert declined_item.scheduled_start_utc is not None
+
+    def test_history_respects_team_isolation(self, db):
+        now = utcnow()
+        team_a_job = submit_job(db, JobSubmitRequest(
+            job_id="TEST-HIST-TEAMA-001", team_id="team-a-hist",
+            deadline=now + timedelta(hours=6), runtime_minutes=30, power_kw=5.0,
+            region="IN-TG", container_image="busybox:latest",
+        ))
+        schedule_and_store(db, team_a_job)
+        approve_schedule(db, team_a_job.job_id, team_a_job.schedule_decision.id)
+
+        team_b_job = submit_job(db, JobSubmitRequest(
+            job_id="TEST-HIST-TEAMB-001", team_id="team-b-hist",
+            deadline=now + timedelta(hours=6), runtime_minutes=30, power_kw=5.0,
+            region="IN-TG", container_image="busybox:latest",
+        ))
+        schedule_and_store(db, team_b_job)
+        approve_schedule(db, team_b_job.job_id, team_b_job.schedule_decision.id)
+
+        team_a_history = get_approval_history(db, team_id="team-a-hist")
+        assert any(h.job_id == team_a_job.job_id for h in team_a_history)
+        assert not any(h.job_id == team_b_job.job_id for h in team_a_history)
+
+    def test_history_unscoped_returns_all_teams(self, db):
+        now = utcnow()
+        job = submit_job(db, JobSubmitRequest(
+            job_id="TEST-HIST-ALL-001", team_id="team-any-hist",
+            deadline=now + timedelta(hours=6), runtime_minutes=30, power_kw=5.0,
+            region="IN-TG", container_image="busybox:latest",
+        ))
+        schedule_and_store(db, job)
+        approve_schedule(db, job.job_id, job.schedule_decision.id)
+
+        history = get_approval_history(db)
+        assert any(h.job_id == job.job_id for h in history)

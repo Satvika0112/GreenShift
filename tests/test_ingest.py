@@ -103,6 +103,16 @@ class TestJobRegistry:
     def test_get_nonexistent_job_returns_none(self, db):
         assert get_job(db, "JOB-DOESNOTEXIST") is None
 
+    def test_submit_job_preserves_workload_name(self, db, sample_job_request):
+        req = JobSubmitRequest(**{**sample_job_request, "workload_name": "Customer Churn Model Training"})
+        job = submit_job(db, req)
+        assert job.workload_name == "Customer Churn Model Training"
+
+    def test_submit_job_without_workload_name_leaves_it_null(self, db, sample_job_request):
+        req = JobSubmitRequest(**sample_job_request)
+        job = submit_job(db, req)
+        assert job.workload_name is None
+
     def test_list_jobs(self, db, sample_job_request):
         req = JobSubmitRequest(**sample_job_request)
         j1 = submit_job(db, req)

@@ -11,6 +11,7 @@ from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.shared.models import (
+    ApprovalHistoryItem,
     ApprovalORM,
     ApprovalResponse,
     JobORM,
@@ -453,6 +454,46 @@ def get_job_approvals(db: Session, job_id: str) -> List[ApprovalORM]:
     )
 
 
+def get_approval_history(
+    db: Session,
+    team_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> List[ApprovalHistoryItem]:
+    """
+    Retrieve all decided (APPROVED or DECLINED) schedule approvals, most
+    recent first, with the same tenant/team isolation as
+    get_pending_approvals(). Reuses the existing ApprovalORM ledger — no new
+    storage, no separate audit trail.
+    """
+    query = db.query(ApprovalORM).join(ApprovalORM.job)
+    if tenant_id:
+        query = query.filter(JobORM.tenant_id == tenant_id)
+    if team_id:
+        query = query.filter(JobORM.team_id == team_id)
+
+    approvals = query.order_by(ApprovalORM.created_at.desc()).all()
+
+    items: List[ApprovalHistoryItem] = []
+    for a in approvals:
+        job = a.job
+        sd = a.schedule_decision
+        items.append(
+            ApprovalHistoryItem(
+                job_id=a.job_id,
+                workload_name=job.workload_name if job else None,
+                decision=a.decision,
+                team_id=job.team_id if job else None,
+                tenant_id=job.tenant_id if job else None,
+                region=job.region if job else None,
+                scheduled_start_utc=sd.selected_start if sd else None,
+                decided_by=a.approved_by,
+                decided_at=a.created_at,
+                reason=a.reason,
+            )
+        )
+    return items
+
+
 def get_pending_approvals(
     db: Session,
     team_id: Optional[str] = None,
@@ -484,6 +525,12 @@ def get_pending_approvals(
         start_local = to_regional_time(sd.selected_start, region=j.region, timezone_name=j.timezone)
         end_local = to_regional_time(sd.selected_end, region=j.region, timezone_name=j.timezone)
         deadline_local = to_regional_time(j.deadline, region=j.region, timezone_name=j.timezone)
+        baseline_start = getattr(sd, "baseline_start", None)
+        baseline_start_local = (
+            to_regional_time(baseline_start, region=j.region, timezone_name=j.timezone)
+            if baseline_start
+            else None
+        )
 
         items.append(
             PendingApprovalItem(
@@ -510,12 +557,25 @@ def get_pending_approvals(
                 objective=getattr(sd, "scheduler_objective", "CARBON_FIRST") or "CARBON_FIRST",
                 reason=sd.reason,
                 job_type=j.job_type,
+                priority=j.priority,
                 candidates_evaluated=getattr(sd, "candidates_evaluated", 0) or 0,
                 feasible_candidates_count=getattr(sd, "feasible_candidates_count", 0) or 0,
                 rejection_summary=getattr(sd, "rejection_summary", {}) or {},
                 rejection_reasons=list((getattr(sd, "rejection_summary", {}) or {}).keys()),
                 deterministic_ranking=getattr(sd, "deterministic_rank", 1) or 1,
                 deterministic_rank=getattr(sd, "deterministic_rank", 1) or 1,
+                carbon_budget_kg=j.carbon_budget_kg,
+                currency=getattr(sd, "currency", None) or "USD",
+                native_cost=getattr(sd, "native_cost", None),
+                baseline_carbon_emission_kg=getattr(sd, "baseline_carbon_emission", None),
+                baseline_cost_usd=getattr(sd, "baseline_cost", None),
+                baseline_native_cost=getattr(sd, "baseline_native_cost", None),
+                baseline_start_utc=baseline_start,
+                baseline_start_local=baseline_start_local,
+                carbon_avoided_kg=getattr(sd, "carbon_avoided", None),
+                cost_difference_usd=getattr(sd, "cost_difference", None),
+                carbon_reduction_pct=getattr(sd, "carbon_reduction_pct", None),
+                sla_met=getattr(sd, "sla_met", None),
             )
         )
 

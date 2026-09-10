@@ -4,6 +4,7 @@ import {
   ScheduleDecision,
   Approval,
   PendingApprovalItem,
+  ApprovalHistoryItem,
   KubernetesExecution,
   KubernetesClusterState,
   AuditEvent,
@@ -12,7 +13,10 @@ import {
   RegionInfo,
   SystemHealthReport,
   CreateJobInput,
+  JobSubmitResult,
   User,
+  WorkloadDetail,
+  ActualImpactResult,
   AuthTokenResponse,
   NotificationItem,
   UnreadCountResponse,
@@ -157,13 +161,13 @@ export const workloadsApi = {
     return res.data;
   },
 
-  getJobHistory: async (id: string): Promise<any> => {
-    const res = await apiClient.get(`/api/v1/jobs/${id}/history`);
+  getJobHistory: async (id: string): Promise<WorkloadDetail> => {
+    const res = await apiClient.get<WorkloadDetail>(`/api/v1/jobs/${id}/history`);
     return res.data;
   },
 
-  createJob: async (jobData: CreateJobInput, autoSchedule = false): Promise<any> => {
-    const res = await apiClient.post('/api/v1/jobs', jobData, {
+  createJob: async (jobData: CreateJobInput, autoSchedule = false): Promise<JobSubmitResult> => {
+    const res = await apiClient.post<JobSubmitResult>('/api/v1/jobs', jobData, {
       params: { auto_schedule: autoSchedule },
     });
     return res.data;
@@ -235,23 +239,23 @@ export const approvalsApi = {
     return res.data;
   },
 
-  getDeclinedApprovals: async (teamId?: string): Promise<any[]> => {
-    const res = await apiClient.get('/api/v1/approvals/declined', {
+  getApprovalHistory: async (teamId?: string): Promise<ApprovalHistoryItem[]> => {
+    const res = await apiClient.get<ApprovalHistoryItem[]>('/api/v1/approvals/history', {
       params: teamId ? { team_id: teamId } : undefined,
     });
     return res.data;
   },
 
-  approveJob: async (jobId: string, scheduleId: number, reason = 'Approved via GreenShift Control Plane'): Promise<any> => {
-    const res = await apiClient.post(`/api/v1/approval/${jobId}/approve`, {
+  approveJob: async (jobId: string, scheduleId: number, reason?: string): Promise<Approval> => {
+    const res = await apiClient.post<Approval>(`/api/v1/approval/${jobId}/approve`, {
       schedule_id: scheduleId,
       reason,
     });
     return res.data;
   },
 
-  declineJob: async (jobId: string, scheduleId: number, reason: string): Promise<any> => {
-    const res = await apiClient.post(`/api/v1/approval/${jobId}/decline`, {
+  declineJob: async (jobId: string, scheduleId: number, reason: string): Promise<Approval> => {
+    const res = await apiClient.post<Approval>(`/api/v1/approval/${jobId}/decline`, {
       schedule_id: scheduleId,
       reason,
     });
@@ -313,9 +317,13 @@ export const monitoringApi = {
     return res.data;
   },
 
-  getActualImpact: async (jobId?: string): Promise<any> => {
-    const path = jobId ? `/api/v1/impact/job/${jobId}/actual` : '/api/v1/impact/fleet/actual';
-    const res = await apiClient.get(path);
+  getActualImpact: async (jobId: string): Promise<ActualImpactResult> => {
+    const res = await apiClient.get<ActualImpactResult>(`/api/v1/impact/job/${jobId}/actual`);
+    return res.data;
+  },
+
+  getFleetActualImpact: async (): Promise<any> => {
+    const res = await apiClient.get('/api/v1/impact/fleet/actual');
     return res.data;
   },
 

@@ -1,11 +1,12 @@
-import { PendingApprovalItem } from '../../types/api';
+import { PendingApprovalItem, ApprovalHistoryItem } from '../../types/api';
 
 // Matches the real shape returned by GET /api/v1/approvals/pending
-// (app/api/routers/approval.py).
+// (app/shared/models.py PendingApprovalItem, app/approval/service.py).
 export const pendingApprovalItem: PendingApprovalItem = {
   job_id: 'job-9001',
   workload_name: 'nightly-batch-etl',
   job_type: 'batch',
+  priority: 'HIGH',
   team_id: 'team-acme',
   region: 'US-CAL-CISO',
   timezone: 'America/Los_Angeles',
@@ -23,14 +24,44 @@ export const pendingApprovalItem: PendingApprovalItem = {
   deadline_local: '2026-09-10T11:00:00-07:00',
   status: 'PENDING_APPROVAL' as any,
   reason: 'Carbon budget exceeded for team-acme this billing cycle',
+  carbon_budget_kg: 5,
+  currency: 'USD',
+  native_cost: 3.75,
+  baseline_carbon_emission_kg: 6.0,
+  baseline_cost_usd: 4.9,
+  baseline_native_cost: 4.9,
+  baseline_start_utc: '2026-09-10T00:30:00Z',
+  baseline_start_local: '2026-09-09T17:30:00-07:00',
+  carbon_avoided_kg: 1.9,
+  cost_difference_usd: 1.15,
+  carbon_reduction_pct: 31,
+  sla_met: true,
 };
 
-// Matches GET /api/v1/approvals/declined (untyped dict on the frontend,
-// mirroring the backend's declined-approval response fields).
-export const declinedApprovalItem = {
-  job_id: 'job-8899',
+// Matches GET /api/v1/approvals/history (app/shared/models.py
+// ApprovalHistoryItem).
+export const approvedHistoryItem: ApprovalHistoryItem = {
+  job_id: 'job-7788',
+  workload_name: 'customer-churn-training',
+  decision: 'APPROVED',
   team_id: 'team-acme',
-  declined_by: 'company_admin',
-  declined_at: '2026-09-09T14:22:00Z',
+  tenant_id: 'acme',
+  region: 'IN-TG',
+  scheduled_start_utc: '2026-09-11T14:00:00Z',
+  decided_by: 'company_admin',
+  decided_at: '2026-09-10T15:20:00Z',
+  reason: null,
+};
+
+export const declinedHistoryItem: ApprovalHistoryItem = {
+  job_id: 'job-8899',
+  workload_name: 'etl-pipeline-118',
+  decision: 'DECLINED',
+  team_id: 'team-acme',
+  tenant_id: 'acme',
+  region: 'IN-GJ',
+  scheduled_start_utc: '2026-09-12T10:00:00Z',
+  decided_by: 'company_admin',
+  decided_at: '2026-09-09T14:22:00Z',
   reason: 'Exceeds quarterly carbon cap',
 };
