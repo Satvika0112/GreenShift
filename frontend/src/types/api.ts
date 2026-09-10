@@ -379,6 +379,57 @@ export interface RegionInfo {
   is_active: boolean;
 }
 
+// Matches GET /api/v1/tariffs/{region}/current exactly
+// (app/api/routers/ingest.py get_current_tariff / app/shared/tariff_service.py).
+// `effective_price` + `currency` together are the region's real native
+// tariff rate — `price_per_kwh_usd` is a separate, USD-normalized figure
+// for cross-region comparison and must never be displayed as if it were
+// the native rate.
+export interface CurrentTariffInfo {
+  utc_timestamp: string;
+  local_timestamp: string;
+  local_hour: number;
+  timezone: string;
+  time_interval: string;
+  time_of_day: string;
+  base_charge: number;
+  adder_charge: number;
+  effective_price: number;
+  currency: string;
+  tariff_type: string;
+  season: string;
+  price_per_kwh_usd: number;
+}
+
+export interface CurrentTariffResponse {
+  region: string;
+  region_id: string;
+  currency: string;
+  current_tariff: CurrentTariffInfo;
+}
+
+// Matches GET /api/v1/tariffs/{region} exactly.
+export interface HourlyTariffRecord {
+  hour: number;
+  time_interval: string;
+  time_of_day: string;
+  base_charge: number;
+  adder_charge: number;
+  effective_price: number;
+  currency: string;
+  tariff_type: string;
+  season: string;
+  price_per_kwh_usd: number;
+}
+
+export interface RegionHourlyTariffsResponse {
+  region: string;
+  region_id: string;
+  currency: string;
+  season: string;
+  tariffs: HourlyTariffRecord[];
+}
+
 export interface SystemHealthReport {
   status: 'healthy' | 'degraded' | 'unhealthy';
   service: string;

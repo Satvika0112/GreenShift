@@ -24,12 +24,15 @@ import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
 import { InlineBanner } from '../components/common/InlineBanner';
 import { sustainabilityApi } from '../api/endpoints';
-import { RegionInfo } from '../types/api';
+import { RegionInfo, CurrentTariffResponse } from '../types/api';
+import { formatRate, currencyRateUnitLabel } from '../utils/currency';
 
 interface HourlyDataPoint {
   hour: string;
   carbon_intensity: number;
-  tariff_price: number;
+  // Native regional tariff rate for this hour — undefined (not zero) when
+  // the backend genuinely has no tariff reading for that hour.
+  tariff_price?: number;
   is_fallback?: boolean;
 }
 
@@ -37,7 +40,7 @@ export const CarbonCostPage: React.FC = () => {
   const [regions, setRegions] = useState<RegionInfo[]>([]);
   const [selectedRegion, setSelectedRegion] = useState('IN-TG');
   const [chartData, setChartData] = useState<HourlyDataPoint[]>([]);
-  const [currentTariff, setCurrentTariff] = useState<any | null>(null);
+  const [currentTariff, setCurrentTariff] = useState<CurrentTariffResponse | null>(null);
   const [currentCarbon, setCurrentCarbon] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -84,22 +87,25 @@ export const CarbonCostPage: React.FC = () => {
         tariffPoints.forEach((t: any, idx: number) => {
           const hourLabel = t.time_interval || `${String(idx).padStart(2, '0')}:00`;
           const cPoint = carbonPoints[idx] || carbonPoints[idx % (carbonPoints.length || 1)];
-          if (cPoint?.carbon_gco2_kwh !== undefined && (t.price_per_kwh_usd !== undefined || t.effective_price !== undefined)) {
+          if (cPoint?.carbon_gco2_kwh !== undefined) {
             points.push({
               hour: hourLabel,
               carbon_intensity: cPoint.carbon_gco2_kwh,
-              tariff_price: t.price_per_kwh_usd ?? t.effective_price,
+              // Native regional rate — never the USD-normalized figure.
+              tariff_price: t.effective_price,
               is_fallback: cPoint?.is_fallback,
             });
           }
         });
       } else if (carbonPoints.length > 0) {
-        carbonPoints.forEach((c: any, idx: number) => {
+        // Tariff data is genuinely unavailable for this region/window — plot
+        // carbon alone rather than inventing a tariff figure for it.
+        carbonPoints.forEach((c: any) => {
           const d = new Date(c.timestamp);
           points.push({
             hour: `${String(d.getUTCHours()).padStart(2, '0')}:00`,
             carbon_intensity: c.carbon_gco2_kwh,
-            tariff_price: 0.07,
+            tariff_price: undefined,
             is_fallback: c.is_fallback,
           });
         });
@@ -121,6 +127,11 @@ export const CarbonCostPage: React.FC = () => {
   }, [selectedRegion]);
 
   const activeRegionObj = regions.find((r) => r.region_id === selectedRegion);
+  // The region's own registered currency is the single source of truth for
+  // every currency-aware label on this page and its chart — never assumed,
+  // never USD by default.
+  const chartCurrency = currentTariff?.currency || activeRegionObj?.currency;
+  const tariffSeriesName = chartCurrency ? `Tariff (${currencyRateUnitLabel(chartCurrency)})` : 'Tariff';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
@@ -161,7 +172,7 @@ export const CarbonCostPage: React.FC = () => {
           <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
             Grid Zone: <strong style={{ color: '#38bdf8' }}>{activeRegionObj?.electricity_maps_zone || selectedRegion}</strong> •
             Timezone: <strong style={{ color: '#ffffff' }}>{activeRegionObj?.timezone || 'UTC'}</strong> •
-            Currency: <strong style={{ color: '#10b981' }}>{activeRegionObj?.currency || 'USD'}</strong>
+            Currency: <strong style={{ color: '#10b981' }}>{activeRegionObj?.currency || '—'}</strong>
           </div>
         </div>
       </GlassCard>
@@ -179,14 +190,20 @@ export const CarbonCostPage: React.FC = () => {
         </div>
 
         <div style={{ background: 'var(--bg-surface)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Active Electricity Tariff</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 800, color: currentTariff?.current_tariff?.price_per_kwh_usd !== undefined ? '#38bdf8' : 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '0.2rem' }}>
-            {currentTariff?.current_tariff?.price_per_kwh_usd !== undefined
-              ? `$${currentTariff.current_tariff.price_per_kwh_usd.toFixed(4)}/kWh`
-              : 'DATA UNAVAILABLE'}
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Effective Electricity Rate</div>
+          <div
+            style={{
+              fontSize: '1.6rem',
+              fontWeight: 800,
+              color: currentTariff?.current_tariff?.effective_price !== undefined ? '#38bdf8' : 'var(--text-muted)',
+              fontFamily: 'var(--font-mono)',
+              marginTop: '0.2rem',
+            }}
+          >
+            {formatRate(currentTariff?.current_tariff?.effective_price, currentTariff?.currency)}
           </div>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-            Local Effective Rate: {currentTariff?.current_tariff?.effective_price ?? '--'} {currentTariff?.currency || 'INR'}
+            Plan: {currentTariff?.current_tariff?.tariff_type || activeRegionObj?.default_plan || '—'}
           </div>
         </div>
 
@@ -229,7 +246,14 @@ export const CarbonCostPage: React.FC = () => {
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                 <XAxis dataKey="hour" stroke="#64748b" tick={{ fontSize: 11 }} />
                 <YAxis yAxisId="left" stroke="#10b981" tick={{ fontSize: 11 }} unit=" g" />
-                <YAxis yAxisId="right" orientation="right" stroke="#38bdf8" tick={{ fontSize: 11 }} unit=" $" />
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  stroke="#38bdf8"
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(value: number) => formatRate(value, chartCurrency)}
+                  label={{ value: `Tariff (${currencyRateUnitLabel(chartCurrency)})`, angle: 90, position: 'insideRight', fontSize: 11, fill: '#38bdf8' }}
+                />
                 <Tooltip
                   contentStyle={{
                     background: '#0e1422',
@@ -237,6 +261,9 @@ export const CarbonCostPage: React.FC = () => {
                     borderRadius: '6px',
                     fontSize: '0.8rem',
                   }}
+                  formatter={(value, name) =>
+                    name === tariffSeriesName ? [formatRate(Number(value), chartCurrency), name] : [value, name]
+                  }
                 />
                 <Legend />
                 <Area
@@ -253,7 +280,7 @@ export const CarbonCostPage: React.FC = () => {
                   yAxisId="right"
                   type="monotone"
                   dataKey="tariff_price"
-                  name="Tariff ($/kWh)"
+                  name={tariffSeriesName}
                   stroke="#38bdf8"
                   strokeWidth={2}
                   fillOpacity={1}

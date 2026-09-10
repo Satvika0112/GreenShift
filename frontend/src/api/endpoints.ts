@@ -11,6 +11,8 @@ import {
   DashboardSummary,
   FleetHeadline,
   RegionInfo,
+  CurrentTariffResponse,
+  RegionHourlyTariffsResponse,
   SystemHealthReport,
   CreateJobInput,
   JobSubmitResult,
@@ -374,15 +376,15 @@ export const sustainabilityApi = {
     return res.data;
   },
 
-  getRegionHourlyTariffs: async (region: string, season?: string): Promise<any> => {
-    const res = await apiClient.get(`/api/v1/tariffs/${region}`, {
+  getRegionHourlyTariffs: async (region: string, season?: string): Promise<RegionHourlyTariffsResponse> => {
+    const res = await apiClient.get<RegionHourlyTariffsResponse>(`/api/v1/tariffs/${region}`, {
       params: season ? { season } : undefined,
     });
     return res.data;
   },
 
-  getCurrentTariff: async (region: string): Promise<any> => {
-    const res = await apiClient.get(`/api/v1/tariffs/${region}/current`);
+  getCurrentTariff: async (region: string): Promise<CurrentTariffResponse> => {
+    const res = await apiClient.get<CurrentTariffResponse>(`/api/v1/tariffs/${region}/current`);
     return res.data;
   },
 

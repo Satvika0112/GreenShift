@@ -17,12 +17,16 @@ import { EmptyState } from '../components/common/EmptyState';
 import { InlineBanner } from '../components/common/InlineBanner';
 import { sustainabilityApi, dispatchApi, workloadsApi } from '../api/endpoints';
 import { RegionInfo, KubernetesClusterState, Job } from '../types/api';
+import { formatRate } from '../utils/currency';
 
 interface EnrichedRegion extends RegionInfo {
   carbonGco2Kwh?: number;
   carbonSource?: string;
   isFallbackCarbon?: boolean;
-  tariffUsd?: number;
+  // Native regional tariff rate + its own ISO currency — never USD-normalized,
+  // never assumed. Comes straight from GET /tariffs/{region}/current's
+  // `effective_price` / `currency` fields.
+  tariffPrice?: number;
   tariffCurrency?: string;
   activeJobsCount: number;
 }
@@ -66,8 +70,11 @@ export const RegionsPage: React.FC = () => {
           let carbonGco2Kwh: number | undefined;
           let carbonSource: string | undefined;
           let isFallbackCarbon: boolean | undefined;
-          let tariffUsd: number | undefined;
-          let tariffCurrency = r.currency || 'USD';
+          // Native regional tariff — never USD-normalized, never assumed.
+          // Falls back to the region's own registered currency (never "USD")
+          // if the tariff endpoint itself doesn't return one.
+          let tariffPrice: number | undefined;
+          let tariffCurrency: string | undefined = r.currency;
 
           try {
             const c = await sustainabilityApi.getCarbonCurrent(r.region_id);
@@ -83,8 +90,8 @@ export const RegionsPage: React.FC = () => {
           try {
             const t = await sustainabilityApi.getCurrentTariff(r.region_id);
             if (t?.current_tariff) {
-              tariffUsd = t.current_tariff.price_per_kwh_usd;
-              tariffCurrency = t.currency || tariffCurrency;
+              tariffPrice = t.current_tariff.effective_price;
+              tariffCurrency = t.currency || t.current_tariff.currency || tariffCurrency;
             }
           } catch {
             // ignore individual regional tariff error
@@ -95,7 +102,7 @@ export const RegionsPage: React.FC = () => {
             carbonGco2Kwh,
             carbonSource,
             isFallbackCarbon,
-            tariffUsd,
+            tariffPrice,
             tariffCurrency,
             activeJobsCount: jobsPerRegion[r.region_id] || 0,
           };
@@ -127,7 +134,18 @@ export const RegionsPage: React.FC = () => {
         }
       />
 
-      {errorMsg && <InlineBanner variant="error">{errorMsg}</InlineBanner>}
+      {errorMsg && (
+        <InlineBanner
+          variant="error"
+          action={
+            <button className="btn btn-secondary btn-sm" onClick={fetchRegionalData}>
+              <span>Retry</span>
+            </button>
+          }
+        >
+          {errorMsg}
+        </InlineBanner>
+      )}
 
       {/* Cluster Node Summary Bar */}
       {clusterState && (
@@ -220,8 +238,14 @@ export const RegionsPage: React.FC = () => {
                           fontFamily: 'var(--font-mono)',
                         }}
                       >
-                        {r.carbonGco2Kwh !== undefined ? r.carbonGco2Kwh.toFixed(0) : '--'}
-                        <span style={{ fontSize: '0.75rem', marginLeft: '0.2rem' }}>gCO₂/kWh</span>
+                        {r.carbonGco2Kwh !== undefined ? (
+                          <>
+                            {r.carbonGco2Kwh.toFixed(0)}
+                            <span style={{ fontSize: '0.75rem', marginLeft: '0.2rem' }}>gCO₂/kWh</span>
+                          </>
+                        ) : (
+                          'DATA UNAVAILABLE'
+                        )}
                       </div>
                       <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                         Source: {r.carbonSource || (r.isFallbackCarbon ? 'Fallback' : 'Electricity Maps')}
@@ -238,8 +262,7 @@ export const RegionsPage: React.FC = () => {
                           fontFamily: 'var(--font-mono)',
                         }}
                       >
-                        {r.tariffUsd !== undefined ? `$${r.tariffUsd.toFixed(4)}` : '--'}
-                        <span style={{ fontSize: '0.75rem', marginLeft: '0.2rem' }}>/kWh</span>
+                        {formatRate(r.tariffPrice, r.tariffCurrency)}
                       </div>
                       <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                         Plan: {r.default_plan || 'Industrial ToD'}
