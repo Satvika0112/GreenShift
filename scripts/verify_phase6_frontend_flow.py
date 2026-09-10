@@ -18,7 +18,7 @@ import urllib.error
 import sys
 from datetime import datetime, timezone, timedelta
 
-BASE_URL = "http://localhost:3000"
+BASE_URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080"
 
 def request(path, method="GET", data=None, token=None):
     url = f"{BASE_URL}{path}"

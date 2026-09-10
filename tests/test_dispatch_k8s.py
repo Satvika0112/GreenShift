@@ -121,9 +121,10 @@ class TestKubernetesHealthCheck:
         """Connection / API exception must return False without crashing."""
         mock_core = MagicMock()
         mock_core.list_namespace.side_effect = Exception("Connection refused to 127.0.0.1:6443")
+        mock_core.list_namespaced_pod.side_effect = Exception("Connection refused to 127.0.0.1:6443")
 
         with patch("app.dispatch.kubernetes_client.get_core_v1", return_value=mock_core):
-            assert check_kubernetes_available() is False
+            assert check_kubernetes_available(force=True) is False
 
 
 class TestDynamicJobBuilder:

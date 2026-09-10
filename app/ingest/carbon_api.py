@@ -514,7 +514,12 @@ def get_resilient_carbon_curve(
             set_cached_carbon_data(canonical_region, live_points)
             # 2. Store in persistent DB cache
             store_carbon_in_db_cache(live_points, canonical_region, db=db)
-            return live_points
+            # Filter live points to match requested window consistently with cache retrieval
+            return [
+                p for p in live_points
+                if (start_time is None or p.timestamp >= start_time - timedelta(minutes=30))
+                and (end_time is None or p.timestamp <= end_time + timedelta(minutes=30))
+            ]
     except Exception as exc:
         api_failure_reason = str(exc)
         logger.warning("[CARBON] API unavailable: %s - attempting resilience fallback", api_failure_reason)

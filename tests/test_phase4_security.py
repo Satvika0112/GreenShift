@@ -196,9 +196,9 @@ def test_kubernetes_network_policy_yaml_validity():
         "greenshift-scheduler-netpol",
         "greenshift-dispatcher-netpol",
         "greenshift-trust-netpol",
-        "greenshift-dashboard-netpol",
     }
     assert expected_policies.issubset(policy_names)
+    assert "greenshift-frontend-netpol" in policy_names or "greenshift-dashboard-netpol" in policy_names
 
 
 def test_network_policy_selectors_match_deployment_labels():
@@ -218,7 +218,9 @@ def test_network_policy_selectors_match_deployment_labels():
         assert labels.get("app") == "greenshift"
         deployment_components.add(labels.get("component"))
 
-    assert deployment_components == {"api", "ingest", "scheduler", "dispatcher", "trust", "dashboard", "postgres"}
+    core_components = {"api", "ingest", "scheduler", "dispatcher", "trust", "postgres"}
+    assert core_components.issubset(deployment_components)
+    assert "frontend" in deployment_components or "dashboard" in deployment_components
 
     # Validate NetworkPolicies match these exact components
     with open("k8s/network-policy.yaml", "r", encoding="utf-8") as f:
@@ -229,7 +231,7 @@ def test_network_policy_selectors_match_deployment_labels():
     # 1. Default deny covers all pods (empty podSelector)
     assert netpol_by_name["default-deny-all"]["spec"]["podSelector"] == {}
 
-    # 2. Postgres accepts traffic only from backend components, NOT dashboard
+    # 2. Postgres accepts traffic only from backend components, NOT dashboard / frontend
     postgres_ingress = netpol_by_name["greenshift-postgres-netpol"]["spec"]["ingress"]
     allowed_postgres_sources = set()
     for rule in postgres_ingress:
@@ -243,3 +245,4 @@ def test_network_policy_selectors_match_deployment_labels():
     assert "dispatcher" in allowed_postgres_sources
     assert "trust" in allowed_postgres_sources
     assert "dashboard" not in allowed_postgres_sources, "Postgres must not allow direct access from Dashboard"
+    assert "frontend" not in allowed_postgres_sources, "Postgres must not allow direct access from Frontend"

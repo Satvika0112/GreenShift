@@ -2,6 +2,7 @@
 Tests for Kubernetes State Collector and Resource Telemetry.
 """
 
+from unittest.mock import patch
 from app.dispatch.k8s_state_collector import (
     collect_cluster_state,
     _parse_cpu_string,
@@ -253,7 +254,8 @@ class TestNodeLevelFeasibility:
 
     def test_simulated_snapshot_has_node_inventory_and_consistent_metrics(self):
         """Simulated cluster state returns 3 nodes whose used metrics sum to the cluster totals."""
-        snapshot = collect_cluster_state()
+        with patch("app.dispatch.k8s_state_collector.check_kubernetes_available", return_value=False):
+            snapshot = collect_cluster_state()
         assert len(snapshot.nodes) == 3
 
         sum_cpu_used = sum(n.cpu_used_cores for n in snapshot.nodes)
