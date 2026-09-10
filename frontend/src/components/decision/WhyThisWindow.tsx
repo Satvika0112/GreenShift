@@ -14,7 +14,7 @@ interface WhyThisWindowProps {
 export const WhyThisWindow: React.FC<WhyThisWindowProps> = ({ decision }) => {
   if (!decision) return null;
 
-  const rank = decision.deterministic_rank ?? decision.deterministic_ranking ?? 1;
+  const rank = decision.deterministic_rank ?? decision.deterministic_ranking;
   const rejectionEntries = decision.rejection_summary ? Object.entries(decision.rejection_summary) : [];
   const rejectionReasons: string[] = decision.rejection_reasons || [];
 
@@ -41,18 +41,20 @@ export const WhyThisWindow: React.FC<WhyThisWindowProps> = ({ decision }) => {
               gap: '0.5rem',
             }}
           >
-            <span
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '0.72rem',
-                color: '#38bdf8',
-                background: 'var(--bg-surface-elevated)',
-                padding: '0.35rem 0.6rem',
-                borderRadius: 'var(--radius-sm)',
-              }}
-            >
-              Deterministic Rank #{rank}
-            </span>
+            {rank !== undefined && (
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '0.72rem',
+                  color: '#38bdf8',
+                  background: 'var(--bg-surface-elevated)',
+                  padding: '0.35rem 0.6rem',
+                  borderRadius: 'var(--radius-sm)',
+                }}
+              >
+                Deterministic Rank #{rank}
+              </span>
+            )}
             {decision.candidates_evaluated !== undefined && (
               <span
                 style={{

@@ -167,11 +167,11 @@ export const JobMonitoringPage: React.FC = () => {
                       <span style={{ fontWeight: 600, fontSize: '0.9rem', color: '#ffffff' }}>
                         {exec.kubernetes_job_name || exec.job_id}
                       </span>
-                      <StatusBadge status={exec.gs_status || exec.k8s_status || 'DISPATCHED'} size="sm" />
+                      <StatusBadge status={exec.gs_status || exec.k8s_status || 'UNKNOWN'} size="sm" />
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-                      <span>Namespace: {exec.namespace || exec.kubernetes_namespace || 'greenshift'}</span>
+                      <span>Namespace: {exec.namespace || exec.kubernetes_namespace || '—'}</span>
                       <span style={{ fontFamily: 'var(--font-mono)' }}>Job ID: {exec.job_id}</span>
                     </div>
 
@@ -189,7 +189,7 @@ export const JobMonitoringPage: React.FC = () => {
               logs via any API, so no log stream is simulated here. */}
           <GlassCard
             title="Execution Details"
-            subtitle={`Pod: ${selectedExec?.pod_name || `${selectedExec?.kubernetes_job_name || 'k8s'}-pod`} • Namespace: ${selectedExec?.kubernetes_namespace || selectedExec?.namespace || 'greenshift'}`}
+            subtitle={`Pod: ${selectedExec?.pod_name || '—'} • Namespace: ${selectedExec?.kubernetes_namespace || selectedExec?.namespace || '—'}`}
             badge={<span className="badge badge-info">{isAutoRefreshing ? 'AUTO-REFRESHING' : 'LIVE'}</span>}
           >
             {selectedExec ? (
@@ -198,7 +198,7 @@ export const JobMonitoringPage: React.FC = () => {
                   <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Kubernetes Status</div>
                     <div style={{ fontWeight: 700, color: '#10b981', marginTop: '0.2rem' }}>
-                      {selectedExec.k8s_status || selectedExec.gs_status || 'READY'}
+                      {selectedExec.k8s_status || selectedExec.gs_status || 'DATA UNAVAILABLE'}
                     </div>
                   </div>
                   <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
@@ -229,7 +229,7 @@ export const JobMonitoringPage: React.FC = () => {
                 >
                   <DetailRow label="Job ID" value={selectedExec.job_id} mono />
                   <DetailRow label="Kubernetes Job" value={selectedExec.kubernetes_job_name} mono />
-                  <DetailRow label="Namespace" value={selectedExec.kubernetes_namespace || selectedExec.namespace || 'greenshift'} mono />
+                  <DetailRow label="Namespace" value={selectedExec.kubernetes_namespace || selectedExec.namespace || '—'} mono />
                   <DetailRow label="Pod Name" value={selectedExec.pod_name || '—'} mono />
                   {selectedExec.actual_start && (
                     <DetailRow label="Started" value={new Date(selectedExec.actual_start).toLocaleString()} />

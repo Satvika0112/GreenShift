@@ -47,7 +47,7 @@ describe('AlertsPage', () => {
       })
     );
     renderPage();
-    expect(document.querySelector('.skeleton, [class*="skeleton"]') || screen.queryByText(/Alerts/)).toBeTruthy();
+    expect(document.querySelector('.skeleton, [class*="skeleton"]') || screen.queryByText(/Notifications/)).toBeTruthy();
     resolveFn!([]);
   });
 

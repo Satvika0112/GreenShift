@@ -230,6 +230,22 @@ class TestProductionSafetyChecks:
         except RuntimeError:
             pytest.fail("Dev mode config raised RuntimeError unexpectedly")
 
+    def test_demo_users_not_seeded_in_production(self):
+        """Production must never receive the well-known demo/seed accounts
+        (admin/admin123 etc.) — see app.api.main.lifespan."""
+        from app.shared.auth import should_seed_demo_users
+        assert should_seed_demo_users("production") is False
+        assert should_seed_demo_users("PRODUCTION") is False
+        assert should_seed_demo_users("  Production  ") is False
+
+    def test_demo_users_seeded_outside_production(self):
+        """Demo/seed accounts remain available for local dev, CI, and staging."""
+        from app.shared.auth import should_seed_demo_users
+        assert should_seed_demo_users("development") is True
+        assert should_seed_demo_users("testing") is True
+        assert should_seed_demo_users(None) is True
+        assert should_seed_demo_users("") is True
+
 
 # ─── 3. JWT Login ──────────────────────────────────────────────────────────────
 

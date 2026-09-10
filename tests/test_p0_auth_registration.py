@@ -312,3 +312,110 @@ def test_platform_admin_can_create_user_in_any_tenant(client, seed_admins):
     assert data["username"] == "beta_admin"
     assert data["tenant_id"] == "tenant-beta"
     assert data["role"] == "COMPANY_ADMIN"
+
+
+# ==============================================================================
+# Inactive company (tenant) blocks authentication
+# ==============================================================================
+
+def test_inactive_company_blocks_login(client, monkeypatch):
+    """A user whose company/tenant has been deactivated cannot log in, even with
+    correct credentials and an otherwise-active, approved account."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+
+    with SessionLocal() as db:
+        db.query(TenantORM).filter(TenantORM.id == "tenant-alpha").update({"is_active": False})
+        db.add(UserORM(
+            username="alpha_user_inactive_co",
+            email="user@alpha-inactive.com",
+            hashed_password=hash_password("Password123!"),
+            role=UserRole.COMPANY_USER,
+            tenant_id="tenant-alpha",
+            is_active=True,
+            approval_status=UserApprovalStatus.APPROVED.value,
+        ))
+        db.commit()
+
+    resp = client.post("/auth/login", json={
+        "username": "alpha_user_inactive_co",
+        "password": "Password123!",
+    })
+    assert resp.status_code == 403
+    assert "inactive" in resp.json()["detail"].lower()
+
+
+def test_active_company_user_login_still_works(client, monkeypatch):
+    """Sanity check: a user in a company that IS active can still log in normally."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+
+    with SessionLocal() as db:
+        db.add(UserORM(
+            username="alpha_user_active_co",
+            email="user@alpha-active.com",
+            hashed_password=hash_password("Password123!"),
+            role=UserRole.COMPANY_USER,
+            tenant_id="tenant-alpha",
+            is_active=True,
+            approval_status=UserApprovalStatus.APPROVED.value,
+        ))
+        db.commit()
+
+    resp = client.post("/auth/login", json={
+        "username": "alpha_user_active_co",
+        "password": "Password123!",
+    })
+    assert resp.status_code == 200
+    assert "access_token" in resp.json()
+
+
+def test_platform_admin_login_unaffected_by_tenant_status(client, seed_admins):
+    """Platform Admin has no tenant_id, so no company can ever block their login."""
+    with SessionLocal() as db:
+        db.query(TenantORM).update({"is_active": False})
+        db.commit()
+
+    resp = client.post("/auth/login", json={
+        "username": "p_admin",
+        "password": "PlatformAdmin123!",
+    })
+    assert resp.status_code == 200
+
+
+def test_deactivating_company_revokes_access_for_already_issued_token(client, monkeypatch):
+    """A token issued while the company was active must stop working once the
+    company is deactivated — the check must be re-evaluated per-request, not
+    only at login time."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+
+    with SessionLocal() as db:
+        user = UserORM(
+            username="alpha_user_revoke",
+            email="user@alpha-revoke.com",
+            hashed_password=hash_password("Password123!"),
+            role=UserRole.COMPANY_USER,
+            tenant_id="tenant-alpha",
+            is_active=True,
+            approval_status=UserApprovalStatus.APPROVED.value,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        token = create_access_token(
+            user_id=user.id,
+            username=user.username,
+            role=UserRole.COMPANY_USER.value,
+            tenant_id="tenant-alpha",
+        )
+
+    # Token works while the company is active.
+    resp = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+
+    # Deactivate the company; the same token must now be rejected.
+    with SessionLocal() as db:
+        db.query(TenantORM).filter(TenantORM.id == "tenant-alpha").update({"is_active": False})
+        db.commit()
+
+    resp = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 403
+    assert "inactive" in resp.json()["detail"].lower()

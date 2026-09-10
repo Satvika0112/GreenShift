@@ -57,14 +57,22 @@ async def lifespan(app: FastAPI):
     logger.info("GreenShift API starting up")
     validate_security_config(settings)
     init_db()
-    try:
-        from app.shared.database import SessionLocal
-        from app.shared.auth import seed_default_users
-        db = SessionLocal()
-        seed_default_users(db)
-        db.close()
-    except Exception as exc:
-        logger.warning(f"Default user seeding skipped: {exc}")
+    # Development/test convenience accounts only. Never seeded in production —
+    # these are well-known, publicly documented credentials (see
+    # app.shared.auth.seed_default_users) and must never exist outside local
+    # dev/CI environments.
+    from app.shared.auth import should_seed_demo_users
+    if should_seed_demo_users(settings.environment):
+        try:
+            from app.shared.database import SessionLocal
+            from app.shared.auth import seed_default_users
+            db = SessionLocal()
+            seed_default_users(db)
+            db.close()
+        except Exception as exc:
+            logger.warning(f"Default user seeding skipped: {exc}")
+    else:
+        logger.info("Production environment detected — skipping default/demo user seeding")
     logger.info("Database initialised")
 
     bg_task = asyncio.create_task(_background_orchestrator())

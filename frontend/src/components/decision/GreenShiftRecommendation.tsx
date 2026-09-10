@@ -24,7 +24,7 @@ function formatWindow(iso?: string | null): string {
 export const GreenShiftRecommendation: React.FC<GreenShiftRecommendationProps> = ({ decision, fallbackRegion }) => {
   if (!decision) return null;
 
-  const rank = decision.deterministic_rank ?? decision.deterministic_ranking ?? 1;
+  const rank = decision.deterministic_rank ?? decision.deterministic_ranking;
   const region = decision.region_id || fallbackRegion || '—';
   // electricity_cost is always USD-normalized; `currency` describes native_cost's
   // denomination, so it must only be applied when actually falling back to native_cost.
@@ -40,7 +40,7 @@ export const GreenShiftRecommendation: React.FC<GreenShiftRecommendationProps> =
           <span>GreenShift Recommendation</span>
         </span>
       }
-      subtitle={`Objective: ${decision.scheduler_objective || decision.objective || 'CARBON_FIRST'} · Rank #${rank}`}
+      subtitle={`Objective: ${decision.scheduler_objective || decision.objective || 'CARBON_FIRST'} (carbon → cost → earliest start)${rank !== undefined ? ` · Rank #${rank}` : ''}`}
       badge={<span className="badge badge-success">OPTIMAL WINDOW</span>}
     >
       <div

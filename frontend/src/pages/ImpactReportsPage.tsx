@@ -97,10 +97,10 @@ export const ImpactReportsPage: React.FC = () => {
     }
   };
 
-  const totalCarbonAvoided = fleetImpact?.total_carbon_avoided_kg ?? headline?.total_carbon_avoided_kg ?? 0;
-  const avgReductionPct = fleetImpact?.avg_carbon_reduction_pct ?? headline?.avg_carbon_reduction_pct ?? 0;
-  const totalCostSaved = fleetImpact?.total_cost_saved_usd ?? headline?.total_cost_saved_usd ?? 0;
-  const totalJobs = fleetImpact?.total_jobs_with_decisions ?? headline?.total_jobs ?? 0;
+  const totalCarbonAvoided = fleetImpact?.total_carbon_avoided_kg ?? headline?.total_carbon_avoided_kg;
+  const avgReductionPct = fleetImpact?.avg_carbon_reduction_pct ?? headline?.avg_carbon_reduction_pct;
+  const totalCostSaved = fleetImpact?.total_cost_saved_usd ?? headline?.total_cost_saved_usd;
+  const totalJobs = fleetImpact?.total_jobs_with_decisions ?? headline?.total_jobs;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
@@ -133,29 +133,29 @@ export const ImpactReportsPage: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
             <KPICard
               title="Avoided Carbon"
-              value={`${totalCarbonAvoided.toFixed(1)} kg`}
-              subtitle="Net emissions saved vs baseline"
+              value={totalCarbonAvoided !== undefined ? `${totalCarbonAvoided.toFixed(1)} kg` : 'DATA UNAVAILABLE'}
+              subtitle="Net emissions saved vs immediate-execution baseline"
               icon={Leaf}
               color="emerald"
             />
             <KPICard
               title="Average Reduction"
-              value={`${avgReductionPct.toFixed(1)}%`}
+              value={avgReductionPct !== undefined ? `${avgReductionPct.toFixed(1)}%` : 'DATA UNAVAILABLE'}
               subtitle="Per scheduled workload"
               icon={TrendingDown}
               color="cyan"
             />
             <KPICard
               title="Energy Cost Savings"
-              value={`$${totalCostSaved.toFixed(2)}`}
+              value={totalCostSaved !== undefined ? `$${totalCostSaved.toFixed(2)}` : 'DATA UNAVAILABLE'}
               subtitle="Time-of-Day tariff arbitrage"
               icon={DollarSign}
               color="amber"
             />
             <KPICard
               title="Optimized Workloads"
-              value={totalJobs}
-              subtitle="Scheduled carbon-first jobs"
+              value={totalJobs !== undefined ? totalJobs : 'DATA UNAVAILABLE'}
+              subtitle="Scheduled under carbon-primary policy"
               icon={ShieldCheck}
               color="indigo"
             />

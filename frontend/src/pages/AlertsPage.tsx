@@ -82,7 +82,7 @@ export const AlertsPage: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       <PageHeader
-        title="Alerts & Notifications"
+        title="Notifications"
         subtitle="Real-time events from workload scheduling, approvals, execution, and account activity — sourced from your own notification feed"
         badge={
           <span className={`badge ${unreadCount > 0 ? 'badge-warning' : 'badge-success'}`}>

@@ -132,7 +132,7 @@ export const SchedulingPage: React.FC = () => {
         />
         <EmptyState
           title="No Workloads Available for Scheduling"
-          description="The queue is currently empty. Ingest or bulk-load workloads into the system to run the carbon-aware optimizer."
+          description="The queue is currently empty. Submit a workload to run the carbon-aware optimizer."
           icon={Layers}
           action={{
             label: 'Submit Workload',
@@ -147,7 +147,7 @@ export const SchedulingPage: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       <PageHeader
         title="Carbon-Aware Scheduling Engine"
-        subtitle="Multi-region candidate evaluation, Pareto frontier trade-off optimization, and explainable grid dispatch"
+        subtitle="Constraint-first, carbon-primary candidate evaluation with lexicographic ranking (carbon → cost → earliest start) and explainable grid dispatch"
         actions={
           <button className="btn btn-secondary" onClick={fetchJobs} title="Sync workload queue">
             <RefreshCw size={14} />
@@ -157,6 +157,36 @@ export const SchedulingPage: React.FC = () => {
       />
 
       {errorMessage && <InlineBanner variant="error">{errorMessage}</InlineBanner>}
+
+      {/* Decision policy — matches app/decide/scheduler.py exactly, no frontend math */}
+      <GlassCard title="Decision Policy" subtitle="Lexicographic ranking — no arbitrary weights, no blended score">
+        <div style={{ display: 'flex', alignItems: 'center', overflowX: 'auto', gap: '0.5rem', padding: '0.25rem 0' }}>
+          {[
+            { label: 'Hard Constraints', detail: 'Deadline/SLA, region, CPU/RAM/GPU, carbon budget (if set)' },
+            { label: 'Feasible Candidates', detail: 'Windows passing every hard constraint' },
+            { label: 'Lowest Carbon Emissions', detail: 'Primary ranking key' },
+            { label: 'Lowest Electricity Cost', detail: 'Secondary tie-breaker' },
+            { label: 'Earliest Start Time', detail: 'Final deterministic tie-breaker' },
+          ].map((step, idx, arr) => (
+            <React.Fragment key={step.label}>
+              <div
+                style={{
+                  flex: '1 1 0',
+                  minWidth: '150px',
+                  background: 'var(--bg-surface-elevated)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '0.65rem 0.75rem',
+                }}
+              >
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: idx < 2 ? '#38bdf8' : '#10b981' }}>{step.label}</div>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>{step.detail}</div>
+              </div>
+              {idx < arr.length - 1 && <ArrowRight size={16} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />}
+            </React.Fragment>
+          ))}
+        </div>
+      </GlassCard>
 
       {/* Control Configuration Bar */}
       <GlassCard title="Optimizer Workload Selector">

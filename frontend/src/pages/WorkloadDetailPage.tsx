@@ -356,7 +356,7 @@ export const WorkloadDetailPage: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)' }}>
               <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Resource Requests</span>
               <span style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}>
-                {job.cpu_request || '500m'} CPU • {job.memory_request || '512Mi'} RAM
+                {job.cpu_request || '—'} CPU • {job.memory_request || '—'} RAM
               </span>
             </div>
 
@@ -399,7 +399,7 @@ export const WorkloadDetailPage: React.FC = () => {
       {/* Kubernetes Execution & Container Logs */}
       <GlassCard
         title="Kubernetes Pod Telemetry & Logs"
-        subtitle={execution ? `Job: ${execution.kubernetes_job_name || 'k8s-job'} • Pod: ${execution.pod_name || 'greenshift-runner'} • Namespace: ${execution.kubernetes_namespace || execution.namespace || 'greenshift'}` : 'Execution status'}
+        subtitle={execution ? `Job: ${execution.kubernetes_job_name || '—'} • Pod: ${execution.pod_name || '—'} • Namespace: ${execution.kubernetes_namespace || execution.namespace || '—'}` : 'Execution status'}
         actions={
           execution?.pod_name ? (
             <button className="btn btn-secondary btn-sm" onClick={() => handleCopyLogs([`Pod: ${execution.pod_name}`, `Status: ${execution.k8s_status || execution.gs_status}`, `Planned Start: ${execution.planned_start}`])}>
@@ -414,7 +414,7 @@ export const WorkloadDetailPage: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', fontSize: '0.8rem' }}>
               <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
                 <span style={{ color: 'var(--text-muted)' }}>Kubernetes Status: </span>
-                <span style={{ fontWeight: 700, color: '#10b981' }}>{execution.k8s_status || execution.gs_status || 'DISPATCHED'}</span>
+                <span style={{ fontWeight: 700, color: '#10b981' }}>{execution.k8s_status || execution.gs_status || 'DATA UNAVAILABLE'}</span>
               </div>
               <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
                 <span style={{ color: 'var(--text-muted)' }}>Planned Start: </span>
@@ -440,9 +440,9 @@ export const WorkloadDetailPage: React.FC = () => {
                 overflowY: 'auto',
               }}
             >
-              <div>[k8s-event] Workload assigned to namespace: {execution.kubernetes_namespace || 'greenshift'}</div>
-              <div>[k8s-event] Pod spec: image={job.container_image}, cpu={job.cpu_request || '500m'}, memory={job.memory_request || '512Mi'}</div>
-              <div>[k8s-status] Current state: {execution.k8s_status || execution.gs_status || 'READY'}</div>
+              <div>[k8s-event] Workload assigned to namespace: {execution.kubernetes_namespace || 'DATA UNAVAILABLE'}</div>
+              <div>[k8s-event] Pod spec: image={job.container_image}, cpu={job.cpu_request || '—'}, memory={job.memory_request || '—'}</div>
+              <div>[k8s-status] Current state: {execution.k8s_status || execution.gs_status || 'DATA UNAVAILABLE'}</div>
               {execution.actual_start && <div>[k8s-telemetry] Pod execution initiated at {new Date(execution.actual_start).toISOString()}</div>}
               {execution.actual_end && <div>[k8s-telemetry] Pod execution concluded at {new Date(execution.actual_end).toISOString()}</div>}
               {execution.error_message && <div style={{ color: '#ef4444' }}>[k8s-error] {execution.error_message}</div>}

@@ -7,7 +7,7 @@ interface AuthContextType {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (username: string, password?: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   hasRole: (roles: UserRole[]) => boolean;
   isAdmin: boolean;
@@ -17,17 +17,6 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-// Known seed credentials for the existing GreenShift backend.
-// GreenShift has exactly three roles: PLATFORM_ADMIN, COMPANY_ADMIN, COMPANY_USER.
-export const PRESET_CREDENTIALS = [
-  { key: 'admin', label: 'Platform Admin', username: 'admin', password: 'admin123', role: 'PLATFORM_ADMIN', team: 'platform' },
-  { key: 'company_admin', label: 'Company Admin', username: 'company_admin', password: 'admin123', role: 'COMPANY_ADMIN', team: 'team-acme' },
-  { key: 'company_user', label: 'Company User', username: 'company_user', password: 'user123', role: 'COMPANY_USER', team: 'team-acme' },
-  { key: 'lead_a', label: 'Company Admin (Lead A)', username: 'lead_a', password: 'lead123', role: 'COMPANY_ADMIN', team: 'team-a' },
-  { key: 'operator', label: 'Company User (Operator)', username: 'operator', password: 'operator123', role: 'COMPANY_USER', team: 'operations' },
-  { key: 'viewer', label: 'Company User (Viewer)', username: 'viewer', password: 'viewer123', role: 'COMPANY_USER', team: 'general' },
-];
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [token, setToken] = useState<string | null>(() => {
@@ -82,8 +71,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => window.removeEventListener('greenshift:auth-expired', handleAuthExpired);
   }, [token, refreshUser, logout]);
 
-  // Authenticate user against real backend API
-  const login = async (username: string, password = 'password123') => {
+  // Authenticate user against real backend API. Credentials are the only
+  // thing that determines identity/role — there is no client-side default
+  // or bypass path here.
+  const login = async (username: string, password: string) => {
     setIsLoading(true);
     try {
       const res: AuthTokenResponse = await authApi.login({ username, password });

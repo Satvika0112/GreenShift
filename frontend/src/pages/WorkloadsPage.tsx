@@ -1,16 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Layers,
   Search,
-  Filter,
   PlusCircle,
   Cpu,
   Send,
   XCircle,
   Eye,
   RefreshCw,
-  UploadCloud,
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
@@ -19,7 +16,7 @@ import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
 import { InlineBanner } from '../components/common/InlineBanner';
 import { workloadsApi, schedulingApi, dispatchApi, sustainabilityApi } from '../api/endpoints';
-import { Job, JobStatus } from '../types/api';
+import { Job } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 
 export const WorkloadsPage: React.FC = () => {
@@ -33,7 +30,6 @@ export const WorkloadsPage: React.FC = () => {
   const [availableRegions, setAvailableRegions] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [isBulkLoading, setIsBulkLoading] = useState(false);
 
   const fetchJobs = async () => {
     setIsLoading(true);
@@ -65,20 +61,6 @@ export const WorkloadsPage: React.FC = () => {
   useEffect(() => {
     fetchJobs();
   }, [user]);
-
-  const handleBulkLoad = async () => {
-    setIsBulkLoading(true);
-    try {
-      const res = await workloadsApi.bulkLoadFromCsv();
-      setActionMessage({ type: 'success', text: `Loaded ${res.jobs_loaded} workloads from master dataset into database.` });
-      await fetchJobs();
-    } catch (err: any) {
-      const msg = err.response?.data?.detail || 'Bulk load failed.';
-      setActionMessage({ type: 'error', text: msg });
-    } finally {
-      setIsBulkLoading(false);
-    }
-  };
 
   const handleTriggerSchedule = async (jobId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -142,15 +124,6 @@ export const WorkloadsPage: React.FC = () => {
         subtitle="Manage and monitor batch compute workloads, execution states, and carbon constraints"
         actions={
           <div style={{ display: 'flex', gap: '0.6rem' }}>
-            <button
-              className="btn btn-secondary"
-              onClick={handleBulkLoad}
-              disabled={isBulkLoading}
-              title="Bulk load standard workload dataset into database"
-            >
-              <UploadCloud size={14} className={isBulkLoading ? 'animate-spin' : ''} />
-              <span>{isBulkLoading ? 'Loading...' : 'Bulk Load CSV'}</span>
-            </button>
             <button className="btn btn-secondary" onClick={fetchJobs} disabled={isLoading}>
               <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
               <span>Refresh</span>
@@ -250,11 +223,11 @@ export const WorkloadsPage: React.FC = () => {
           <LoadingSkeleton rows={6} />
         ) : filteredJobs.length === 0 ? (
           <EmptyState
-            title="No Workloads Found"
-            description={jobs.length === 0 ? "Your team database has no active workloads yet." : "No workloads match the current search or filters."}
+            title={jobs.length === 0 ? "No Workloads Yet" : "No Workloads Found"}
+            description={jobs.length === 0 ? "Your team has not submitted any workloads." : "No workloads match the current search or filters."}
             action={jobs.length === 0 ? {
-              label: "Bulk Load Workload Dataset",
-              onClick: handleBulkLoad,
+              label: "Submit Workload",
+              onClick: () => navigate('/submit'),
             } : undefined}
           />
         ) : (
@@ -285,7 +258,7 @@ export const WorkloadsPage: React.FC = () => {
                           {job.job_id}
                         </div>
                         <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                          {job.job_type || 'BATCH'} • Priority {job.priority ?? 5}
+                          {job.job_type || 'BATCH'}{job.priority !== undefined && job.priority !== null ? ` • Priority ${job.priority}` : ''}
                         </div>
                       </div>
                     </td>
@@ -302,7 +275,7 @@ export const WorkloadsPage: React.FC = () => {
                         {job.runtime_minutes}m • {job.power_kw}kW
                       </div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                        {job.cpu_request || '500m'} CPU • {job.memory_request || '512Mi'}
+                        {job.cpu_request || '—'} CPU • {job.memory_request || '—'}
                       </div>
                     </td>
                     <td>

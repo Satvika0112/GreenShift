@@ -78,7 +78,6 @@ The GreenShift Enterprise Control Plane is a high-performance React 19 + TypeScr
 | Variable | Default | Description |
 |---|---|---|
 | `VITE_API_BASE_URL` | *(empty)* | Base URL for API requests. Keep empty for Vite/Nginx proxy. |
-| `VITE_ENABLE_DEMO_PERSONAS` | `true` (in dev) | Enables header persona switcher for role-testing. |
 
 ---
 

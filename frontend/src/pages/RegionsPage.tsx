@@ -180,10 +180,10 @@ export const RegionsPage: React.FC = () => {
           }}
         >
           {regions.map((r) => {
-            const carbonVal = r.carbonGco2Kwh ?? 380;
-            const isClean = carbonVal < 150;
-            const isModerate = carbonVal >= 150 && carbonVal < 350;
-            const statusColor = isClean ? '#10b981' : isModerate ? '#f59e0b' : '#ef4444';
+            const carbonVal = r.carbonGco2Kwh;
+            const isClean = carbonVal !== undefined && carbonVal < 150;
+            const isModerate = carbonVal !== undefined && carbonVal >= 150 && carbonVal < 350;
+            const statusColor = carbonVal === undefined ? 'var(--text-muted)' : isClean ? '#10b981' : isModerate ? '#f59e0b' : '#ef4444';
 
             return (
               <GlassCard key={r.region_id}>

@@ -82,7 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         { to: '/impact', label: 'Impact Reports', icon: TrendingUp },
         { to: '/audit', label: 'Audit & Trust Chain', icon: ShieldCheck },
-        { to: '/alerts', label: 'Alerts & Incidents', icon: AlertTriangle },
+        { to: '/alerts', label: 'Notifications', icon: AlertTriangle },
       ],
     },
     {
@@ -181,10 +181,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               fontSize: '0.75rem',
               fontWeight: 700,
               fontFamily: 'var(--font-mono)',
-              color: '#38bdf8',
+              color: user?.team_id ? '#38bdf8' : 'var(--text-muted)',
             }}
           >
-            {user?.team_id || 'engineering'}
+            {user?.team_id || 'NOT PROVIDED BY BACKEND'}
           </span>
         </div>
       </div>
@@ -297,10 +297,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-              {user?.username || 'admin'}
+              {user?.username || '—'}
             </span>
             <span style={{ fontSize: '0.68rem', color: '#10b981', fontWeight: 600 }}>
-              {user?.role || 'COMPANY_USER'}
+              {user?.role || '—'}
             </span>
           </div>
         </div>

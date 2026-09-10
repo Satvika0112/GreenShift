@@ -23,7 +23,21 @@ from sqlalchemy.orm import Session
 
 from app.shared.config import settings
 from app.shared.database import get_db
-from app.shared.models import UserORM, UserRole, APIKeyORM
+from app.shared.models import UserORM, UserRole, APIKeyORM, TenantORM
+
+
+def user_company_is_inactive(user: UserORM) -> bool:
+    """
+    True only when the user belongs to a tenant/company that has been
+    explicitly deactivated (TenantORM.is_active is False). Users with no
+    tenant_id (e.g. Platform Admins) are never blocked by this check.
+    """
+    if not getattr(user, "tenant_id", None):
+        return False
+    tenant = getattr(user, "tenant", None)
+    if tenant is None:
+        return False
+    return not tenant.is_active
 
 # OAuth2 / HTTPBearer scheme
 http_bearer = HTTPBearer(auto_error=False)
@@ -198,6 +212,11 @@ async def get_current_identity(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="User account registration was declined",
                         )
+                    if user_company_is_inactive(user):
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Company account is inactive",
+                        )
 
                     role_enum = user.role if isinstance(user.role, UserRole) else UserRole(str(user.role))
                     return AuthenticatedIdentity(
@@ -345,6 +364,11 @@ def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account registration was declined",
         )
+    if user_company_is_inactive(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Company account is inactive",
+        )
 
     return user
 
@@ -435,8 +459,18 @@ def require_internal_service_token(
     return x_internal_key
 
 
+def should_seed_demo_users(environment: Optional[str]) -> bool:
+    """True everywhere except production — see seed_default_users()."""
+    return (environment or "").strip().lower() != "production"
+
+
 def seed_default_users(db: Session) -> None:
-    """Ensure standard system companies and users exist for immediate authentication."""
+    """
+    Development/test-only convenience accounts (well-known usernames and weak
+    passwords, published in this source file). Called only from non-production
+    startup paths — see app.api.main.lifespan — and must never run in a
+    production environment. Not exposed anywhere in the frontend UI.
+    """
     from app.shared.models import TenantORM
     default_tenants = [
         ("tenant-default", "GreenShift Platform"),

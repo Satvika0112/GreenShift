@@ -84,12 +84,14 @@ export const CarbonCostPage: React.FC = () => {
         tariffPoints.forEach((t: any, idx: number) => {
           const hourLabel = t.time_interval || `${String(idx).padStart(2, '0')}:00`;
           const cPoint = carbonPoints[idx] || carbonPoints[idx % (carbonPoints.length || 1)];
-          points.push({
-            hour: hourLabel,
-            carbon_intensity: cPoint?.carbon_gco2_kwh ?? 380,
-            tariff_price: t.price_per_kwh_usd || t.effective_price || 0.05,
-            is_fallback: cPoint?.is_fallback,
-          });
+          if (cPoint?.carbon_gco2_kwh !== undefined && (t.price_per_kwh_usd !== undefined || t.effective_price !== undefined)) {
+            points.push({
+              hour: hourLabel,
+              carbon_intensity: cPoint.carbon_gco2_kwh,
+              tariff_price: t.price_per_kwh_usd ?? t.effective_price,
+              is_fallback: cPoint?.is_fallback,
+            });
+          }
         });
       } else if (carbonPoints.length > 0) {
         carbonPoints.forEach((c: any, idx: number) => {
@@ -168,8 +170,8 @@ export const CarbonCostPage: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
         <div style={{ background: 'var(--bg-surface)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Current Marginal Carbon Intensity</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#10b981', fontFamily: 'var(--font-mono)', marginTop: '0.2rem' }}>
-            {currentCarbon?.carbon_gco2_kwh !== undefined ? `${currentCarbon.carbon_gco2_kwh.toFixed(0)} gCO₂/kWh` : '380 gCO₂/kWh'}
+          <div style={{ fontSize: '1.6rem', fontWeight: 800, color: currentCarbon?.carbon_gco2_kwh !== undefined ? '#10b981' : 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '0.2rem' }}>
+            {currentCarbon?.carbon_gco2_kwh !== undefined ? `${currentCarbon.carbon_gco2_kwh.toFixed(0)} gCO₂/kWh` : 'DATA UNAVAILABLE'}
           </div>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
             Feed: {currentCarbon?.source || (currentCarbon?.is_fallback ? 'Controlled Fallback' : 'Electricity Maps Live')}
@@ -178,10 +180,10 @@ export const CarbonCostPage: React.FC = () => {
 
         <div style={{ background: 'var(--bg-surface)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Active Electricity Tariff</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#38bdf8', fontFamily: 'var(--font-mono)', marginTop: '0.2rem' }}>
+          <div style={{ fontSize: '1.6rem', fontWeight: 800, color: currentTariff?.current_tariff?.price_per_kwh_usd !== undefined ? '#38bdf8' : 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '0.2rem' }}>
             {currentTariff?.current_tariff?.price_per_kwh_usd !== undefined
               ? `$${currentTariff.current_tariff.price_per_kwh_usd.toFixed(4)}/kWh`
-              : '$0.0650/kWh'}
+              : 'DATA UNAVAILABLE'}
           </div>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
             Local Effective Rate: {currentTariff?.current_tariff?.effective_price ?? '--'} {currentTariff?.currency || 'INR'}

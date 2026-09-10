@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useAuth, PRESET_CREDENTIALS } from '../../context/AuthContext';
-import { UserCheck, Shield, LogOut, Check, Activity, RefreshCw, Menu } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import { LogOut, Activity, RefreshCw, Menu } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { NotificationBell } from './NotificationBell';
 import { monitoringApi } from '../../api/endpoints';
@@ -20,9 +20,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleNav,
   isNavOpen = false,
 }) => {
-  const { user, login, logout, isAuthenticated } = useAuth();
-  const [showRoleMenu, setShowRoleMenu] = useState(false);
-  const [switching, setSwitching] = useState(false);
+  const { user, logout, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const isNarrow = useMediaQuery('(max-width: 900px)');
 
@@ -37,19 +35,6 @@ export const Header: React.FC<HeaderProps> = ({
     retry: false,
   });
   const isLive = liveStatus?.status === 'alive';
-
-  const handleSwitchUser = async (cred: typeof PRESET_CREDENTIALS[0]) => {
-    setSwitching(true);
-    try {
-      await login(cred.username, cred.password);
-      setShowRoleMenu(false);
-      window.location.reload();
-    } catch (err) {
-      alert(`Failed to switch to ${cred.username}: backend auth error`);
-    } finally {
-      setSwitching(false);
-    }
-  };
 
   const handleLogout = () => {
     logout();
@@ -130,88 +115,6 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         <NotificationBell />
-
-        {/* Development Persona Switcher (Authenticates against backend) — hidden
-            on narrow screens where its 260px dropdown would overflow the viewport. */}
-        {!isNarrow && (import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO_PERSONAS === 'true') && (
-          <div style={{ position: 'relative' }}>
-            <button
-              className="btn btn-secondary btn-sm"
-              style={{
-                borderColor: 'rgba(56, 189, 248, 0.3)',
-                background: 'rgba(56, 189, 248, 0.05)',
-                color: '#38bdf8',
-                gap: '0.4rem',
-              }}
-              onClick={() => setShowRoleMenu(!showRoleMenu)}
-              disabled={switching}
-            >
-              <Shield size={14} />
-              <span>Switch Role / Team</span>
-            </button>
-
-            {showRoleMenu && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '120%',
-                  right: 0,
-                  width: '260px',
-                  background: 'var(--bg-surface-elevated)',
-                  border: '1px solid var(--border-strong)',
-                  borderRadius: 'var(--radius-md)',
-                  boxShadow: 'var(--shadow-lg)',
-                  padding: '0.5rem',
-                  zIndex: 50,
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: '0.7rem',
-                    fontWeight: 700,
-                    color: 'var(--text-muted)',
-                    textTransform: 'uppercase',
-                    padding: '0.35rem 0.5rem',
-                    letterSpacing: '0.04em',
-                  }}
-                >
-                  Switch Persona (Backend Authenticated)
-                </div>
-                {PRESET_CREDENTIALS.map((cred) => {
-                  const isSelected = user?.username === cred.username;
-                  return (
-                    <button
-                      key={cred.key}
-                      onClick={() => handleSwitchUser(cred)}
-                      disabled={switching}
-                      style={{
-                        width: '100%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '0.45rem 0.6rem',
-                        borderRadius: 'var(--radius-sm)',
-                        border: 'none',
-                        background: isSelected ? 'rgba(16, 185, 129, 0.1)' : 'transparent',
-                        color: isSelected ? '#10b981' : 'var(--text-primary)',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>{cred.username}</div>
-                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                          {cred.role} • {cred.team}
-                        </div>
-                      </div>
-                      {isSelected && <Check size={14} color="#10b981" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Current User Info */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginLeft: '0.5rem' }}>

@@ -33,6 +33,7 @@ from app.shared.auth import (
     require_roles,
     is_platform_admin,
     is_company_admin,
+    user_company_is_inactive,
 )
 from app.trust.service import (
     record_login_success,
@@ -276,6 +277,16 @@ def login(
             detail="User account registration was declined",
         )
 
+    if user_company_is_inactive(user):
+        try:
+            record_login_failure(db, username_attempted=body.username, reason="Company account is inactive", ip_address=client_ip)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Company account is inactive",
+        )
+
     role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
     tenant_id = getattr(user, "tenant_id", None)
     company_name = user.company_name if hasattr(user, "company_name") else None
@@ -381,6 +392,16 @@ def login_email(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account registration was declined",
+        )
+
+    if user_company_is_inactive(user):
+        try:
+            record_login_failure(db, username_attempted=body.email, reason="Company account is inactive", ip_address=client_ip)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Company account is inactive",
         )
 
     role_str = user.role.value if hasattr(user.role, "value") else str(user.role)

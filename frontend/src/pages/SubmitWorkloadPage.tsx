@@ -67,7 +67,7 @@ export const SubmitWorkloadPage: React.FC = () => {
 
   const [formData, setFormData] = useState({
     name: '',
-    team_id: user?.team_id || 'engineering',
+    team_id: user?.team_id || '',
     region: 'IN-TG',
     deadline: defaultDeadline,
     runtime_minutes: 120,
@@ -112,16 +112,21 @@ export const SubmitWorkloadPage: React.FC = () => {
     }));
   };
 
-  // Instant energy & carbon estimation
+  // Energy consumption is a direct physical computation (power x time) and safe
+  // to show client-side. Carbon emissions are NOT estimated here — they depend on
+  // real regional grid intensity the scheduler looks up server-side; fabricating
+  // a carbon number with an arbitrary multiplier would misrepresent the backend.
   const estimatedKwh = (formData.power_kw * (formData.runtime_minutes / 60)).toFixed(2);
-  const estimatedBaselineCarbonKg = (parseFloat(estimatedKwh) * 0.40).toFixed(2);
-  const estimatedGreenCarbonKg = (parseFloat(estimatedKwh) * 0.12).toFixed(2);
-  const estimatedCarbonSavingsPct = Math.round((1 - parseFloat(estimatedGreenCarbonKg) / parseFloat(estimatedBaselineCarbonKg)) * 100);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name.trim()) {
       setErrorMsg('Workload name is required');
+      return;
+    }
+    const teamId = user?.team_id || formData.team_id;
+    if (!teamId) {
+      setErrorMsg('Your account has no team assigned. Contact your administrator before submitting a workload.');
       return;
     }
 
@@ -139,7 +144,7 @@ export const SubmitWorkloadPage: React.FC = () => {
 
       const input: CreateJobInput = {
         name: formData.name.trim(),
-        team_id: user?.team_id || formData.team_id || 'engineering',
+        team_id: teamId,
         region: formData.region,
         deadline: deadlineDate.toISOString(),
         runtime_minutes: Number(formData.runtime_minutes),
@@ -387,7 +392,9 @@ export const SubmitWorkloadPage: React.FC = () => {
           </div>
         </GlassCard>
 
-        {/* Live Estimation Card */}
+        {/* Energy consumption is a direct physical computation; carbon and cost are
+            intentionally not estimated here — the scheduler computes them from real
+            grid data after submission (see the Scheduling page). */}
         <div
           style={{
             background: 'var(--bg-surface)',
@@ -411,22 +418,8 @@ export const SubmitWorkloadPage: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-            <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Baseline Carbon Projection</div>
-              <div style={{ fontSize: '1rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#ef4444' }}>
-                ~{estimatedBaselineCarbonKg} kg CO₂
-              </div>
-            </div>
-
-            <div style={{ width: '1px', height: '24px', background: 'var(--border-default)' }} />
-
-            <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>GreenShift Target Reduction</div>
-              <div style={{ fontSize: '1rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#10b981' }}>
-                ▼ ~{estimatedCarbonSavingsPct}% Avoidance
-              </div>
-            </div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', maxWidth: '320px', textAlign: 'right' }}>
+            Carbon emissions and electricity cost depend on live regional grid data and are computed by the scheduler after submission — run the optimizer from the Scheduling page to see them.
           </div>
         </div>
 
