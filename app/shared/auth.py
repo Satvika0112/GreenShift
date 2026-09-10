@@ -119,7 +119,7 @@ class AuthenticatedIdentity:
     username: str = ""
     tenant_id: Optional[str] = None
     company_name: Optional[str] = None
-    role: UserRole = UserRole.USER
+    role: UserRole = UserRole.COMPANY_USER
     approval_status: str = "APPROVED"
     auth_method: str = "jwt"   # "jwt" or "api_key"
 
@@ -130,10 +130,7 @@ def is_platform_admin(identity_or_user: Any) -> bool:
         return False
     role = getattr(identity_or_user, "role", None)
     role_val = role.value if hasattr(role, "value") else str(role)
-    tenant_id = getattr(identity_or_user, "tenant_id", None)
-    return role_val in (UserRole.PLATFORM_ADMIN.value, UserRole.ADMIN.value) and (
-        tenant_id is None or role_val == UserRole.PLATFORM_ADMIN.value
-    )
+    return role_val == UserRole.PLATFORM_ADMIN.value
 
 
 def is_company_admin(identity_or_user: Any) -> bool:
@@ -144,14 +141,11 @@ def is_company_admin(identity_or_user: Any) -> bool:
         return True
     role = getattr(identity_or_user, "role", None)
     role_val = role.value if hasattr(role, "value") else str(role)
-    return role_val in (
-        UserRole.COMPANY_ADMIN.value,
-        UserRole.ADMIN.value,
-    )
+    return role_val == UserRole.COMPANY_ADMIN.value
 
 
 def is_company_member(identity_or_user: Any) -> bool:
-    """True if entity is a member of the company (or Platform Admin)."""
+    """True if entity is an authenticated application user (any of the three roles)."""
     if not identity_or_user:
         return False
     if is_platform_admin(identity_or_user):
@@ -160,12 +154,7 @@ def is_company_member(identity_or_user: Any) -> bool:
     role_val = role.value if hasattr(role, "value") else str(role)
     return role_val in (
         UserRole.COMPANY_USER.value,
-        UserRole.USER.value,
-        UserRole.OPERATOR.value,
-        UserRole.VIEWER.value,
         UserRole.COMPANY_ADMIN.value,
-        UserRole.TEAM_LEAD.value,
-        UserRole.ADMIN.value,
     )
 
 
@@ -303,68 +292,6 @@ async def require_company_member(
     return identity
 
 
-def require_role(*allowed_roles: UserRole):
-    """
-    Dependency factory enforcing role-based access control via AuthenticatedIdentity.
-    Returns None in dev mode (AUTH_ENABLED=false).
-    """
-    allowed_values = {r.value if isinstance(r, UserRole) else str(r) for r in allowed_roles}
-
-    async def checker(
-        identity: Optional[AuthenticatedIdentity] = Depends(get_current_identity),
-    ) -> Optional[AuthenticatedIdentity]:
-        if identity is None:
-            return None  # Dev mode passthrough
-
-        role_val = identity.role.value if hasattr(identity.role, "value") else str(identity.role)
-
-        # Platform admin always passes
-        if is_platform_admin(identity):
-            return identity
-
-        # Company admin passes company admin and user checks
-        if is_company_admin(identity) and any(
-            r in allowed_values
-            for r in (
-                UserRole.COMPANY_ADMIN.value,
-                UserRole.TEAM_LEAD.value,
-                UserRole.COMPANY_USER.value,
-                UserRole.USER.value,
-                UserRole.OPERATOR.value,
-                UserRole.VIEWER.value,
-            )
-        ):
-            return identity
-
-        # Company user passes user and viewer checks
-        if is_company_member(identity) and any(
-            r in allowed_values
-            for r in (
-                UserRole.COMPANY_USER.value,
-                UserRole.USER.value,
-                UserRole.VIEWER.value,
-            )
-        ):
-            return identity
-
-        if role_val not in allowed_values:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"Role '{role_val}' is not authorized. "
-                    f"Required: {[r.value if hasattr(r, 'value') else str(r) for r in allowed_roles]}"
-                ),
-            )
-        return identity
-
-    return checker
-
-
-# Convenience role dependency singletons
-require_admin    = require_role(UserRole.ADMIN, UserRole.PLATFORM_ADMIN)
-require_operator = require_role(UserRole.ADMIN, UserRole.PLATFORM_ADMIN, UserRole.OPERATOR, UserRole.COMPANY_ADMIN)
-require_user     = require_role(UserRole.ADMIN, UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER, UserRole.OPERATOR, UserRole.USER, UserRole.TEAM_LEAD)
-require_viewer   = require_role(UserRole.ADMIN, UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER, UserRole.OPERATOR, UserRole.USER, UserRole.TEAM_LEAD, UserRole.VIEWER)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -443,26 +370,17 @@ def require_roles(*allowed_roles: UserRole) -> Callable:
         if is_platform_admin(current_user):
             return current_user
 
-        # Company Admin passes company admin and user checks
+        # Company Admin passes any check that isn't Platform-Admin-exclusive
+        # (i.e. the allow-list names COMPANY_ADMIN or COMPANY_USER).
         if is_company_admin(current_user) and any(
             r in allowed_values
-            for r in (
-                UserRole.COMPANY_ADMIN.value,
-                UserRole.TEAM_LEAD.value,
-                UserRole.COMPANY_USER.value,
-                UserRole.USER.value,
-                UserRole.OPERATOR.value,
-                UserRole.VIEWER.value,
-            )
+            for r in (UserRole.COMPANY_ADMIN.value, UserRole.COMPANY_USER.value)
         ):
             return current_user
 
-        # Ordinary company members (COMPANY_USER/USER/VIEWER/OPERATOR) fall
-        # through to the exact-match check below: they pass only when their
-        # own specific role is in the endpoint's allow-list. (A prior branch
-        # here incorrectly granted access to any company member — including
-        # VIEWER — whenever the allow-list contained ANY of COMPANY_USER/
-        # USER/VIEWER for anyone, regardless of the caller's actual role.)
+        # Company User falls through to the exact-match check below: it
+        # passes only when its own specific role is in the endpoint's
+        # allow-list.
         if user_role_val not in allowed_values:
             try:
                 from app.trust.service import record_access_denied
@@ -539,8 +457,8 @@ def seed_default_users(db: Session) -> None:
         ("company_user", "company_user@acme.com", "user123", UserRole.COMPANY_USER, "team-acme", "tenant-acme"),
         ("lead_a", "lead_a@greenshift.io", "lead123", UserRole.COMPANY_ADMIN, "team-a", "tenant-default"),
         ("lead_b", "lead_b@greenshift.io", "lead123", UserRole.COMPANY_ADMIN, "team-b", "tenant-default"),
-        ("operator", "operator@greenshift.io", "operator123", UserRole.OPERATOR, "operations", "tenant-default"),
-        ("viewer", "viewer@greenshift.io", "viewer123", UserRole.VIEWER, "general", "tenant-default"),
+        ("operator", "operator@greenshift.io", "operator123", UserRole.COMPANY_USER, "operations", "tenant-default"),
+        ("viewer", "viewer@greenshift.io", "viewer123", UserRole.COMPANY_USER, "general", "tenant-default"),
     ]
     for username, email, pwd, role, team, tenant_id in default_users:
         existing = db.query(UserORM).filter(UserORM.username == username).first()

@@ -144,7 +144,7 @@ def main():
         st.markdown("<hr style='border-color:#0E383C;margin:14px 0 10px 0;'>", unsafe_allow_html=True)
         st.caption("Authenticated Identity")
         _curr_user = st.session_state.get("username", "user")
-        _curr_role = st.session_state.get("user_role", "VIEWER")
+        _curr_role = st.session_state.get("user_role", "COMPANY_USER")
         _curr_team = st.session_state.get("team_id") or "All"
         st.markdown(
             f'<div style="font-size:0.82rem;color:#94A3B8;line-height:1.7;">'
@@ -189,7 +189,7 @@ def main():
     with hc3:
         st.markdown(
             f'<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;padding-top:6px;">'
-            f'<span class="gs-badge green-badge">{st.session_state.get("user_role","VIEWER")}</span>'
+            f'<span class="gs-badge green-badge">{st.session_state.get("user_role","COMPANY_USER")}</span>'
             f'<span style="font-size:0.85rem;font-weight:600;color:#FFFFFF;">{st.session_state.get("username","user")}</span>'
             f'</div>',
             unsafe_allow_html=True,

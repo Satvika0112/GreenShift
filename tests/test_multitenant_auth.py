@@ -1,14 +1,18 @@
 """
 GreenShift Phase 1 Multi-Tenant Security Test Suite
 
-28 tests covering:
+Covers:
  1. Auth disabled dev mode — endpoints accessible without token
  2. Production safety startup checks (RULE 1 & 2)
  3. JWT login — valid, wrong password, inactive user, expired token
- 4. API key auth — valid, invalid, revoked, ADMIN role rejected (RULE 3)
- 5. RBAC — viewer/user/operator/admin access matrix
+ 4. API key auth — valid, invalid, revoked, admin roles rejected (RULE 3)
+ 5. RBAC — PLATFORM_ADMIN / COMPANY_ADMIN / COMPANY_USER access matrix
  6. Tenant isolation — 404 for cross-tenant, never 403
  7. Rate limiting behavior
+
+GreenShift supports exactly three application roles: PLATFORM_ADMIN,
+COMPANY_ADMIN, COMPANY_USER (see app.shared.models.UserRole). Legacy roles
+(ADMIN, TEAM_LEAD, OPERATOR, USER, VIEWER) no longer exist.
 """
 
 import hashlib
@@ -234,7 +238,7 @@ class TestJWTLogin:
     def test_login_email_valid_credentials(self, client, db):
         """Valid email+password login returns JWT with tenant_id."""
         make_tenant(db)
-        user = make_user(db, "tenant-a", "user_a@test.com", "VIEWER")
+        user = make_user(db, "tenant-a", "user_a@test.com", "COMPANY_USER")
 
         with patch("app.shared.database.SessionLocal", return_value=db):
             resp = client.post("/auth/login-email", json={
@@ -250,7 +254,7 @@ class TestJWTLogin:
     def test_login_wrong_password_returns_401(self, client, db):
         """Wrong password must return 401."""
         make_tenant(db)
-        user = make_user(db, "tenant-a", "wrongpwd@test.com", "VIEWER")
+        user = make_user(db, "tenant-a", "wrongpwd@test.com", "COMPANY_USER")
 
         with patch("app.shared.database.SessionLocal", return_value=db):
             resp = client.post("/auth/login", json={
@@ -267,7 +271,7 @@ class TestJWTLogin:
         expired_token = create_access_token(
             user_id=1,
             username="testuser",
-            role="VIEWER",
+            role="COMPANY_USER",
             expires_delta=timedelta(seconds=-1),  # Already expired
         )
         with pytest.raises(Exception):  # HTTPException or jwt.ExpiredSignatureError
@@ -278,12 +282,12 @@ class TestJWTLogin:
         token = create_access_token(
             user_id=99,
             username="alice",
-            role="ADMIN",
+            role="PLATFORM_ADMIN",
             tenant_id="tenant-xyz",
         )
         payload = jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
         assert payload["tenant_id"] == "tenant-xyz"
-        assert payload["role"] == "ADMIN"
+        assert payload["role"] == "PLATFORM_ADMIN"
         assert payload["user_id"] == 99
 
     def test_jwt_without_tenant_id_is_valid(self):
@@ -291,7 +295,7 @@ class TestJWTLogin:
         token = create_access_token(
             user_id=1,
             username="legacy_user",
-            role="VIEWER",
+            role="COMPANY_USER",
             tenant_id=None,
         )
         payload = jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
@@ -303,35 +307,36 @@ class TestJWTLogin:
 class TestAPIKeyAuth:
 
     def test_api_key_rule3_admin_role_rejected(self, client, db):
-        """RULE 3: POST /admin/api-keys with role=ADMIN must return 400."""
+        """RULE 3: POST /admin/api-keys with role=PLATFORM_ADMIN must return 400."""
         from app.shared.models import UserRole
         make_tenant(db, "tenant-b", "Tenant B")
-        admin = make_user(db, "tenant-b", "admin_b@test.com", UserRole.ADMIN)
+        admin = make_user(db, "tenant-b", "admin_b@test.com", UserRole.PLATFORM_ADMIN)
 
         with patch.object(settings, "auth_enabled", True):
             headers = jwt_headers(admin)
             with patch("app.shared.database.SessionLocal", return_value=db):
                 resp = client.post(
                     "/admin/api-keys",
-                    json={"role": "ADMIN", "label": "bad key"},
+                    json={"role": "PLATFORM_ADMIN", "label": "bad key"},
                     headers=headers,
                 )
             # In dev mode (auth_enabled=False by default in test), the route still enforces RULE 3
             # even without auth — test the business logic directly
         from app.shared.models import API_KEY_ALLOWED_ROLES, UserRole as UR
-        assert UR.ADMIN not in API_KEY_ALLOWED_ROLES
+        assert UR.PLATFORM_ADMIN not in API_KEY_ALLOWED_ROLES
 
     def test_api_key_allowed_roles_do_not_include_admin(self):
-        """API_KEY_ALLOWED_ROLES constant must not contain ADMIN."""
+        """API_KEY_ALLOWED_ROLES constant must not contain an administrative role."""
         from app.shared.models import API_KEY_ALLOWED_ROLES, UserRole
-        assert UserRole.ADMIN not in API_KEY_ALLOWED_ROLES
+        assert UserRole.PLATFORM_ADMIN not in API_KEY_ALLOWED_ROLES
+        assert UserRole.COMPANY_ADMIN not in API_KEY_ALLOWED_ROLES
 
     def test_api_key_sha256_hash_matches(self, db):
         """API key hash stored in DB must be SHA-256 of the raw key."""
         from app.shared.models import UserRole
         make_tenant(db, "tenant-c")
         raw_key = "gs_testkeyabc123"
-        k, _ = make_api_key(db, "tenant-c", UserRole.OPERATOR, raw_key=raw_key)
+        k, _ = make_api_key(db, "tenant-c", UserRole.COMPANY_USER, raw_key=raw_key)
         expected_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         assert k.key_hash == expected_hash
 
@@ -339,7 +344,7 @@ class TestAPIKeyAuth:
         """Revoked API key must have is_active=False."""
         from app.shared.models import UserRole
         make_tenant(db, "tenant-d")
-        k, _ = make_api_key(db, "tenant-d", UserRole.OPERATOR)
+        k, _ = make_api_key(db, "tenant-d", UserRole.COMPANY_USER)
         assert k.is_active is True
         k.is_active = False
         db.commit()
@@ -350,68 +355,62 @@ class TestAPIKeyAuth:
 # ─── 5. RBAC ──────────────────────────────────────────────────────────────────
 
 class TestRBAC:
-    """Role hierarchy: ADMIN > OPERATOR > USER/TEAM_LEAD > VIEWER."""
+    """Role hierarchy: PLATFORM_ADMIN > COMPANY_ADMIN > COMPANY_USER."""
 
-    def test_require_admin_rejects_viewer(self):
-        """require_admin factory must reject VIEWER role."""
-        from app.shared.auth import AuthenticatedIdentity, require_role
+    def test_require_platform_admin_rejects_company_user(self):
+        """require_platform_admin must reject COMPANY_USER role."""
+        from app.shared.auth import AuthenticatedIdentity, require_platform_admin
         from app.shared.models import UserRole
         import asyncio
 
         identity = AuthenticatedIdentity(
             user_id="1",
             tenant_id="t1",
-            role=UserRole.VIEWER,
+            role=UserRole.COMPANY_USER,
             auth_method="jwt",
         )
-        checker = require_role(UserRole.ADMIN)
 
         async def run():
-            from unittest.mock import AsyncMock
             with pytest.raises(Exception):  # HTTPException 403
-                await checker(identity=identity)
+                await require_platform_admin(identity=identity)
 
         asyncio.get_event_loop().run_until_complete(run())
 
-    def test_require_operator_accepts_admin(self):
-        """require_operator must accept ADMIN (superrole)."""
-        from app.shared.auth import AuthenticatedIdentity, require_role
+    def test_require_company_admin_accepts_platform_admin(self):
+        """require_company_admin must accept PLATFORM_ADMIN (superrole)."""
+        from app.shared.auth import AuthenticatedIdentity, require_company_admin
         from app.shared.models import UserRole
         import asyncio
 
         identity = AuthenticatedIdentity(
             user_id="1",
             tenant_id="t1",
-            role=UserRole.ADMIN,
+            role=UserRole.PLATFORM_ADMIN,
             auth_method="jwt",
         )
-        checker = require_role(UserRole.ADMIN, UserRole.OPERATOR)
 
         async def run():
-            result = await checker(identity=identity)
-            return result
+            return await require_company_admin(identity=identity)
 
         result = asyncio.get_event_loop().run_until_complete(run())
         assert result is not None
 
-    def test_require_viewer_accepts_all_roles(self):
-        """All roles must pass require_viewer check."""
-        from app.shared.auth import AuthenticatedIdentity, require_role
+    def test_require_company_member_accepts_all_roles(self):
+        """All three canonical roles must pass require_company_member."""
+        from app.shared.auth import AuthenticatedIdentity, require_company_member
         from app.shared.models import UserRole
         import asyncio
-
-        checker = require_role(UserRole.ADMIN, UserRole.OPERATOR, UserRole.USER, UserRole.TEAM_LEAD, UserRole.VIEWER)
 
         async def check_role(role):
             identity = AuthenticatedIdentity(
                 user_id="1", tenant_id="t1", role=role, auth_method="jwt"
             )
-            return await checker(identity=identity)
+            return await require_company_member(identity=identity)
 
         loop = asyncio.get_event_loop()
-        for role in [UserRole.ADMIN, UserRole.OPERATOR, UserRole.USER, UserRole.VIEWER, UserRole.TEAM_LEAD]:
+        for role in [UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER]:
             result = loop.run_until_complete(check_role(role))
-            assert result is not None, f"Role {role} should pass require_viewer"
+            assert result is not None, f"Role {role} should pass require_company_member"
 
     def test_dev_mode_identity_returns_none(self):
         """In dev mode (AUTH_ENABLED=false), get_current_identity returns None."""
@@ -451,7 +450,7 @@ class TestTenantIsolation:
         identity_b = AuthenticatedIdentity(
             user_id="999",
             tenant_id="tenant-iso-b",
-            role=UserRole.ADMIN,
+            role=UserRole.COMPANY_ADMIN,
             auth_method="jwt",
         )
         with pytest.raises(Exception) as exc_info:
@@ -471,7 +470,7 @@ class TestTenantIsolation:
         identity = AuthenticatedIdentity(
             user_id="1",
             tenant_id="tenant-same",
-            role=UserRole.VIEWER,
+            role=UserRole.COMPANY_USER,
             auth_method="jwt",
         )
         result = get_tenant_jobs(db, identity, job_id=job.job_id)
@@ -490,7 +489,7 @@ class TestTenantIsolation:
         identity_b = AuthenticatedIdentity(
             user_id="1",
             tenant_id="tenant-403-b",
-            role=UserRole.VIEWER,
+            role=UserRole.COMPANY_USER,
             auth_method="jwt",
         )
         with pytest.raises(Exception) as exc_info:
@@ -506,7 +505,7 @@ class TestTenantIsolation:
         from app.api.tenant_scope import stamp_tenant
 
         identity = AuthenticatedIdentity(
-            user_id="1", tenant_id="tenant-stamp", role=UserRole.OPERATOR, auth_method="jwt"
+            user_id="1", tenant_id="tenant-stamp", role=UserRole.COMPANY_USER, auth_method="jwt"
         )
         job = JobORM(
             job_id="stamp-job-test",
@@ -548,7 +547,7 @@ class TestTenantIsolation:
         job_b = make_job(db, "tenant-list-b")
 
         identity_a = AuthenticatedIdentity(
-            user_id="1", tenant_id="tenant-list-a", role=UserRole.VIEWER, auth_method="jwt"
+            user_id="1", tenant_id="tenant-list-a", role=UserRole.COMPANY_USER, auth_method="jwt"
         )
         results = get_tenant_jobs(db, identity_a)
         job_ids = [j.job_id for j in results]
@@ -597,30 +596,19 @@ class TestRateLimiting:
                "single-instance" in open(rate_module.__file__).read().lower()
 
 
-# ─── 8. UserRole enum backward compatibility ───────────────────────────────────
+# ─── 8. UserRole enum — exactly three canonical roles ──────────────────────────
 
 class TestUserRoleEnum:
 
-    def test_user_role_has_user_value(self):
-        """Phase 1 adds USER to UserRole enum."""
+    def test_user_role_has_exactly_three_members(self):
+        """UserRole must contain exactly PLATFORM_ADMIN, COMPANY_ADMIN, COMPANY_USER."""
         from app.shared.models import UserRole
-        assert hasattr(UserRole, "USER")
-        assert UserRole.USER.value == "USER"
+        assert {r.value for r in UserRole} == {"PLATFORM_ADMIN", "COMPANY_ADMIN", "COMPANY_USER"}
 
-    def test_user_role_retains_team_lead(self):
-        """TEAM_LEAD must still exist for backward compat."""
+    def test_legacy_roles_no_longer_exist(self):
+        """Legacy role values must not be valid UserRole members."""
         from app.shared.models import UserRole
-        assert hasattr(UserRole, "TEAM_LEAD")
-        assert UserRole.TEAM_LEAD.value == "TEAM_LEAD"
-
-    def test_admin_role_exists(self):
-        from app.shared.models import UserRole
-        assert UserRole.ADMIN.value == "ADMIN"
-
-    def test_operator_role_exists(self):
-        from app.shared.models import UserRole
-        assert UserRole.OPERATOR.value == "OPERATOR"
-
-    def test_viewer_role_exists(self):
-        from app.shared.models import UserRole
-        assert UserRole.VIEWER.value == "VIEWER"
+        for legacy in ("ADMIN", "TEAM_LEAD", "OPERATOR", "USER", "VIEWER"):
+            assert not hasattr(UserRole, legacy)
+            with pytest.raises(ValueError):
+                UserRole(legacy)

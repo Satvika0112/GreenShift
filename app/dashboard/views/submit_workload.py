@@ -187,7 +187,7 @@ def render_submit_workload_view() -> None:
         )
 
         token = st.session_state.get("auth_token")
-        curr_role = st.session_state.get("user_role", "VIEWER")
+        curr_role = st.session_state.get("user_role", "COMPANY_USER")
 
         st.markdown("---")
         if dec_status in ("APPROVED", "QUEUED", "RUNNING", "COMPLETED"):
@@ -201,7 +201,7 @@ def render_submit_workload_view() -> None:
                 if st.button("➕ Submit Another Workload", key="clear_sub"):
                     del st.session_state["recent_submission"]
                     st.rerun()
-        elif curr_role in ("ADMIN", "TEAM_LEAD", "OPERATOR"):
+        elif curr_role in ("PLATFORM_ADMIN", "COMPANY_ADMIN"):
             # NOTE: Approval and dispatch are deliberately two separate, independently
             # reviewed steps — never combine them into one "Approve & Dispatch" action.
             # Dispatch only becomes available once the job shows APPROVED above, via
@@ -222,5 +222,5 @@ def render_submit_workload_view() -> None:
                     del st.session_state["recent_submission"]
                     st.rerun()
         else:
-            st.info("ℹ️ This workload is awaiting Human Approval by a Team Lead or Admin before dispatch.")
+            st.info("ℹ️ This workload is awaiting Human Approval by a Company Admin or Platform Admin before dispatch.")
 

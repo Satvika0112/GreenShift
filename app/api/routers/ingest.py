@@ -46,13 +46,13 @@ def submit_new_job(
     body: JobSubmitRequest,
     auto_schedule: bool = Query(False, description="Automatically trigger Carbon-Aware scheduling upon submission"),
     db: Session = Depends(get_db),
-    current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR, UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER, UserRole.PLATFORM_ADMIN)),
+    current_user: UserORM = Depends(require_roles(UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER)),
 ):
     """Submit a new deferrable compute job with input validation, tenant isolation, and lifecycle state tracking."""
     from app.shared.timezone import normalize_to_utc
     try:
         user_role_val = current_user.role.value if isinstance(current_user.role, UserRole) else str(current_user.role)
-        if user_role_val in ("TEAM_LEAD", "COMPANY_USER") and current_user.team_id:
+        if user_role_val == "COMPANY_USER" and current_user.team_id:
             if body.team_id and body.team_id != current_user.team_id:
                 raise HTTPException(
                     status_code=403,
@@ -113,7 +113,7 @@ def bulk_load_jobs_from_csv(
     request: Request,
     csv_path: Optional[str] = Query(None, description="Optional path to job CSV"),
     db: Session = Depends(get_db),
-    current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.OPERATOR)),
+    current_user: UserORM = Depends(require_roles(UserRole.PLATFORM_ADMIN, UserRole.COMPANY_USER)),
 ):
     """
     Bulk-load jobs from the configured or specified workload CSV file into the database.
@@ -319,11 +319,11 @@ def cancel_workload(
     Enforces tenant isolation and RBAC authorization.
     """
     from app.api.tenant_scope import get_tenant_jobs
-    from app.shared.auth import is_platform_admin, is_company_admin
+    from app.shared.auth import is_company_member
     job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
 
     user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-    if not (is_platform_admin(current_user) or is_company_admin(current_user) or user_role in ("OPERATOR", "ADMIN")):
+    if not is_company_member(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Role lacks authorization to cancel workloads",
@@ -746,7 +746,7 @@ def run_dynamic_arrival_simulation_endpoint(
     csv_path: Optional[str] = Query(None, description="Custom dataset path"),
     start_time: Optional[datetime] = Query(None, description="Simulation clock start time (UTC)"),
     db: Session = Depends(get_db),
-    current_user: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR)),
+    current_user: UserORM = Depends(require_roles(UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER)),
 ):
     """
     Execute a dynamic workload arrival simulation run, releasing jobs chronologically

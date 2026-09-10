@@ -23,10 +23,7 @@ def trigger_schedule(
     job_id: str,
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(
-        require_roles(
-            UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.OPERATOR,
-            UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER, UserRole.PLATFORM_ADMIN,
-        )
+        require_roles(UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER)
     ),
 ):
     """

@@ -1,15 +1,20 @@
 """
 Unit and Integration Tests for Streamlit Dashboard Backend API Integration & Approval Gate.
 
+GreenShift supports exactly three application roles: PLATFORM_ADMIN,
+COMPANY_ADMIN, COMPANY_USER (see app.shared.models.UserRole). Company Admin
+approval authorization is scoped by tenant_id (company); cross-company
+approval attempts return 404 (not 403), consistent with
+app.approval.service.check_user_approval_permission and
+app.api.tenant_scope.get_tenant_jobs, to avoid leaking job existence.
+
 Tests:
 1. Pending approvals fetching and rich data fields validation.
-2. UI approve_job_api with authorization tokens (Admin, Team Lead).
-3. UI approve_job_api authorization failure handling (Cross-Team Lead, Viewer -> HTTP 403).
+2. UI approve_job_api with authorization tokens (Platform Admin, Company Admin).
+3. UI approve_job_api authorization failure handling (cross-company Company Admin -> 404, Company User -> 403).
 4. UI decline_job_api with optional custom reason.
-5. UI decline_job_api authorization failure handling (Cross-Team Lead, Viewer -> HTTP 403).
-6. UI dispatch_job_api authorization and status enforcement.
-7. Status badge rendering for all 7 workload lifecycle states.
-8. Declined workloads retrieval for history display.
+5. UI dispatch_job_api authorization and status enforcement.
+6. Status badge rendering for all 7 workload lifecycle states.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -58,30 +63,33 @@ def test_users(db):
             username="ui_admin",
             email="ui_admin@greenshift.io",
             hashed_password=hash_password("adminpass123"),
-            role=UserRole.ADMIN,
+            role=UserRole.PLATFORM_ADMIN,
             is_active=True,
         ),
         "lead_alpha": UserORM(
             username="ui_lead_alpha",
             email="ui_alpha@greenshift.io",
             hashed_password=hash_password("alphapass123"),
-            role=UserRole.TEAM_LEAD,
+            role=UserRole.COMPANY_ADMIN,
             team_id="team_alpha",
+            tenant_id="tenant-alpha",
             is_active=True,
         ),
         "lead_beta": UserORM(
             username="ui_lead_beta",
             email="ui_beta@greenshift.io",
             hashed_password=hash_password("betapass123"),
-            role=UserRole.TEAM_LEAD,
+            role=UserRole.COMPANY_ADMIN,
             team_id="team_beta",
+            tenant_id="tenant-beta",
             is_active=True,
         ),
         "viewer": UserORM(
             username="ui_viewer",
             email="ui_viewer@greenshift.io",
             hashed_password=hash_password("viewerpass123"),
-            role=UserRole.VIEWER,
+            role=UserRole.COMPANY_USER,
+            tenant_id="tenant-alpha",
             is_active=True,
         ),
     }
@@ -100,10 +108,11 @@ def get_token(user: UserORM) -> str:
         username=user.username,
         role=role_str,
         team_id=user.team_id,
+        tenant_id=user.tenant_id,
     )
 
 
-def create_job_with_schedule(db, job_id: str, team_id: str, status: JobStatus = JobStatus.PENDING_APPROVAL) -> JobORM:
+def create_job_with_schedule(db, job_id: str, team_id: str, status: JobStatus = JobStatus.PENDING_APPROVAL, tenant_id: str = None) -> JobORM:
     now = utcnow()
     start_time = datetime.now(timezone.utc)
     job = JobORM(
@@ -111,6 +120,7 @@ def create_job_with_schedule(db, job_id: str, team_id: str, status: JobStatus = 
         workload_name=f"Workload-{job_id}",
         job_type="Batch Simulation",
         team_id=team_id,
+        tenant_id=tenant_id,
         submitted_at=now,
         deadline=now + timedelta(hours=6),
         runtime_minutes=30,
@@ -188,7 +198,7 @@ def test_fetch_pending_approvals_fields(db, test_users):
 
 def test_approve_job_api_success_and_forbidden(db, test_users):
     """Verify approve_job_api succeeds for authorized user and raises descriptive error for unauthorized."""
-    job = create_job_with_schedule(db, "JOB-UI-APPROVE-01", "team_alpha", JobStatus.PENDING_APPROVAL)
+    job = create_job_with_schedule(db, "JOB-UI-APPROVE-01", "team_alpha", JobStatus.PENDING_APPROVAL, tenant_id="tenant-alpha")
     token_lead_alpha = get_token(test_users["lead_alpha"])
     token_lead_beta = get_token(test_users["lead_beta"])
     token_viewer = get_token(test_users["viewer"])
@@ -196,7 +206,8 @@ def test_approve_job_api_success_and_forbidden(db, test_users):
     from fastapi.testclient import TestClient
     client = TestClient(app)
 
-    # 1. Team Lead Beta (cross-team) should fail with 403
+    # 1. Company Admin of a different company (cross-tenant) should fail with
+    # 404 — not 403 — to avoid leaking job existence across companies.
     with patch("httpx.post") as mock_post:
         mock_res = client.post(
             f"/api/v1/approval/{job.job_id}/approve",
@@ -211,10 +222,9 @@ def test_approve_job_api_success_and_forbidden(db, test_users):
         )
         with pytest.raises(RuntimeError) as exc:
             approve_job_api(job.job_id, job.schedule_decision.id, token=token_lead_beta)
-        assert "403" in str(exc.value)
-        assert "authorized" in str(exc.value).lower() or "cannot" in str(exc.value).lower()
+        assert "404" in str(exc.value)
 
-    # 2. Viewer should fail with 403
+    # 2. Company User should fail with 403
     with patch("httpx.post") as mock_post:
         mock_res = client.post(
             f"/api/v1/approval/{job.job_id}/approve",
@@ -230,9 +240,9 @@ def test_approve_job_api_success_and_forbidden(db, test_users):
         with pytest.raises(RuntimeError) as exc:
             approve_job_api(job.job_id, job.schedule_decision.id, token=token_viewer)
         assert "403" in str(exc.value)
-        assert "read-only" in str(exc.value).lower() or "cannot approve" in str(exc.value).lower()
+        assert "not authorized" in str(exc.value).lower()
 
-    # 3. Team Lead Alpha (own team) should succeed with 200
+    # 3. Company Admin of the same company (tenant-alpha) should succeed with 200
     with patch("httpx.post") as mock_post:
         mock_res = client.post(
             f"/api/v1/approval/{job.job_id}/approve",

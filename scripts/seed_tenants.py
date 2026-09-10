@@ -49,7 +49,7 @@ DEFAULT_USERS = [
         "username": "admin",
         "email": "admin@greenshift.dev",
         "password": "GreenShift-Admin-ChangeMeNow!",
-        "role": UserRole.ADMIN,
+        "role": UserRole.COMPANY_ADMIN,
         "team_id": "platform",
     },
     {
@@ -57,7 +57,7 @@ DEFAULT_USERS = [
         "username": "operator",
         "email": "operator@greenshift.dev",
         "password": "GreenShift-Operator-ChangeMeNow!",
-        "role": UserRole.OPERATOR,
+        "role": UserRole.COMPANY_USER,
         "team_id": "platform",
     },
     {
@@ -65,7 +65,7 @@ DEFAULT_USERS = [
         "username": "viewer",
         "email": "viewer@greenshift.dev",
         "password": "GreenShift-Viewer-ChangeMeNow!",
-        "role": UserRole.VIEWER,
+        "role": UserRole.COMPANY_USER,
         "team_id": "general",
     },
     {
@@ -73,7 +73,7 @@ DEFAULT_USERS = [
         "username": "acme_admin",
         "email": "admin@acme.com",
         "password": "Acme-Admin-ChangeMeNow!",
-        "role": UserRole.ADMIN,
+        "role": UserRole.COMPANY_ADMIN,
         "team_id": "team-acme",
     },
     {
@@ -81,7 +81,7 @@ DEFAULT_USERS = [
         "username": "globex_admin",
         "email": "admin@globex.com",
         "password": "Globex-Admin-ChangeMeNow!",
-        "role": UserRole.ADMIN,
+        "role": UserRole.COMPANY_ADMIN,
         "team_id": "team-globex",
     },
 ]

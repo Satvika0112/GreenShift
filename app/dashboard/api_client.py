@@ -71,7 +71,7 @@ def register_user_api(
     username: str,
     email: str,
     password: str,
-    role: str = "VIEWER",
+    role: str = "COMPANY_USER",
     team_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Register a new user account."""
@@ -95,7 +95,7 @@ def admin_create_user_api(
     username: str,
     email: str,
     password: str,
-    role: str = "VIEWER",
+    role: str = "COMPANY_USER",
     team_id: Optional[str] = None,
     token: Optional[str] = None,
 ) -> Dict[str, Any]:

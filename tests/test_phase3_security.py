@@ -71,14 +71,14 @@ def auth_users(db):
             username="p3_admin",
             email="p3_admin@greenshift.io",
             hashed_password=hash_password("adminpass123"),
-            role=UserRole.ADMIN,
+            role=UserRole.PLATFORM_ADMIN,
             is_active=True,
         ),
         "lead_alpha": UserORM(
             username="p3_lead_alpha",
             email="p3_alpha@greenshift.io",
             hashed_password=hash_password("alphapass123"),
-            role=UserRole.TEAM_LEAD,
+            role=UserRole.COMPANY_ADMIN,
             team_id="team_alpha",
             is_active=True,
         ),
@@ -86,7 +86,7 @@ def auth_users(db):
             username="p3_viewer",
             email="p3_viewer@greenshift.io",
             hashed_password=hash_password("viewerpass123"),
-            role=UserRole.VIEWER,
+            role=UserRole.COMPANY_USER,
             is_active=True,
         ),
     }
@@ -333,20 +333,19 @@ def test_security_audit_events_logged_without_credential_leakage(db, auth_users)
     assert len(success_events) >= 1
     last_success = success_events[-1]
     assert last_success.payload["username"] == "p3_admin"
-    assert last_success.payload["role"] == "ADMIN"
+    assert last_success.payload["role"] == "PLATFORM_ADMIN"
     assert "adminpass123" not in str(last_success.payload)
 
-    # 3. Access denied (Viewer attempting to submit job)
+    # 3. Access denied (Company User attempting a Platform-Admin-only action —
+    # unlike job submission, which a Company User is allowed to do)
     viewer_token = get_token(auth_users["viewer"])
     res_denied = client.post(
-        "/api/v1/jobs",
+        "/auth/admin/create-user",
         json={
-            "team_id": "team_alpha",
-            "deadline": (utcnow() + timedelta(hours=8)).isoformat(),
-            "runtime_minutes": 60,
-            "power_kw": 5.0,
-            "region": "IN-TG",
-            "container_image": "greenshift/workload:v1",
+            "username": "p3_escalation_attempt",
+            "email": "p3_escalation@greenshift.io",
+            "password": "Password123!",
+            "role": "COMPANY_USER",
         },
         headers={"Authorization": f"Bearer {viewer_token}"},
     )
@@ -356,7 +355,7 @@ def test_security_audit_events_logged_without_credential_leakage(db, auth_users)
     assert len(denied_events) >= 1
     last_denied = denied_events[-1]
     assert last_denied.payload["username"] == "p3_viewer"
-    assert last_denied.payload["role"] == "VIEWER"
+    assert last_denied.payload["role"] == "COMPANY_USER"
 
     # 4. Chain integrity remains valid
     verify_res = verify_chain(db)

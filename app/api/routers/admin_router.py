@@ -24,7 +24,6 @@ from app.shared.auth import (
     hash_password,
     is_platform_admin,
     is_company_admin,
-    require_admin,
     require_platform_admin,
     require_company_admin,
 )
@@ -229,10 +228,10 @@ def create_user(
     - Company Admin can only create users within their own company.
     - Company Admin cannot create PLATFORM_ADMIN or ADMIN users.
     """
-    if body.role in (UserRole.PLATFORM_ADMIN, UserRole.ADMIN) and not is_platform_admin(identity):
+    if body.role == UserRole.PLATFORM_ADMIN and not is_platform_admin(identity):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only Platform Admins can assign PLATFORM_ADMIN or ADMIN roles",
+            detail="Only Platform Admins can assign the PLATFORM_ADMIN role",
         )
 
     username = body.username or body.email.split("@")[0]
@@ -372,9 +371,9 @@ def update_user_status(
         user.is_active = body.is_active
 
     if body.role is not None:
-        # Only platform admin can grant PLATFORM_ADMIN or ADMIN
-        if body.role in (UserRole.PLATFORM_ADMIN, UserRole.ADMIN) and not is_platform_admin(identity):
-            raise HTTPException(status_code=403, detail="Only Platform Admins can assign PLATFORM_ADMIN or ADMIN role")
+        # Only platform admin can grant PLATFORM_ADMIN
+        if body.role == UserRole.PLATFORM_ADMIN and not is_platform_admin(identity):
+            raise HTTPException(status_code=403, detail="Only Platform Admins can assign the PLATFORM_ADMIN role")
         user.role = body.role
 
     db.commit()
@@ -467,16 +466,16 @@ def create_api_key(
     Creates an API key for the admin's tenant.
     Platform Admin can specify any tenant; Company Admin is locked to own tenant.
 
-    RULE 3: Role cannot be administrative (ADMIN, PLATFORM_ADMIN, COMPANY_ADMIN) — API keys are for automation only.
+    RULE 3: Role cannot be administrative (PLATFORM_ADMIN, COMPANY_ADMIN) — API keys are for automation only.
     Raw key is returned once and never stored; store it securely.
     """
     # RULE 3 enforcement
-    if body.role in (UserRole.ADMIN, UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN):
+    if body.role in (UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "API keys cannot have administrative roles (ADMIN, PLATFORM_ADMIN, COMPANY_ADMIN). "
-                "Use OPERATOR, USER, VIEWER, or COMPANY_USER for service accounts."
+                "API keys cannot have administrative roles (PLATFORM_ADMIN, COMPANY_ADMIN). "
+                "Use COMPANY_USER for service accounts."
             ),
         )
 

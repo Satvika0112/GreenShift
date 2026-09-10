@@ -390,7 +390,7 @@ class TestDatabaseArchitecture:
                     username="db_test_admin",
                     email="db_admin@greenshift.io",
                     hashed_password=hash_password("adminpass123"),
-                    role=UserRole.ADMIN,
+                    role=UserRole.PLATFORM_ADMIN,
                     team_id="API-TEST-TEAM",
                     is_active=True,
                 )

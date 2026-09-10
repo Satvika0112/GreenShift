@@ -176,20 +176,16 @@ def test_users_endpoint_unauthenticated_returns_401(client):
 
 
 def test_users_endpoint_non_admin_returns_403(client):
-    """Calling /api/v1/auth/users with non-admin token (VIEWER, OPERATOR, TEAM_LEAD) must return 403 Forbidden."""
-    # Register & Login non-admin roles
-    roles = [
-        ("viewer_user", "viewer@greenshift.io", "VIEWER"),
-        ("operator_user", "operator@greenshift.io", "OPERATOR"),
-        ("lead_user", "lead@greenshift.io", "TEAM_LEAD"),
-    ]
+    """Calling /api/v1/auth/users with a non-admin (COMPANY_USER) token must return 403 Forbidden.
+    Public registration always assigns COMPANY_USER regardless of the requested role."""
+    usernames = ["viewer_user", "operator_user", "lead_user"]
 
-    for uname, email, role in roles:
+    for uname in usernames:
+        email = f"{uname}@greenshift.io"
         client.post("/auth/register", json={
             "username": uname,
             "email": email,
             "password": "Password123!",
-            "role": role,
         })
         token = client.post("/auth/login", json={
             "username": uname,
@@ -210,14 +206,14 @@ def test_users_endpoint_non_admin_returns_403(client):
 
 
 def test_users_endpoint_admin_succeeds_200(client):
-    """Calling /api/v1/auth/users with ADMIN token must succeed (200 OK) and list all users."""
-    # Seed admin directly in database with ADMIN role
+    """Calling /api/v1/auth/users with PLATFORM_ADMIN token must succeed (200 OK) and list all users."""
+    # Seed admin directly in database with PLATFORM_ADMIN role
     with SessionLocal() as db:
         db.add(UserORM(
             username="admin_sec_user",
             email="admin_sec@greenshift.io",
             hashed_password=hash_password("AdminPassword123!"),
-            role=UserRole.ADMIN,
+            role=UserRole.PLATFORM_ADMIN,
             is_active=True,
         ))
         db.commit()
@@ -226,7 +222,6 @@ def test_users_endpoint_admin_succeeds_200(client):
         "username": "regular_sec_user",
         "email": "regular_sec@greenshift.io",
         "password": "UserPassword123!",
-        "role": "VIEWER",
     })
 
     admin_token = client.post("/auth/login", json={

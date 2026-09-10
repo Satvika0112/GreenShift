@@ -1,16 +1,25 @@
 """
 Tests for Dispatch Authorization Gate, RBAC permissions, and Audit Trail.
 
+GreenShift supports exactly three application roles: PLATFORM_ADMIN,
+COMPANY_ADMIN, COMPANY_USER (see app.shared.models.UserRole). Dispatch
+authorization (app.dispatch.dispatcher.validate_job_for_dispatch) is scoped
+by tenant_id (company), not team_id — team_id remains a data/organizational
+field but is not a dispatch authorization tier. All three roles may dispatch
+within their own company; cross-company dispatch is blocked. Team-scoped job
+*lookup* (app.api.tenant_scope.get_tenant_jobs, used by the router before it
+ever calls the dispatcher) is unrelated and still applies to any
+non-Platform-Admin identity that has a team_id set.
+
 Validates:
 1. Job must exist before dispatch (404 Not Found).
 2. Job must be APPROVED (PENDING_APPROVAL -> 403 Forbidden, DECLINED -> 403 Forbidden, SUBMITTED -> 400 Bad Request).
 3. The approved schedule decision must belong to the job.
 4. RBAC Authorization:
-   - ADMIN can dispatch any team's approved job.
-   - OPERATOR can dispatch any operational approved job.
-   - TEAM_LEAD can dispatch own team's approved job.
-   - TEAM_LEAD attempting another team's job is blocked (403 Forbidden).
-   - VIEWER attempting dispatch is blocked (403 Forbidden).
+   - PLATFORM_ADMIN can dispatch any company's approved job.
+   - COMPANY_ADMIN / COMPANY_USER can dispatch their own company's approved job.
+   - Cross-team dispatch at the router layer is still blocked by team-scoped job lookup.
+   - Cross-company dispatch at the service layer is blocked by tenant_id.
    - Unauthenticated request is rejected (401 Unauthorized).
 5. Audit events:
    - DISPATCH_REQUESTED recorded.
@@ -63,43 +72,56 @@ def override_db(db):
 
 @pytest.fixture
 def auth_users(db):
-    """Create test users for each role."""
+    """Create test users for each canonical role, across two teams within one
+    company (tenant_id left unset — used for router-level team-scoping tests)
+    plus two company-scoped admins in different tenants (used for
+    service-level cross-tenant tests)."""
     users = {
-        "admin": UserORM(
+        "platform_admin": UserORM(
             username="dispatch_admin",
             email="dispatch_admin@greenshift.io",
             hashed_password=hash_password("adminpass123"),
-            role=UserRole.ADMIN,
+            role=UserRole.PLATFORM_ADMIN,
             is_active=True,
         ),
-        "operator": UserORM(
-            username="dispatch_op",
-            email="dispatch_op@greenshift.io",
-            hashed_password=hash_password("oppass123"),
-            role=UserRole.OPERATOR,
-            is_active=True,
-        ),
-        "lead_alpha": UserORM(
-            username="lead_team_alpha",
-            email="lead_alpha@greenshift.io",
-            hashed_password=hash_password("alphapass123"),
-            role=UserRole.TEAM_LEAD,
+        "company_user": UserORM(
+            username="dispatch_user",
+            email="dispatch_user@greenshift.io",
+            hashed_password=hash_password("userpass123"),
+            role=UserRole.COMPANY_USER,
             team_id="team_alpha",
             is_active=True,
         ),
-        "lead_beta": UserORM(
-            username="lead_team_beta",
-            email="lead_beta@greenshift.io",
+        "company_admin_alpha": UserORM(
+            username="admin_team_alpha",
+            email="admin_alpha@greenshift.io",
+            hashed_password=hash_password("alphapass123"),
+            role=UserRole.COMPANY_ADMIN,
+            team_id="team_alpha",
+            is_active=True,
+        ),
+        "company_admin_beta": UserORM(
+            username="admin_team_beta",
+            email="admin_beta@greenshift.io",
             hashed_password=hash_password("betapass123"),
-            role=UserRole.TEAM_LEAD,
+            role=UserRole.COMPANY_ADMIN,
             team_id="team_beta",
             is_active=True,
         ),
-        "viewer": UserORM(
-            username="dispatch_viewer",
-            email="dispatch_viewer@greenshift.io",
-            hashed_password=hash_password("viewpass123"),
-            role=UserRole.VIEWER,
+        "tenant_a_admin": UserORM(
+            username="tenant_a_admin",
+            email="tenant_a_admin@greenshift.io",
+            hashed_password=hash_password("tenantapass123"),
+            role=UserRole.COMPANY_ADMIN,
+            tenant_id="tenant-a",
+            is_active=True,
+        ),
+        "tenant_b_admin": UserORM(
+            username="tenant_b_admin",
+            email="tenant_b_admin@greenshift.io",
+            hashed_password=hash_password("tenantbpass123"),
+            role=UserRole.COMPANY_ADMIN,
+            tenant_id="tenant-b",
             is_active=True,
         ),
     }
@@ -118,15 +140,17 @@ def get_token(user: UserORM) -> str:
         username=user.username,
         role=role_str,
         team_id=user.team_id,
+        tenant_id=user.tenant_id,
     )
 
 
-def create_test_job_with_decision(db, job_id: str, team_id: str, status: JobStatus = JobStatus.APPROVED) -> JobORM:
+def create_test_job_with_decision(db, job_id: str, team_id: str, status: JobStatus = JobStatus.APPROVED, tenant_id: str = None) -> JobORM:
     now = utcnow()
     start_time = datetime.now(timezone.utc)
     job = JobORM(
         job_id=job_id,
         team_id=team_id,
+        tenant_id=tenant_id,
         submitted_at=now,
         deadline=now + timedelta(hours=4),
         runtime_minutes=15,
@@ -155,10 +179,10 @@ def create_test_job_with_decision(db, job_id: str, team_id: str, status: JobStat
     return job
 
 
-def test_admin_dispatches_approved_job_successfully(db, auth_users):
-    """Admin can trigger dispatch for any team's approved job."""
+def test_platform_admin_dispatches_approved_job_successfully(db, auth_users):
+    """Platform Admin can trigger dispatch for any team's approved job."""
     job = create_test_job_with_decision(db, "JOB-DISP-ADM-01", "team_alpha", JobStatus.APPROVED)
-    token = get_token(auth_users["admin"])
+    token = get_token(auth_users["platform_admin"])
 
     mock_batch = MagicMock()
     mock_batch.read_namespaced_job.side_effect = ApiException(status=404)
@@ -186,10 +210,11 @@ def test_admin_dispatches_approved_job_successfully(db, auth_users):
     assert EventType.K8S_JOB_CREATED in event_types
 
 
-def test_operator_dispatches_approved_job_successfully(db, auth_users):
-    """Operator has operational dispatch rights."""
-    job = create_test_job_with_decision(db, "JOB-DISP-OP-01", "team_beta", JobStatus.APPROVED)
-    token = get_token(auth_users["operator"])
+def test_company_user_dispatches_own_team_job_successfully(db, auth_users):
+    """COMPANY_USER can dispatch its own team's approved job (matches how the
+    canonical COMPANY_USER role already behaved before role consolidation)."""
+    job = create_test_job_with_decision(db, "JOB-DISP-USR-01", "team_alpha", JobStatus.APPROVED)
+    token = get_token(auth_users["company_user"])
 
     mock_batch = MagicMock()
     mock_batch.read_namespaced_job.side_effect = ApiException(status=404)
@@ -203,10 +228,10 @@ def test_operator_dispatches_approved_job_successfully(db, auth_users):
         assert response.json()["status"] == "QUEUED"
 
 
-def test_team_lead_dispatches_own_team_job_successfully(db, auth_users):
-    """Team lead can dispatch jobs belonging to their own team."""
+def test_company_admin_dispatches_own_team_job_successfully(db, auth_users):
+    """Company Admin can dispatch jobs belonging to their own team."""
     job = create_test_job_with_decision(db, "JOB-DISP-LEAD-01", "team_alpha", JobStatus.APPROVED)
-    token = get_token(auth_users["lead_alpha"])
+    token = get_token(auth_users["company_admin_alpha"])
 
     mock_batch = MagicMock()
     mock_batch.read_namespaced_job.side_effect = ApiException(status=404)
@@ -220,10 +245,14 @@ def test_team_lead_dispatches_own_team_job_successfully(db, auth_users):
         assert response.json()["status"] == "QUEUED"
 
 
-def test_team_lead_attempting_other_team_dispatch_is_forbidden(db, auth_users):
-    """Team Lead attempting to dispatch another team's job receives 403 Forbidden and DISPATCH_BLOCKED event."""
+def test_company_admin_attempting_other_team_dispatch_is_forbidden_at_router_level(db, auth_users):
+    """A Company Admin with a team_id set is still blocked from dispatching
+    another team's job at the router layer — app.api.tenant_scope.get_tenant_jobs
+    scopes job lookup by team_id for any non-Platform-Admin identity, regardless
+    of the Company Admin/Company User tier, and runs before dispatch is ever
+    attempted."""
     job = create_test_job_with_decision(db, "JOB-DISP-CROSS-01", "team_beta", JobStatus.APPROVED)
-    token = get_token(auth_users["lead_alpha"])  # Lead of team_alpha trying to dispatch team_beta
+    token = get_token(auth_users["company_admin_alpha"])  # team_alpha admin trying team_beta's job
 
     response = client.post(
         f"/dispatch/{job.job_id}",
@@ -233,23 +262,6 @@ def test_team_lead_attempting_other_team_dispatch_is_forbidden(db, auth_users):
     assert "belongs to another team" in response.json()["detail"]
 
     # Verify DISPATCH_BLOCKED event is in audit ledger
-    events = get_job_audit(db, job.job_id)
-    event_types = [e.event_type for e in events]
-    assert EventType.DISPATCH_BLOCKED in event_types
-
-
-def test_viewer_attempting_dispatch_is_forbidden(db, auth_users):
-    """Viewer attempting to trigger dispatch receives 403 Forbidden."""
-    job = create_test_job_with_decision(db, "JOB-DISP-VIEWER-01", "team_alpha", JobStatus.APPROVED)
-    token = get_token(auth_users["viewer"])
-
-    response = client.post(
-        f"/dispatch/{job.job_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 403
-    assert "Viewer role has read-only access" in response.json()["detail"]
-
     events = get_job_audit(db, job.job_id)
     event_types = [e.event_type for e in events]
     assert EventType.DISPATCH_BLOCKED in event_types
@@ -269,7 +281,7 @@ def test_unauthenticated_dispatch_rejected(db):
 def test_pending_approval_job_dispatch_is_blocked_403(db, auth_users):
     """Job in PENDING_APPROVAL status must be blocked with 403 Forbidden."""
     job = create_test_job_with_decision(db, "JOB-DISP-PENDING-01", "team_alpha", JobStatus.PENDING_APPROVAL)
-    token = get_token(auth_users["admin"])
+    token = get_token(auth_users["platform_admin"])
 
     response = client.post(
         f"/dispatch/{job.job_id}",
@@ -286,7 +298,7 @@ def test_pending_approval_job_dispatch_is_blocked_403(db, auth_users):
 def test_declined_job_dispatch_is_blocked_403(db, auth_users):
     """Job in DECLINED status must be blocked with 403 Forbidden."""
     job = create_test_job_with_decision(db, "JOB-DISP-DECLINED-01", "team_alpha", JobStatus.DECLINED)
-    token = get_token(auth_users["admin"])
+    token = get_token(auth_users["platform_admin"])
 
     response = client.post(
         f"/dispatch/{job.job_id}",
@@ -303,7 +315,7 @@ def test_declined_job_dispatch_is_blocked_403(db, auth_users):
 def test_invalid_status_job_dispatch_is_rejected_400(db, auth_users):
     """Job in SUBMITTED or SCHEDULED status must be rejected safely with 400 Bad Request."""
     job = create_test_job_with_decision(db, "JOB-DISP-SUBMITTED-01", "team_alpha", JobStatus.SUBMITTED)
-    token = get_token(auth_users["admin"])
+    token = get_token(auth_users["platform_admin"])
 
     response = client.post(
         f"/dispatch/{job.job_id}",
@@ -315,7 +327,7 @@ def test_invalid_status_job_dispatch_is_rejected_400(db, auth_users):
 
 def test_nonexistent_job_dispatch_returns_404(db, auth_users):
     """Attempting dispatch on non-existent job ID returns 404 Not Found."""
-    token = get_token(auth_users["admin"])
+    token = get_token(auth_users["platform_admin"])
     response = client.post(
         "/dispatch/JOB-DOES-NOT-EXIST",
         headers={"Authorization": f"Bearer {token}"},
@@ -341,7 +353,7 @@ def test_job_without_schedule_decision_fails(db, auth_users):
     db.add(job)
     db.commit()
 
-    token = get_token(auth_users["admin"])
+    token = get_token(auth_users["platform_admin"])
     response = client.post(
         f"/dispatch/{job.job_id}",
         headers={"Authorization": f"Bearer {token}"},
@@ -351,45 +363,49 @@ def test_job_without_schedule_decision_fails(db, auth_users):
 
 
 def test_service_level_validate_job_for_dispatch(db, auth_users):
-    """Direct unit testing of validate_job_for_dispatch logic."""
+    """Direct unit testing of validate_job_for_dispatch logic. Dispatch
+    authorization is scoped by tenant_id, not team_id — a Company Admin from
+    a *different team but no tenant set* is not blocked at the service layer
+    (team-scoped lookup happens earlier, at the router, via get_tenant_jobs);
+    a Company Admin from a genuinely different *company* (tenant_id) is."""
     job_alpha = create_test_job_with_decision(db, "JOB-SRV-01", "team_alpha", JobStatus.APPROVED)
     job_pending = create_test_job_with_decision(db, "JOB-SRV-02", "team_alpha", JobStatus.PENDING_APPROVAL)
     job_declined = create_test_job_with_decision(db, "JOB-SRV-03", "team_alpha", JobStatus.DECLINED)
+    job_tenant_a = create_test_job_with_decision(db, "JOB-SRV-04", "team_a", JobStatus.APPROVED, tenant_id="tenant-a")
 
-    # Admin passes
-    validate_job_for_dispatch(job_alpha, user=auth_users["admin"])
+    # Platform Admin passes
+    validate_job_for_dispatch(job_alpha, user=auth_users["platform_admin"])
 
-    # Operator passes
-    validate_job_for_dispatch(job_alpha, user=auth_users["operator"])
+    # Company User passes (own team, no tenant restriction applies here)
+    validate_job_for_dispatch(job_alpha, user=auth_users["company_user"])
 
-    # Matching team lead passes
-    validate_job_for_dispatch(job_alpha, user=auth_users["lead_alpha"])
+    # Company Admin from a different team but no tenant set passes — team is
+    # not a dispatch authorization tier at the service level.
+    validate_job_for_dispatch(job_alpha, user=auth_users["company_admin_beta"])
 
-    # Cross team lead fails
+    # Company Admin from a genuinely different company (tenant_id) fails.
     with pytest.raises(DispatchPermissionError) as exc:
-        validate_job_for_dispatch(job_alpha, user=auth_users["lead_beta"])
+        validate_job_for_dispatch(job_tenant_a, user=auth_users["tenant_b_admin"])
     assert "cannot dispatch job" in str(exc.value)
 
-    # Viewer fails
-    with pytest.raises(DispatchPermissionError) as exc:
-        validate_job_for_dispatch(job_alpha, user=auth_users["viewer"])
-    assert "Viewer role has read-only access" in str(exc.value)
+    # Matching tenant Company Admin passes.
+    validate_job_for_dispatch(job_tenant_a, user=auth_users["tenant_a_admin"])
 
     # Pending approval fails
     with pytest.raises(DispatchBlockedError) as exc:
-        validate_job_for_dispatch(job_pending, user=auth_users["admin"])
+        validate_job_for_dispatch(job_pending, user=auth_users["platform_admin"])
     assert "is pending approval" in str(exc.value)
 
     # Declined fails
     with pytest.raises(DispatchBlockedError) as exc:
-        validate_job_for_dispatch(job_declined, user=auth_users["admin"])
+        validate_job_for_dispatch(job_declined, user=auth_users["platform_admin"])
     assert "has been declined" in str(exc.value)
 
 
 def test_audit_ledger_chain_integrity_preserved(db, auth_users):
     """Audit ledger SHA-256 chain integrity remains valid after dispatch events."""
     job = create_test_job_with_decision(db, "JOB-DISP-CHAIN-01", "team_alpha", JobStatus.APPROVED)
-    token = get_token(auth_users["admin"])
+    token = get_token(auth_users["platform_admin"])
 
     mock_batch = MagicMock()
     mock_batch.read_namespaced_job.side_effect = ApiException(status=404)

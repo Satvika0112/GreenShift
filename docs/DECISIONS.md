@@ -156,7 +156,7 @@ GreenShift had zero authentication. Every job, carbon data point, and audit even
 |------|------------------|
 | RULE 1: Production refuses to start with `AUTH_ENABLED=false` | `validate_security_config()` → `RuntimeError` |
 | RULE 2: Auth enabled + dev secret → `RuntimeError` at startup | `validate_security_config()` → `RuntimeError` |
-| RULE 3: API keys cannot have `ADMIN` role | `POST /admin/api-keys` validates before insert |
+| RULE 3: API keys cannot have an administrative role (`PLATFORM_ADMIN`/`COMPANY_ADMIN`) | `POST /admin/api-keys` validates before insert |
 | RULE 4: Tenant creation is provisioning-only | No `POST /admin/tenants` endpoint exists |
 | RULE 5: Cross-tenant access returns `404` (not `403`) | `get_tenant_jobs()` in `tenant_scope.py` |
 
@@ -187,7 +187,7 @@ Request
 ### Backward Compatibility
 
 - `AUTH_ENABLED=false` (default) → all 33 existing tests pass without tokens
-- `UserRole.TEAM_LEAD` kept alongside new `UserRole.USER` for existing DB rows
+- `UserRole.TEAM_LEAD` kept alongside new `UserRole.USER` for existing DB rows at the time — since retired; see ADR-013, which consolidates the role model down to exactly `PLATFORM_ADMIN`/`COMPANY_ADMIN`/`COMPANY_USER`
 - `get_current_user()` returns ephemeral dev-admin object in dev mode
 - All FK columns are nullable to handle pre-migration data
 
@@ -352,3 +352,35 @@ A full backend audit found the codebase already had substantial security hardeni
 - `greenshift.db` (the local dev SQLite file) is gitignored and was regenerated from scratch during this work — it was itself stale relative to `models.py` (missing columns introduced by earlier, uncommitted-to-Alembic model changes), which is exactly the class of drift this pass closes off going forward.
 - A Postgres-specific edge case remains: downgrading migration `008` then re-upgrading on the same Postgres database fails on re-creating the shared `eventtype` enum (SQLAlchemy tries `CREATE TYPE` again even with `create_type=False` in this specific downgrade-then-reupgrade sequence). This does not affect a normal `upgrade head` on a clean database and is not exercised by the test suite (which runs on SQLite); documented here as a known limitation rather than chased further.
 - Full regression suite: 591 collected, 590 passed, 1 known-environmental failure (`test_simulated_snapshot_has_node_inventory_and_consistent_metrics` expects a 3-node simulated cluster but the connected live Docker Desktop cluster has 1 node — pre-existing, unrelated to this pass).
+
+---
+
+## ADR-013: Role Model Consolidation — Exactly Three Canonical Roles
+
+**Status:** ACCEPTED
+**Date:** 2026-09-10
+
+### Context
+
+`UserRole` carried three canonical roles (`PLATFORM_ADMIN`, `COMPANY_ADMIN`, `COMPANY_USER`) alongside five legacy aliases (`ADMIN`, `TEAM_LEAD`, `OPERATOR`, `USER`, `VIEWER`) left over from earlier phases (ADR-007 introduced `TEAM_LEAD`/`USER` "for existing DB rows"). Every authorization helper (`is_platform_admin`, `is_company_admin`, `is_company_member`, `require_role`, `require_roles`) special-cased both sets, and several endpoints keyed directly off the legacy string literals (`ingest.py`, `dispatcher.py`, `approval/service.py`, `tenant_scope.py`). This is exactly the "legacy role ambiguity" ADR-007 already flagged as backward-compat debt.
+
+### Decision
+
+`UserRole` now has exactly three members. Legacy values are no longer valid input anywhere (Pydantic rejects them with 422) and no code path treats them as active roles. Existing rows are normalized by data-aware mapping — not a blind rename — since the same legacy role was used inconsistently across the codebase:
+
+- `ADMIN` → `PLATFORM_ADMIN` when `tenant_id IS NULL` (was already global-scoped via `is_platform_admin()`'s existing tenant check), otherwise → `COMPANY_ADMIN` (was already tenant-scoped in practice).
+- `TEAM_LEAD` → `COMPANY_ADMIN`. It already had admin-tier capabilities plain `COMPANY_USER` never had (approve/decline, dispatch) — closer to Company Admin than Company User — and `docs/DECISIONS.md`'s own P0-BE-2 test suite already asserted it must stay out of `/admin/*` in the *old* system's narrower sense; the migration accepts that a former Team Lead now has full within-company admin reach (team_id is data, not an authorization tier — dropping the team-only restriction is intentional, not an oversight).
+- `OPERATOR` → `COMPANY_USER`. It could already submit/schedule/dispatch/cancel but was explicitly barred from approving and from `/admin/*` — exactly `COMPANY_USER`'s boundary. `COMPANY_USER` therefore keeps dispatch/bulk-load/cancel rights it already had before this change (not a new grant).
+- `USER` → `COMPANY_USER` (was already a pure alias).
+- `VIEWER` → `COMPANY_USER`, per the canonical `COMPANY_USER` role's own pre-existing endpoint config (job submission/scheduling already listed `COMPANY_USER` in its allow-list before this change) — the strictly-read-only `VIEWER` tier does not survive as a distinct capability level.
+- `api_keys.role` holding any legacy or administrative value → `COMPANY_USER` (API keys can never hold an administrative role — RULE 3).
+
+Applied via `alembic/versions/009_consolidate_user_roles.py` (normalizes data, then tightens the Postgres `userrole` enum + `ck_users_role_valid`, or rebuilds the SQLite table with the same effect) and mirrored in `app.shared.database.run_schema_migrations()` as the existing startup safety net. `require_role`/`require_admin`/`require_operator`/`require_user`/`require_viewer` (identity-based, unused except `require_viewer`) were deleted outright rather than kept for compatibility; `require_roles` (ORM-based, actually used by routers) was simplified to the 3-role superset logic (Platform Admin passes everything; Company Admin passes any check naming `COMPANY_ADMIN` or `COMPANY_USER`; Company User needs an exact match) — this is the same logic the code already had, with the legacy branches removed, not new behavior. Public registration and API-key creation continue to force non-privileged roles; `POST /auth/admin/create-user` was tightened to `PLATFORM_ADMIN`-only (its prior "Company Admin" branch was already unreachable given `is_platform_admin()`'s tenant check, so this makes existing behavior explicit rather than changing it).
+
+### Consequences
+
+- Approval/dispatch authorization is now purely tenant_id-scoped for `COMPANY_ADMIN`/`PLATFORM_ADMIN`; the team_id-scoped sub-check that only literal `TEAM_LEAD` had is gone. Team-scoped **job lookup** (`app.api.tenant_scope.get_tenant_jobs`, keyed off `is_platform_admin` only) is untouched and still applies to any non-Platform-Admin identity with a `team_id` set, independent of the Company Admin/Company User tier — the two isolation layers were already independent before this change.
+- Fixed two pre-existing bugs surfaced while touching this code: (1) `run_schema_migrations()`'s SQLite jobs-check-constraint block rebound the outer `conn` from `with engine.begin() as conn`, silently breaking every migration step after it (caught by a blanket `except`) — renamed to `jobs_conn`; (2) the SQLite users-table rebuild (both here and in the new Alembic migration) only recreated 2 of the table's 7 indexes, which broke `alembic downgrade` of migration `005` — now captures and replays every existing index definition.
+- The Streamlit dashboard (`app/dashboard/`) was updated in lockstep: role selectors, permission-matrix tables, and the demo-login personas now show only the three canonical roles.
+- Legacy-role-specific tests that tested now-retired distinctions (e.g. `TEAM_LEAD`'s team-only dispatch restriction, `VIEWER`'s inability to submit workloads) were rewritten to test the 3-role model's actual boundaries rather than deleted outright, per the mapping above.
+- Scheduler ranking, carbon/tariff calculation, Kubernetes dispatch mechanics, the audit hash chain, and notification delivery were not touched.

@@ -33,17 +33,11 @@ def get_tenant_jobs(
 
     - Platform admins can view all jobs, or filter by a specific tenant_id.
     - Company admins can view all jobs within their own tenant.
-    - Non-admin company members (TEAM_LEAD, OPERATOR, USER, VIEWER) are strictly scoped
-      to their own team within their tenant.
+    - Company Users are strictly scoped to their own team within their tenant.
     - Cross-tenant access yields 404 (prevents leaking existence).
     - Cross-team access for non-admin yields 403 (Access forbidden).
     """
-    role_val = None
-    if identity:
-        r = getattr(identity, "role", None)
-        role_val = r.value if hasattr(r, "value") else str(r) if r else None
-
-    is_admin = is_platform_admin(identity) or role_val in ("PLATFORM_ADMIN", "ADMIN")
+    is_admin = is_platform_admin(identity)
 
     if job_id:
         job = db.get(JobORM, job_id)

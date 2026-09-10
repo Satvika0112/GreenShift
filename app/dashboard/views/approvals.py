@@ -33,7 +33,7 @@ def render_approvals_view() -> None:
     with c3:
         st.markdown(render_metric_card("Approval Gate Policy", "STRICT", "Backend enforced"), unsafe_allow_html=True)
     with c4:
-        st.markdown(render_metric_card("Operator Access", st.session_state.get("user_role", "OPERATOR"), "Active RBAC role", tag="ACTIVE"), unsafe_allow_html=True)
+        st.markdown(render_metric_card("Operator Access", st.session_state.get("user_role", "COMPANY_ADMIN"), "Active RBAC role", tag="ACTIVE"), unsafe_allow_html=True)
 
     tab_pending, tab_declined = st.tabs(["⏳ Pending Approvals", "🛑 Declined History"])
 

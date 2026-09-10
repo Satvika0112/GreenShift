@@ -235,7 +235,7 @@ class TestDatabaseAndAPIExplainabilityIntegration:
                 username="admin_user",
                 email="admin_user@greenshift.io",
                 hashed_password=hash_password("adminpass123"),
-                role=UserRole.ADMIN,
+                role=UserRole.PLATFORM_ADMIN,
                 team_id="team_alpha",
                 is_active=True,
             )
@@ -282,7 +282,7 @@ class TestDatabaseAndAPIExplainabilityIntegration:
                 username="admin_user",
                 email="admin_user@greenshift.io",
                 hashed_password=hash_password("adminpass123"),
-                role=UserRole.ADMIN,
+                role=UserRole.PLATFORM_ADMIN,
                 team_id="team_alpha",
                 is_active=True,
             )

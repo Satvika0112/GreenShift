@@ -58,13 +58,13 @@ def auth_headers(db):
         username="dispatch-admin",
         email="dispatch-admin@greenshift.io",
         hashed_password=hash_password("adminpass123"),
-        role=UserRole.ADMIN,
+        role=UserRole.PLATFORM_ADMIN,
         is_active=True,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
-    token = create_access_token(user_id=user.id, username=user.username, role="ADMIN")
+    token = create_access_token(user_id=user.id, username=user.username, role="PLATFORM_ADMIN")
     return {"Authorization": f"Bearer {token}"}
 
 

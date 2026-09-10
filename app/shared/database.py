@@ -224,52 +224,83 @@ def run_schema_migrations() -> None:
         # Ensure SQLite jobs check constraint includes all lifecycle statuses
         if not is_pg:
             try:
-                with engine.connect() as conn:
-                    row = conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'")).fetchone()
+                with engine.connect() as jobs_conn:
+                    row = jobs_conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'")).fetchone()
                     if row and row[0]:
                         old_c = "CHECK (status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED'))"
                         new_c = "CHECK (status IN ('SUBMITTED', 'VALIDATED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'REJECTED', 'QUEUED', 'DISPATCHING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'))"
                         if old_c in row[0]:
-                            conn.execute(text("PRAGMA foreign_keys=OFF;"))
+                            jobs_conn.execute(text("PRAGMA foreign_keys=OFF;"))
                             new_sql = row[0].replace(old_c, new_c).replace('CREATE TABLE "jobs"', 'CREATE TABLE "jobs_new"')
-                            conn.execute(text(new_sql))
-                            conn.execute(text("INSERT INTO jobs_new SELECT * FROM jobs;"))
-                            conn.execute(text("DROP TABLE jobs;"))
-                            conn.execute(text("ALTER TABLE jobs_new RENAME TO jobs;"))
-                            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_team_status ON jobs (team_id, status);"))
-                            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_status_created ON jobs (status, created_at);"))
-                            conn.execute(text("PRAGMA foreign_keys=ON;"))
-                            conn.commit()
+                            jobs_conn.execute(text(new_sql))
+                            jobs_conn.execute(text("INSERT INTO jobs_new SELECT * FROM jobs;"))
+                            jobs_conn.execute(text("DROP TABLE jobs;"))
+                            jobs_conn.execute(text("ALTER TABLE jobs_new RENAME TO jobs;"))
+                            jobs_conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_team_status ON jobs (team_id, status);"))
+                            jobs_conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_status_created ON jobs (status, created_at);"))
+                            jobs_conn.execute(text("PRAGMA foreign_keys=ON;"))
+                            jobs_conn.commit()
                             logger.info("Schema migration: successfully updated SQLite jobs status check constraint")
             except Exception as exc:
                 logger.debug("SQLite check constraint migration skipped: %s", exc)
 
-        # Ensure SQLite users check constraint includes all role types
+        # Role consolidation: normalize any legacy role values (ADMIN, TEAM_LEAD,
+        # OPERATOR, USER, VIEWER) down to the three canonical roles before any
+        # constraint tightens against them. See UserRole in app.shared.models
+        # and alembic/versions/009_consolidate_user_roles.py for the mapping
+        # rationale. Safe to run repeatedly — a no-op once no legacy values remain.
+        try:
+            if insp.has_table("users"):
+                conn.execute(text(
+                    "UPDATE users SET role = 'PLATFORM_ADMIN' WHERE role = 'ADMIN' AND tenant_id IS NULL"
+                ))
+                # Any remaining 'ADMIN' rows are tenant-scoped (the global ones were
+                # just converted above) — those, and all 'TEAM_LEAD' rows, become
+                # COMPANY_ADMIN (full tenant scope; team-only restriction is dropped
+                # since team_id is data, not an authorization tier — see UserRole).
+                conn.execute(text(
+                    "UPDATE users SET role = 'COMPANY_ADMIN' WHERE role IN ('ADMIN', 'TEAM_LEAD')"
+                ))
+                conn.execute(text(
+                    "UPDATE users SET role = 'COMPANY_USER' WHERE role IN ('OPERATOR', 'USER', 'VIEWER')"
+                ))
+            if insp.has_table("api_keys"):
+                conn.execute(text(
+                    "UPDATE api_keys SET role = 'COMPANY_USER' WHERE role IN "
+                    "('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'USER', 'VIEWER', 'PLATFORM_ADMIN', 'COMPANY_ADMIN')"
+                ))
+        except Exception as exc:
+            logger.debug("Legacy role data normalization skipped: %s", exc)
+
+        # Ensure SQLite users check constraint only allows the three canonical roles
         if not is_pg:
             try:
                 row = conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")).fetchone()
-                if row and row[0] and "PLATFORM_ADMIN" not in row[0]:
+                if row and row[0] and "TEAM_LEAD" in row[0]:
                     import re
+                    # Capture existing index definitions — a table rebuild
+                    # drops every index tied to the old table, so these must
+                    # be recreated afterward or later Alembic downgrades that
+                    # expect them (e.g. ix_users_created_at) will fail.
+                    index_rows = conn.execute(text(
+                        "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='users' AND sql IS NOT NULL"
+                    )).fetchall()
                     conn.execute(text("PRAGMA foreign_keys=OFF;"))
                     new_sql = re.sub(
                         r"CONSTRAINT\s+ck_users_role_valid\s+CHECK\s*\(.*?\)\)",
-                        "CONSTRAINT ck_users_role_valid CHECK (role IN ('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'USER', 'VIEWER', 'PLATFORM_ADMIN', 'COMPANY_ADMIN', 'COMPANY_USER'))",
+                        "CONSTRAINT ck_users_role_valid CHECK (role IN ('PLATFORM_ADMIN', 'COMPANY_ADMIN', 'COMPANY_USER'))",
                         row[0],
                         flags=re.DOTALL,
                     )
-                    if new_sql == row[0]:
-                        old_c = "CHECK (role IN ('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'VIEWER'))"
-                        new_c = "CHECK (role IN ('ADMIN', 'TEAM_LEAD', 'OPERATOR', 'USER', 'VIEWER', 'PLATFORM_ADMIN', 'COMPANY_ADMIN', 'COMPANY_USER'))"
-                        new_sql = row[0].replace(old_c, new_c)
                     new_sql = new_sql.replace('CREATE TABLE "users"', 'CREATE TABLE "users_new"').replace('CREATE TABLE users', 'CREATE TABLE users_new')
                     conn.execute(text(new_sql))
                     conn.execute(text("INSERT INTO users_new SELECT * FROM users;"))
                     conn.execute(text("DROP TABLE users;"))
                     conn.execute(text("ALTER TABLE users_new RENAME TO users;"))
-                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username);"))
-                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email);"))
+                    for (index_sql,) in index_rows:
+                        conn.execute(text(index_sql))
                     conn.execute(text("PRAGMA foreign_keys=ON;"))
-                    logger.info("Schema migration: successfully updated SQLite users role check constraint")
+                    logger.info("Schema migration: successfully consolidated SQLite users role check constraint to 3 canonical roles")
             except Exception as exc:
                 logger.warning("SQLite users check constraint migration error: %s", exc)
 

@@ -27,7 +27,7 @@ def admin_token():
     return create_access_token(
         user_id=1,
         username="admin",
-        role="ADMIN",
+        role="PLATFORM_ADMIN",
         team_id="engineering",
     )
 

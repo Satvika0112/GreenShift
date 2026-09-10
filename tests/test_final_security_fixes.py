@@ -68,14 +68,14 @@ def seed_users(client):
             username="sec_admin",
             email="admin@test.com",
             hashed_password=hash_password("AdminPass123!"),
-            role=UserRole.ADMIN,
+            role=UserRole.PLATFORM_ADMIN,
             is_active=True,
         )
         lead_a_u = UserORM(
             username="sec_lead_a",
             email="lead_a@test.com",
             hashed_password=hash_password("LeadPass123!"),
-            role=UserRole.TEAM_LEAD,
+            role=UserRole.COMPANY_ADMIN,
             team_id="team-a",
             is_active=True,
         )
@@ -83,7 +83,7 @@ def seed_users(client):
             username="sec_lead_b",
             email="lead_b@test.com",
             hashed_password=hash_password("LeadPass123!"),
-            role=UserRole.TEAM_LEAD,
+            role=UserRole.COMPANY_ADMIN,
             team_id="team-b",
             is_active=True,
         )
@@ -91,7 +91,7 @@ def seed_users(client):
             username="sec_op_a",
             email="op_a@test.com",
             hashed_password=hash_password("OpPass123!"),
-            role=UserRole.OPERATOR,
+            role=UserRole.COMPANY_USER,
             team_id="team-a",
             is_active=True,
         )
@@ -99,7 +99,7 @@ def seed_users(client):
             username="sec_view_a",
             email="view_a@test.com",
             hashed_password=hash_password("ViewPass123!"),
-            role=UserRole.VIEWER,
+            role=UserRole.COMPANY_USER,
             team_id="team-a",
             is_active=True,
         )
@@ -112,11 +112,11 @@ def seed_users(client):
         db.refresh(viewer_a_u)
 
         tokens = {
-            "admin": create_access_token(user_id=admin_u.id, username=admin_u.username, role="ADMIN"),
-            "lead_a": create_access_token(user_id=lead_a_u.id, username=lead_a_u.username, role="TEAM_LEAD", team_id="team-a"),
-            "lead_b": create_access_token(user_id=lead_b_u.id, username=lead_b_u.username, role="TEAM_LEAD", team_id="team-b"),
-            "operator_a": create_access_token(user_id=operator_a_u.id, username=operator_a_u.username, role="OPERATOR", team_id="team-a"),
-            "viewer_a": create_access_token(user_id=viewer_a_u.id, username=viewer_a_u.username, role="VIEWER", team_id="team-a"),
+            "admin": create_access_token(user_id=admin_u.id, username=admin_u.username, role="PLATFORM_ADMIN"),
+            "lead_a": create_access_token(user_id=lead_a_u.id, username=lead_a_u.username, role="COMPANY_ADMIN", team_id="team-a"),
+            "lead_b": create_access_token(user_id=lead_b_u.id, username=lead_b_u.username, role="COMPANY_ADMIN", team_id="team-b"),
+            "operator_a": create_access_token(user_id=operator_a_u.id, username=operator_a_u.username, role="COMPANY_USER", team_id="team-a"),
+            "viewer_a": create_access_token(user_id=viewer_a_u.id, username=viewer_a_u.username, role="COMPANY_USER", team_id="team-a"),
         }
     return tokens
 
@@ -125,40 +125,44 @@ def seed_users(client):
 # FIX 1: REGISTRATION PRIVILEGE ESCALATION TESTS
 # ====================================================================
 
-def test_public_registration_with_admin_role_assigned_viewer(client):
-    """A. Public registration with role=ADMIN must assign VIEWER, not ADMIN."""
+def test_public_registration_with_platform_admin_role_assigned_company_user(client):
+    """A. Public registration with role=PLATFORM_ADMIN must assign COMPANY_USER, not PLATFORM_ADMIN."""
     resp = client.post("/auth/register", json={
         "username": "attacker_admin",
         "email": "attacker@darkweb.org",
         "password": "Password123!",
-        "role": "ADMIN",
+        "role": "PLATFORM_ADMIN",
         "team_id": "core",
     })
     assert resp.status_code == 201
     data = resp.json()
     assert data["username"] == "attacker_admin"
-    assert data["role"] == "VIEWER"  # Forced to VIEWER
+    assert data["role"] == "COMPANY_USER"  # Forced to COMPANY_USER
 
 
-def test_public_registration_with_operator_or_team_lead_assigned_viewer(client):
-    """B. Public registration with role=OPERATOR or TEAM_LEAD must assign VIEWER."""
-    resp_op = client.post("/auth/register", json={
-        "username": "self_operator",
-        "email": "op@company.com",
+def test_public_registration_with_company_admin_role_assigned_company_user(client):
+    """B. Public registration with role=COMPANY_ADMIN must assign COMPANY_USER."""
+    resp = client.post("/auth/register", json={
+        "username": "self_promoter",
+        "email": "promoter@company.com",
         "password": "Password123!",
-        "role": "OPERATOR",
+        "role": "COMPANY_ADMIN",
     })
-    assert resp_op.status_code == 201
-    assert resp_op.json()["role"] == "VIEWER"
+    assert resp.status_code == 201
+    assert resp.json()["role"] == "COMPANY_USER"
 
-    resp_lead = client.post("/auth/register", json={
-        "username": "self_lead",
-        "email": "lead@company.com",
-        "password": "Password123!",
-        "role": "TEAM_LEAD",
-    })
-    assert resp_lead.status_code == 201
-    assert resp_lead.json()["role"] == "VIEWER"
+
+def test_public_registration_with_legacy_role_string_rejected(client):
+    """Legacy role values (removed from UserRole) must be rejected outright (422),
+    not silently coerced — they are no longer valid input at all."""
+    for legacy_role in ("ADMIN", "TEAM_LEAD", "OPERATOR", "VIEWER"):
+        resp = client.post("/auth/register", json={
+            "username": f"legacy_{legacy_role.lower()}",
+            "email": f"{legacy_role.lower()}@company.com",
+            "password": "Password123!",
+            "role": legacy_role,
+        })
+        assert resp.status_code == 422, f"role={legacy_role} should be rejected by schema validation"
 
 
 def test_unauthenticated_admin_create_user_returns_401(client):
@@ -167,19 +171,21 @@ def test_unauthenticated_admin_create_user_returns_401(client):
         "username": "new_admin",
         "email": "new_admin@company.com",
         "password": "Password123!",
-        "role": "ADMIN",
+        "role": "PLATFORM_ADMIN",
     })
     assert resp.status_code == 401
 
 
 def test_non_admin_calling_admin_create_user_returns_403(client, seed_users):
-    """D. Non-admin authenticated user calling /auth/admin/create-user returns 403."""
+    """D. Non-Platform-Admin authenticated user calling /auth/admin/create-user returns 403.
+    This deprecated endpoint is Platform-Admin-only — a Company Admin (lead_a) must
+    use POST /admin/users instead."""
     headers_lead = {"Authorization": f"Bearer {seed_users['lead_a']}"}
     resp_lead = client.post("/auth/admin/create-user", headers=headers_lead, json={
         "username": "subordinate",
         "email": "sub@company.com",
         "password": "Password123!",
-        "role": "OPERATOR",
+        "role": "COMPANY_USER",
     })
     assert resp_lead.status_code == 403
 
@@ -188,18 +194,17 @@ def test_non_admin_calling_admin_create_user_returns_403(client, seed_users):
         "username": "subordinate2",
         "email": "sub2@company.com",
         "password": "Password123!",
-        "role": "OPERATOR",
+        "role": "COMPANY_USER",
     })
     assert resp_viewer.status_code == 403
 
 
 def test_tenant_scoped_admin_cannot_mint_platform_admin_via_legacy_endpoint(client):
     """
-    P0 regression: a Company Admin (legacy role=ADMIN with a tenant_id set) must
-    NOT be able to use the deprecated /auth/admin/create-user endpoint to create
-    a global Platform Admin (role=PLATFORM_ADMIN/ADMIN with no tenant_id, which
-    is_platform_admin() treats as global scope). Also verifies any user they
-    legitimately create is scoped to their own tenant, never left tenant_id=NULL.
+    P0 regression: a Company Admin must NOT be able to use the deprecated
+    /auth/admin/create-user endpoint at all — it is Platform-Admin-only. Also
+    verifies any user a Platform Admin legitimately creates through it is
+    scoped to the expected tenant.
     """
     from app.shared.models import TenantORM
 
@@ -209,7 +214,7 @@ def test_tenant_scoped_admin_cannot_mint_platform_admin_via_legacy_endpoint(clie
             username="company_admin_escalation",
             email="company_admin_escalation@test.com",
             hashed_password=hash_password("CompanyAdminPass123!"),
-            role=UserRole.ADMIN,          # legacy alias — tenant-scoped when tenant_id is set
+            role=UserRole.COMPANY_ADMIN,
             tenant_id="tenant-escalation-test",
             is_active=True,
         )
@@ -218,12 +223,13 @@ def test_tenant_scoped_admin_cannot_mint_platform_admin_via_legacy_endpoint(clie
         db.refresh(company_admin)
         token = create_access_token(
             user_id=company_admin.id, username=company_admin.username,
-            role="ADMIN", tenant_id="tenant-escalation-test",
+            role="COMPANY_ADMIN", tenant_id="tenant-escalation-test",
         )
 
     headers = {"Authorization": f"Bearer {token}"}
 
-    # Attempt to mint a global Platform Admin — must be rejected.
+    # A Company Admin cannot use this Platform-Admin-only endpoint at all —
+    # not even to mint a global Platform Admin.
     resp = client.post("/auth/admin/create-user", headers=headers, json={
         "username": "minted_platform_admin",
         "email": "minted_platform_admin@evil.example",
@@ -232,31 +238,18 @@ def test_tenant_scoped_admin_cannot_mint_platform_admin_via_legacy_endpoint(clie
     })
     assert resp.status_code == 403
 
+    # Nor even a harmless, non-privileged user.
     resp2 = client.post("/auth/admin/create-user", headers=headers, json={
-        "username": "minted_admin_alias",
-        "email": "minted_admin_alias@evil.example",
+        "username": "minted_company_user",
+        "email": "minted_company_user@evil.example",
         "password": "Password123!",
-        "role": "ADMIN",
-        "tenant_id": None,  # explicit attempt to leave it global-scoped
+        "role": "COMPANY_USER",
     })
     assert resp2.status_code == 403
 
     with SessionLocal() as db:
         assert db.query(UserORM).filter(UserORM.username == "minted_platform_admin").first() is None
-        assert db.query(UserORM).filter(UserORM.username == "minted_admin_alias").first() is None
-
-    # A legitimate, non-privileged creation must still work and be tenant-scoped.
-    resp3 = client.post("/auth/admin/create-user", headers=headers, json={
-        "username": "legit_new_user",
-        "email": "legit_new_user@test.com",
-        "password": "Password123!",
-        "role": "VIEWER",
-    })
-    assert resp3.status_code == 201
-    with SessionLocal() as db:
-        created = db.query(UserORM).filter(UserORM.username == "legit_new_user").first()
-        assert created is not None
-        assert created.tenant_id == "tenant-escalation-test"
+        assert db.query(UserORM).filter(UserORM.username == "minted_company_user").first() is None
 
     with SessionLocal() as db:
         db.query(UserORM).filter(UserORM.tenant_id == "tenant-escalation-test").delete()
@@ -264,15 +257,14 @@ def test_tenant_scoped_admin_cannot_mint_platform_admin_via_legacy_endpoint(clie
         db.commit()
 
 
-def test_admin_can_create_users_with_allowed_roles(client, seed_users):
-    """E. ADMIN calling /auth/admin/create-user can create users with explicit roles."""
+def test_platform_admin_can_create_users_with_allowed_roles(client, seed_users):
+    """E. PLATFORM_ADMIN calling /auth/admin/create-user can create users with any canonical role."""
     headers_admin = {"Authorization": f"Bearer {seed_users['admin']}"}
 
     roles_to_test = [
-        ("created_admin", "cad@test.com", "ADMIN"),
-        ("created_lead", "clead@test.com", "TEAM_LEAD"),
-        ("created_op", "cop@test.com", "OPERATOR"),
-        ("created_view", "cview@test.com", "VIEWER"),
+        ("created_platform_admin", "cpa@test.com", "PLATFORM_ADMIN"),
+        ("created_company_admin", "cca@test.com", "COMPANY_ADMIN"),
+        ("created_company_user", "ccu@test.com", "COMPANY_USER"),
     ]
 
     for uname, email, role in roles_to_test:
@@ -318,7 +310,7 @@ def test_duplicate_username_and_email_protections(client, seed_users):
         "username": "sec_admin",
         "email": "new_unique@test.com",
         "password": "Password123!",
-        "role": "OPERATOR",
+        "role": "COMPANY_USER",
     })
     assert r3.status_code == 409
 
@@ -554,7 +546,7 @@ def multi_team_jobs():
 def test_team_lead_list_jobs_isolated_and_cannot_bypass_via_query_param(
     client, seed_users, multi_team_jobs
 ):
-    """B. TEAM_LEAD from team-a: GET /jobs only returns team-a jobs, even when passing team_id=team-b."""
+    """B. COMPANY_ADMIN (lead_a) from team-a: GET /jobs only returns team-a jobs, even when passing team_id=team-b."""
     headers_lead_a = {"Authorization": f"Bearer {seed_users['lead_a']}"}
 
     # 1. Unfiltered query
@@ -581,7 +573,7 @@ def test_team_lead_list_jobs_isolated_and_cannot_bypass_via_query_param(
 def test_team_lead_get_job_detail_enforces_team_isolation(
     client, seed_users, multi_team_jobs
 ):
-    """C. TEAM_LEAD from team-a: GET /jobs/{own} succeeds, GET /jobs/{other} returns 403."""
+    """C. COMPANY_ADMIN (lead_a) from team-a: GET /jobs/{own} succeeds, GET /jobs/{other} returns 403."""
     headers_lead_a = {"Authorization": f"Bearer {seed_users['lead_a']}"}
 
     # Own team job -> 200
@@ -598,7 +590,7 @@ def test_team_lead_get_job_detail_enforces_team_isolation(
 def test_team_lead_get_job_history_enforces_team_isolation(
     client, seed_users, multi_team_jobs
 ):
-    """D. TEAM_LEAD from team-a: GET /jobs/{other}/history returns 403."""
+    """D. COMPANY_ADMIN (lead_a) from team-a: GET /jobs/{other}/history returns 403."""
     headers_lead_a = {"Authorization": f"Bearer {seed_users['lead_a']}"}
 
     # Own team history -> 200
@@ -643,7 +635,7 @@ def test_pending_approvals_enforces_team_isolation(
 def test_admin_cross_team_access_and_filtering(
     client, seed_users, multi_team_jobs
 ):
-    """F. ADMIN can see cross-team data and filter by team."""
+    """F. PLATFORM_ADMIN can see cross-team data and filter by team."""
     headers_admin = {"Authorization": f"Bearer {seed_users['admin']}"}
 
     # 1. List all jobs across all teams
@@ -682,8 +674,8 @@ def test_admin_cross_team_access_and_filtering(
 def test_operator_and_viewer_team_isolation(
     client, seed_users, multi_team_jobs
 ):
-    """G. Repeat key tests for OPERATOR and VIEWER roles."""
-    # OPERATOR from team-a
+    """G. Repeat key tests for COMPANY_USER accounts (operator_a, viewer_a)."""
+    # COMPANY_USER (operator_a) from team-a
     headers_op = {"Authorization": f"Bearer {seed_users['operator_a']}"}
     r_op_jobs = client.get("/api/v1/jobs", headers=headers_op)
     assert r_op_jobs.status_code == 200
@@ -692,7 +684,7 @@ def test_operator_and_viewer_team_isolation(
     r_op_cross = client.get("/api/v1/jobs/JOB-TEAM-B-001", headers=headers_op)
     assert r_op_cross.status_code == 403
 
-    # VIEWER from team-a
+    # COMPANY_USER (viewer_a) from team-a
     headers_view = {"Authorization": f"Bearer {seed_users['viewer_a']}"}
     r_view_jobs = client.get("/api/v1/jobs", headers=headers_view)
     assert r_view_jobs.status_code == 200

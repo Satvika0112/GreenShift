@@ -113,14 +113,21 @@ class UserApprovalStatus(str, enum.Enum):
 
 
 class UserRole(str, enum.Enum):
+    """
+    Canonical application roles. Exactly three are supported:
+
+      PLATFORM_ADMIN — global platform administrator.
+      COMPANY_ADMIN  — administrator of a single company/tenant.
+      COMPANY_USER   — normal company user.
+
+    Legacy values (ADMIN, TEAM_LEAD, OPERATOR, USER, VIEWER) are no longer
+    active roles. Existing rows are normalized on startup — see
+    app.shared.database.run_schema_migrations() and
+    alembic/versions/009_consolidate_user_roles.py.
+    """
     PLATFORM_ADMIN = "PLATFORM_ADMIN"
     COMPANY_ADMIN  = "COMPANY_ADMIN"
     COMPANY_USER   = "COMPANY_USER"
-    ADMIN          = "ADMIN"         # Platform Admin alias
-    OPERATOR       = "OPERATOR"
-    USER           = "USER"          # Company User alias
-    TEAM_LEAD      = "TEAM_LEAD"     # Company Admin / Lead alias
-    VIEWER         = "VIEWER"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -142,8 +149,8 @@ class TenantORM(Base):
     jobs     = relationship("JobORM", back_populates="tenant", foreign_keys="JobORM.tenant_id")
 
 
-# RULE 3: API keys can NEVER have ADMIN role
-API_KEY_ALLOWED_ROLES = {UserRole.OPERATOR, UserRole.USER, UserRole.VIEWER, UserRole.COMPANY_USER}
+# RULE 3: API keys can NEVER have an administrative role (PLATFORM_ADMIN / COMPANY_ADMIN)
+API_KEY_ALLOWED_ROLES = {UserRole.COMPANY_USER}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -156,7 +163,7 @@ class UserORM(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(
-            "role IN ('PLATFORM_ADMIN', 'COMPANY_ADMIN', 'COMPANY_USER', 'ADMIN', 'TEAM_LEAD', 'OPERATOR', 'USER', 'VIEWER')",
+            "role IN ('PLATFORM_ADMIN', 'COMPANY_ADMIN', 'COMPANY_USER')",
             name="ck_users_role_valid",
         ),
     )
@@ -165,7 +172,7 @@ class UserORM(Base):
     username        = Column(String(50), nullable=False, unique=True, index=True)
     email           = Column(String(255), nullable=False, unique=True, index=True)
     hashed_password = Column(String(255), nullable=False)
-    role            = Column(SAEnum(UserRole), default=UserRole.VIEWER, nullable=False, index=True)
+    role            = Column(SAEnum(UserRole), default=UserRole.COMPANY_USER, nullable=False, index=True)
     approval_status = Column(String(20), default="APPROVED", nullable=False, index=True)
     team_id         = Column(String, nullable=True, index=True)   # team within org
     tenant_id       = Column(String, ForeignKey("tenants.id"), nullable=True, index=True)  # org
@@ -197,7 +204,7 @@ class UserORM(Base):
 class APIKeyORM(Base):
     """
     API key for CI/CD pipelines and automated systems.
-    RULE 3: role can NEVER be ADMIN — enforced at creation time.
+    RULE 3: role can NEVER be an administrative role — enforced at creation time.
     """
 
     __tablename__ = "api_keys"
@@ -205,7 +212,7 @@ class APIKeyORM(Base):
     id         = Column(String, primary_key=True)            # UUID
     key_hash   = Column(String, nullable=False, unique=True) # SHA-256 of raw key
     tenant_id  = Column(String, ForeignKey("tenants.id"), nullable=False, index=True)
-    role       = Column(SAEnum(UserRole), nullable=False, default=UserRole.OPERATOR)
+    role       = Column(SAEnum(UserRole), nullable=False, default=UserRole.COMPANY_USER)
     label      = Column(String, nullable=True)               # e.g. "CI pipeline"
     is_active  = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -989,8 +996,8 @@ class UserRegisterRequest(BaseModel):
     email: str = Field(..., description="User email address")
     password: str = Field(..., min_length=6, description="Plaintext password")
     role: Optional[UserRole] = Field(
-        default=UserRole.VIEWER,
-        description="User role (ignored on public /auth/register where all users receive VIEWER; honored only for authenticated admin user creation)",
+        default=UserRole.COMPANY_USER,
+        description="User role (ignored on public /auth/register where all users receive COMPANY_USER; honored only for authenticated admin user creation)",
     )
     team_id: Optional[str] = Field(default=None, description="Optional team identifier")
     tenant_id: Optional[str] = Field(default=None, description="Optional company / tenant identifier")
@@ -1096,10 +1103,10 @@ class LoginResponse(BaseModel):
 
 
 class UserCreateRequest(BaseModel):
-    """ADMIN-only user creation within own tenant."""
+    """Company Admin / Platform Admin user creation within own tenant."""
     email: str = Field(..., description="User email address")
     password: str = Field(..., min_length=6, description="Password")
-    role: UserRole = Field(default=UserRole.VIEWER)
+    role: UserRole = Field(default=UserRole.COMPANY_USER)
     username: Optional[str] = Field(None, description="Optional username; defaults to email prefix")
     team_id: Optional[str] = Field(None, description="Optional team within the tenant")
     tenant_id: Optional[str] = Field(None, description="Target tenant ID (Platform Admin only)")
@@ -1120,9 +1127,9 @@ class TenantUserResponse(BaseModel):
 
 
 class APIKeyCreateRequest(BaseModel):
-    """ADMIN-only API key creation. Role must not be ADMIN."""
+    """Company Admin / Platform Admin API key creation. Role must not be administrative."""
     label: Optional[str] = Field(None, description="Human-readable label e.g. 'CI pipeline'")
-    role: UserRole = Field(default=UserRole.OPERATOR, description="Role for API key (cannot be ADMIN)")
+    role: UserRole = Field(default=UserRole.COMPANY_USER, description="Role for API key (cannot be PLATFORM_ADMIN/COMPANY_ADMIN)")
     tenant_id: Optional[str] = Field(None, description="Target tenant ID (Platform Admin only)")
 
 

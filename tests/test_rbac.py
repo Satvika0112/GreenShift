@@ -1,15 +1,21 @@
 """
 Tests for GreenShift Role-Based Access Control (RBAC) on Approval & Scheduling
 
+GreenShift supports exactly three application roles: PLATFORM_ADMIN,
+COMPANY_ADMIN, COMPANY_USER (see app.shared.models.UserRole). Company Admin
+approval/decline authorization is scoped by tenant_id (company), not team_id —
+team_id remains a data/organizational field but is not an authorization tier
+(a Company Admin has full authority across every team within their own
+company, matching how Company Admin already behaved before role consolidation).
+
 Covers:
-1. TEAM_LEAD approving own team job -> 200 OK
-2. TEAM_LEAD attempting another team's job -> 403 Forbidden
-3. VIEWER attempting approval -> 403 Forbidden
-4. OPERATOR attempting approval -> 403 Forbidden
-5. ADMIN approving any team's job -> 200 OK
-6. Unauthorized request (missing / invalid token) -> 401 Unauthorized
-7. TEAM_LEAD declining own team job (200 OK) vs another team's job (403 Forbidden)
-8. Service-level authorization validation unit tests
+1. COMPANY_ADMIN approving own company's job -> 200 OK
+2. COMPANY_ADMIN attempting another company's job -> 403/404 Forbidden
+3. COMPANY_USER attempting approval -> 403 Forbidden
+4. PLATFORM_ADMIN approving any company's job -> 200 OK
+5. Unauthorized request (missing / invalid token) -> 401 Unauthorized
+6. COMPANY_ADMIN declining own company job (200 OK) vs another company's job (403/404)
+7. Service-level authorization validation unit tests
 """
 
 import pytest
@@ -26,6 +32,7 @@ from app.shared.models import (
     JobSubmitRequest,
     KubernetesExecutionORM,
     ScheduleDecisionORM,
+    TenantORM,
     UserORM,
     UserRole,
 )
@@ -62,6 +69,7 @@ def setup_rbac_db():
         db.query(AuditEventORM).delete()
         db.query(JobORM).delete()
         db.query(UserORM).delete()
+        db.query(TenantORM).delete()
         db.commit()
     finally:
         db.close()
@@ -84,6 +92,7 @@ def setup_rbac_db():
         db.query(AuditEventORM).delete()
         db.query(JobORM).delete()
         db.query(UserORM).delete()
+        db.query(TenantORM).delete()
         db.commit()
     finally:
         db.close()
@@ -102,22 +111,27 @@ def client():
 
 @pytest.fixture
 def users_and_tokens(client):
-    """Create test users for all roles and return a dictionary of their tokens."""
+    """Create test users for all three canonical roles across two companies
+    and return a dictionary of their tokens."""
     with SessionLocal() as db:
+        db.add(TenantORM(id="tenant-a", name="Company A", is_active=True))
+        db.add(TenantORM(id="tenant-b", name="Company B", is_active=True))
+        db.commit()
+
         users = [
-            ("admin_user", "admin@greenshift.io", "AdminPassword123!", UserRole.ADMIN, None),
-            ("lead_team_a", "lead_a@greenshift.io", "LeadPassword123!", UserRole.TEAM_LEAD, "team-a"),
-            ("lead_team_b", "lead_b@greenshift.io", "LeadPassword123!", UserRole.TEAM_LEAD, "team-b"),
-            ("operator_user", "operator@greenshift.io", "OperatorPassword123!", UserRole.OPERATOR, "team-a"),
-            ("viewer_user", "viewer@greenshift.io", "ViewerPassword123!", UserRole.VIEWER, "team-a"),
+            ("admin_user", "admin@greenshift.io", "AdminPassword123!", UserRole.PLATFORM_ADMIN, None, "team-a"),
+            ("company_admin_a", "admin_a@greenshift.io", "AdminAPassword123!", UserRole.COMPANY_ADMIN, "tenant-a", "team-a"),
+            ("company_admin_b", "admin_b@greenshift.io", "AdminBPassword123!", UserRole.COMPANY_ADMIN, "tenant-b", "team-b"),
+            ("company_user_a", "user_a@greenshift.io", "UserAPassword123!", UserRole.COMPANY_USER, "tenant-a", "team-a"),
         ]
         user_objs = {}
-        for username, email, pwd, role, team in users:
+        for username, email, pwd, role, tenant_id, team in users:
             u = UserORM(
                 username=username,
                 email=email,
                 hashed_password=hash_password(pwd),
                 role=role,
+                tenant_id=tenant_id,
                 team_id=team,
                 is_active=True,
             )
@@ -127,45 +141,25 @@ def users_and_tokens(client):
         for u in user_objs.values():
             db.refresh(u)
 
-        reg_admin = {"id": user_objs["admin_user"].id}
-        reg_lead_a = {"id": user_objs["lead_team_a"].id}
-        reg_lead_b = {"id": user_objs["lead_team_b"].id}
-        reg_operator = {"id": user_objs["operator_user"].id}
-        reg_viewer = {"id": user_objs["viewer_user"].id}
+        ids = {name: u.id for name, u in user_objs.items()}
 
-    token_admin = client.post("/auth/login", json={
-        "username": "admin_user",
-        "password": "AdminPassword123!",
-    }).json()["access_token"]
-    token_lead_a = client.post("/auth/login", json={
-        "username": "lead_team_a",
-        "password": "LeadPassword123!",
-    }).json()["access_token"]
-    token_lead_b = client.post("/auth/login", json={
-        "username": "lead_team_b",
-        "password": "LeadPassword123!",
-    }).json()["access_token"]
-    token_operator = client.post("/auth/login", json={
-        "username": "operator_user",
-        "password": "OperatorPassword123!",
-    }).json()["access_token"]
-    token_viewer = client.post("/auth/login", json={
-        "username": "viewer_user",
-        "password": "ViewerPassword123!",
-    }).json()["access_token"]
+    tokens = {}
+    for username, _email, pwd, _role, _tenant_id, _team in users:
+        tokens[username] = client.post("/auth/login", json={
+            "username": username,
+            "password": pwd,
+        }).json()["access_token"]
 
     return {
-        "admin": {"id": reg_admin["id"], "token": token_admin},
-        "lead_a": {"id": reg_lead_a["id"], "token": token_lead_a, "team_id": "team-a"},
-        "lead_b": {"id": reg_lead_b["id"], "token": token_lead_b, "team_id": "team-b"},
-        "operator": {"id": reg_operator["id"], "token": token_operator},
-        "viewer": {"id": reg_viewer["id"], "token": token_viewer},
+        "admin": {"id": ids["admin_user"], "token": tokens["admin_user"]},
+        "company_admin_a": {"id": ids["company_admin_a"], "token": tokens["company_admin_a"], "tenant_id": "tenant-a"},
+        "company_admin_b": {"id": ids["company_admin_b"], "token": tokens["company_admin_b"], "tenant_id": "tenant-b"},
+        "company_user_a": {"id": ids["company_user_a"], "token": tokens["company_user_a"], "tenant_id": "tenant-a"},
     }
 
 
-def create_test_pending_job(db, job_id: str, team_id: str) -> tuple[JobORM, ScheduleDecisionORM]:
+def create_test_pending_job(db, job_id: str, team_id: str, tenant_id: str = None) -> tuple[JobORM, ScheduleDecisionORM]:
     """Helper to create a job and schedule decision in PENDING_APPROVAL status."""
-    from sqlalchemy import text as sa_text
     now = utcnow()
     req = JobSubmitRequest(
         job_id=job_id,
@@ -176,147 +170,127 @@ def create_test_pending_job(db, job_id: str, team_id: str) -> tuple[JobORM, Sche
         region="IN-TG",
         container_image="greenshift/workload:latest",
     )
-    job = submit_job(db, req)
+    job = submit_job(db, req, tenant_id=tenant_id)
     dec = schedule_and_store(db, job, record_audit=True)
     return job, dec
 
 
 # ====================================================================
-# 1. TEAM_LEAD Approving Own Team Job (200 OK)
+# 1. COMPANY_ADMIN Approving Own Company's Job (200 OK)
 # ====================================================================
 
-def test_team_lead_approves_own_team_job(client, users_and_tokens):
+def test_company_admin_approves_own_company_job(client, users_and_tokens):
     db = SessionLocal()
     try:
-        job, dec = create_test_pending_job(db, "JOB-TEAM-A-001", "team-a")
+        job, dec = create_test_pending_job(db, "JOB-COMPANY-A-001", "team-a", tenant_id="tenant-a")
     finally:
         db.close()
 
-    token_a = users_and_tokens["lead_a"]["token"]
+    token_a = users_and_tokens["company_admin_a"]["token"]
     headers = {"Authorization": f"Bearer {token_a}"}
-    payload = {"schedule_id": dec.id, "reason": "Team A Lead approved"}
+    payload = {"schedule_id": dec.id, "reason": "Company A Admin approved"}
 
     response = client.post(f"/approval/{job.job_id}/approve", json=payload, headers=headers)
     assert response.status_code == 200
 
     data = response.json()
-    assert data["job_id"] == "JOB-TEAM-A-001"
+    assert data["job_id"] == "JOB-COMPANY-A-001"
     assert data["decision"] == "APPROVED"
     assert data["job_status"] == "APPROVED"
-    assert data["approved_by"] == "lead_team_a"
+    assert data["approved_by"] == "company_admin_a"
 
     # Verify job status in database
     db = SessionLocal()
     try:
-        updated_job = db.get(JobORM, "JOB-TEAM-A-001")
+        updated_job = db.get(JobORM, "JOB-COMPANY-A-001")
         assert updated_job.status == JobStatus.APPROVED
     finally:
         db.close()
 
 
 # ====================================================================
-# 2. TEAM_LEAD Attempting Another Team's Job (403 Forbidden)
+# 2. COMPANY_ADMIN Attempting Another Company's Job (blocked)
 # ====================================================================
 
-def test_team_lead_attempting_another_team_job_is_forbidden(client, users_and_tokens):
+def test_company_admin_attempting_another_company_job_is_blocked(client, users_and_tokens):
     db = SessionLocal()
     try:
-        # Job belongs to team-b
-        job, dec = create_test_pending_job(db, "JOB-TEAM-B-001", "team-b")
+        # Job belongs to tenant-b
+        job, dec = create_test_pending_job(db, "JOB-COMPANY-B-001", "team-b", tenant_id="tenant-b")
     finally:
         db.close()
 
-    # Team A Lead attempts to approve Team B job
-    token_a = users_and_tokens["lead_a"]["token"]
+    # Company A Admin attempts to approve Company B's job
+    token_a = users_and_tokens["company_admin_a"]["token"]
     headers = {"Authorization": f"Bearer {token_a}"}
     payload = {"schedule_id": dec.id, "reason": "Unauthorized attempt"}
 
     response = client.post(f"/approval/{job.job_id}/approve", json=payload, headers=headers)
-    assert response.status_code == 403
-    assert "not authorized to approve/decline jobs for team 'team-b'" in response.json()["detail"].lower()
+    # Cross-tenant access is 404 (not 403) to avoid leaking job existence.
+    assert response.status_code == 404
 
     # Confirm job status remains PENDING_APPROVAL
     db = SessionLocal()
     try:
-        job_check = db.get(JobORM, "JOB-TEAM-B-001")
+        job_check = db.get(JobORM, "JOB-COMPANY-B-001")
         assert job_check.status == JobStatus.PENDING_APPROVAL
     finally:
         db.close()
 
 
 # ====================================================================
-# 3. VIEWER Attempting Approval (403 Forbidden)
+# 3. COMPANY_USER Attempting Approval (403 Forbidden)
 # ====================================================================
 
-def test_viewer_attempting_approval_is_forbidden(client, users_and_tokens):
+def test_company_user_attempting_approval_is_forbidden(client, users_and_tokens):
     db = SessionLocal()
     try:
-        job, dec = create_test_pending_job(db, "JOB-TEAM-A-002", "team-a")
+        job, dec = create_test_pending_job(db, "JOB-COMPANY-A-002", "team-a", tenant_id="tenant-a")
     finally:
         db.close()
 
-    token_viewer = users_and_tokens["viewer"]["token"]
-    headers = {"Authorization": f"Bearer {token_viewer}"}
-    payload = {"schedule_id": dec.id, "reason": "Viewer attempt"}
+    token_user = users_and_tokens["company_user_a"]["token"]
+    headers = {"Authorization": f"Bearer {token_user}"}
+    payload = {"schedule_id": dec.id, "reason": "Company User attempt"}
 
     response = client.post(f"/approval/{job.job_id}/approve", json=payload, headers=headers)
     assert response.status_code == 403
-    assert "viewer" in response.json()["detail"].lower()
+    assert "not authorized" in response.json()["detail"].lower()
 
-    # Test decline with viewer is also forbidden
+    # Test decline with a Company User is also forbidden
     response_dec = client.post(f"/approval/{job.job_id}/decline", json=payload, headers=headers)
     assert response_dec.status_code == 403
-    assert "viewer" in response_dec.json()["detail"].lower()
+    assert "not authorized" in response_dec.json()["detail"].lower()
 
 
 # ====================================================================
-# 4. OPERATOR Attempting Approval (403 Forbidden)
+# 4. PLATFORM_ADMIN Approving Any Company's Job (200 OK)
 # ====================================================================
 
-def test_operator_attempting_approval_is_forbidden(client, users_and_tokens):
+def test_platform_admin_can_approve_any_company_job(client, users_and_tokens):
     db = SessionLocal()
     try:
-        job, dec = create_test_pending_job(db, "JOB-TEAM-A-003", "team-a")
-    finally:
-        db.close()
-
-    token_op = users_and_tokens["operator"]["token"]
-    headers = {"Authorization": f"Bearer {token_op}"}
-    payload = {"schedule_id": dec.id, "reason": "Operator attempt"}
-
-    response = client.post(f"/approval/{job.job_id}/approve", json=payload, headers=headers)
-    assert response.status_code == 403
-    assert "operator" in response.json()["detail"].lower()
-
-
-# ====================================================================
-# 5. ADMIN Approving Any Team's Job (200 OK)
-# ====================================================================
-
-def test_admin_can_approve_any_team_job(client, users_and_tokens):
-    db = SessionLocal()
-    try:
-        job_a, dec_a = create_test_pending_job(db, "JOB-ADMIN-A-001", "team-a")
-        job_b, dec_b = create_test_pending_job(db, "JOB-ADMIN-B-001", "team-b")
+        job_a, dec_a = create_test_pending_job(db, "JOB-ADMIN-A-001", "team-a", tenant_id="tenant-a")
+        job_b, dec_b = create_test_pending_job(db, "JOB-ADMIN-B-001", "team-b", tenant_id="tenant-b")
     finally:
         db.close()
 
     token_admin = users_and_tokens["admin"]["token"]
     headers = {"Authorization": f"Bearer {token_admin}"}
 
-    # Admin approves Team A job
+    # Platform Admin approves Company A job
     res_a = client.post(f"/approval/{job_a.job_id}/approve", json={"schedule_id": dec_a.id}, headers=headers)
     assert res_a.status_code == 200
     assert res_a.json()["decision"] == "APPROVED"
 
-    # Admin approves Team B job
+    # Platform Admin approves Company B job
     res_b = client.post(f"/approval/{job_b.job_id}/approve", json={"schedule_id": dec_b.id}, headers=headers)
     assert res_b.status_code == 200
     assert res_b.json()["decision"] == "APPROVED"
 
 
 # ====================================================================
-# 6. Unauthorized Request Handling (401 Unauthorized)
+# 5. Unauthorized Request Handling (401 Unauthorized)
 # ====================================================================
 
 def test_unauthorized_request_rejected(client):
@@ -341,21 +315,21 @@ def test_unauthorized_request_rejected(client):
 
 
 # ====================================================================
-# 7. Decline Endpoint Authorization
+# 6. Decline Endpoint Authorization
 # ====================================================================
 
-def test_team_lead_decline_authorization(client, users_and_tokens):
+def test_company_admin_decline_authorization(client, users_and_tokens):
     db = SessionLocal()
     try:
-        job_a, dec_a = create_test_pending_job(db, "JOB-DEC-A-001", "team-a")
-        job_b, dec_b = create_test_pending_job(db, "JOB-DEC-B-001", "team-b")
+        job_a, dec_a = create_test_pending_job(db, "JOB-DEC-A-001", "team-a", tenant_id="tenant-a")
+        job_b, dec_b = create_test_pending_job(db, "JOB-DEC-B-001", "team-b", tenant_id="tenant-b")
     finally:
         db.close()
 
-    token_a = users_and_tokens["lead_a"]["token"]
+    token_a = users_and_tokens["company_admin_a"]["token"]
     headers = {"Authorization": f"Bearer {token_a}"}
 
-    # Team A lead declining own job -> 200 OK
+    # Company A Admin declining own company's job -> 200 OK
     res_own = client.post(
         f"/approval/{job_a.job_id}/decline",
         json={"schedule_id": dec_a.id, "reason": "Cost too high"},
@@ -364,45 +338,39 @@ def test_team_lead_decline_authorization(client, users_and_tokens):
     assert res_own.status_code == 200
     assert res_own.json()["decision"] == "DECLINED"
 
-    # Team A lead declining Team B job -> 403 Forbidden
+    # Company A Admin declining Company B's job -> blocked (404, cross-tenant)
     res_other = client.post(
         f"/approval/{job_b.job_id}/decline",
         json={"schedule_id": dec_b.id, "reason": "Unauthorized decline"},
         headers=headers,
     )
-    assert res_other.status_code == 403
+    assert res_other.status_code == 404
 
 
 # ====================================================================
-# 8. Service-Level Unit Tests for check_user_approval_permission
+# 7. Service-Level Unit Tests for check_user_approval_permission
 # ====================================================================
 
 def test_service_level_check_user_approval_permission():
-    job_a = JobORM(job_id="JOB-A", team_id="team-a", status=JobStatus.PENDING_APPROVAL)
+    job_a = JobORM(job_id="JOB-A", team_id="team-a", tenant_id="tenant-a", status=JobStatus.PENDING_APPROVAL)
 
-    admin_user = UserORM(username="admin", role=UserRole.ADMIN, is_active=True)
-    lead_a = UserORM(username="lead_a", role=UserRole.TEAM_LEAD, team_id="team-a", is_active=True)
-    lead_b = UserORM(username="lead_b", role=UserRole.TEAM_LEAD, team_id="team-b", is_active=True)
-    operator = UserORM(username="operator", role=UserRole.OPERATOR, team_id="team-a", is_active=True)
-    viewer = UserORM(username="viewer", role=UserRole.VIEWER, team_id="team-a", is_active=True)
+    platform_admin = UserORM(username="admin", role=UserRole.PLATFORM_ADMIN, is_active=True)
+    company_admin_a = UserORM(username="admin_a", role=UserRole.COMPANY_ADMIN, tenant_id="tenant-a", is_active=True)
+    company_admin_b = UserORM(username="admin_b", role=UserRole.COMPANY_ADMIN, tenant_id="tenant-b", is_active=True)
+    company_user_a = UserORM(username="user_a", role=UserRole.COMPANY_USER, tenant_id="tenant-a", is_active=True)
 
-    # Admin passes
-    check_user_approval_permission(job_a, admin_user)
+    # Platform Admin passes
+    check_user_approval_permission(job_a, platform_admin)
 
-    # Team A lead passes on Job A
-    check_user_approval_permission(job_a, lead_a)
+    # Company A Admin passes on a Company A job
+    check_user_approval_permission(job_a, company_admin_a)
 
-    # Team B lead fails on Job A
-    with pytest.raises(ApprovalPermissionError) as exc_b:
-        check_user_approval_permission(job_a, lead_b)
-    assert exc_b.value.status_code == 403
+    # Company B Admin fails on a Company A job (cross-tenant -> 404)
+    from app.approval.service import ApprovalNotFoundError
+    with pytest.raises(ApprovalNotFoundError):
+        check_user_approval_permission(job_a, company_admin_b)
 
-    # Operator fails
-    with pytest.raises(ApprovalPermissionError) as exc_op:
-        check_user_approval_permission(job_a, operator)
-    assert exc_op.value.status_code == 403
-
-    # Viewer fails
-    with pytest.raises(ApprovalPermissionError) as exc_view:
-        check_user_approval_permission(job_a, viewer)
-    assert exc_view.value.status_code == 403
+    # Company User fails
+    with pytest.raises(ApprovalPermissionError) as exc_user:
+        check_user_approval_permission(job_a, company_user_a)
+    assert exc_user.value.status_code == 403

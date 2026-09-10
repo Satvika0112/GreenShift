@@ -65,11 +65,11 @@ def render_login_view() -> None:
                 persona_mode = st.selectbox(
                     "Select Role",
                     [
-                        "ADMIN — admin (Full Platform Access)",
-                        "TEAM_LEAD — lead_a (Team A Lead)",
-                        "TEAM_LEAD — lead_b (Team B Lead)",
-                        "OPERATOR — operator (Dispatch & Execution)",
-                        "VIEWER — viewer (Read-Only)",
+                        "PLATFORM_ADMIN — admin (Full Platform Access)",
+                        "COMPANY_ADMIN — lead_a (Team A Lead)",
+                        "COMPANY_ADMIN — lead_b (Team B Lead)",
+                        "COMPANY_USER — operator (Dispatch & Execution)",
+                        "COMPANY_USER — viewer (Read-Only)",
                         "Custom Username/Password",
                     ],
                 )
@@ -77,7 +77,7 @@ def render_login_view() -> None:
                 username_input = ""
                 password_input = ""
 
-                if persona_mode.startswith("ADMIN"):
+                if persona_mode.startswith("PLATFORM_ADMIN"):
                     username_input = "admin"
                     password_input = "admin123"
                 elif "lead_a" in persona_mode:
@@ -86,10 +86,10 @@ def render_login_view() -> None:
                 elif "lead_b" in persona_mode:
                     username_input = "lead_b"
                     password_input = "lead123"
-                elif "OPERATOR" in persona_mode:
+                elif "operator" in persona_mode:
                     username_input = "operator"
                     password_input = "operator123"
-                elif "VIEWER" in persona_mode:
+                elif "viewer" in persona_mode:
                     username_input = "viewer"
                     password_input = "viewer123"
                 else:
@@ -107,7 +107,7 @@ def render_login_view() -> None:
                             if auth_res and "access_token" in auth_res:
                                 user_data = auth_res.get("user", {})
                                 st.session_state["auth_token"] = auth_res["access_token"]
-                                st.session_state["user_role"] = user_data.get("role", "VIEWER")
+                                st.session_state["user_role"] = user_data.get("role", "COMPANY_USER")
                                 st.session_state["username"] = user_data.get("username", username_input)
                                 st.session_state["team_id"] = user_data.get("team_id", None)
                                 st.session_state["is_authenticated"] = True
@@ -156,7 +156,7 @@ def render_login_view() -> None:
                                 username=reg_username.strip(),
                                 email=reg_email.strip(),
                                 password=reg_pw,
-                                role="VIEWER",
+                                role="COMPANY_USER",
                                 team_id=reg_team,
                             )
                             # 2. Immediately authenticate the newly registered user
@@ -164,7 +164,7 @@ def render_login_view() -> None:
                             if auth_res and "access_token" in auth_res:
                                 user_data = auth_res.get("user", {})
                                 st.session_state["auth_token"] = auth_res["access_token"]
-                                st.session_state["user_role"] = user_data.get("role", "VIEWER")
+                                st.session_state["user_role"] = user_data.get("role", "COMPANY_USER")
                                 st.session_state["username"] = user_data.get("username", reg_username.strip())
                                 st.session_state["team_id"] = user_data.get("team_id", reg_team)
                                 st.session_state["is_authenticated"] = True

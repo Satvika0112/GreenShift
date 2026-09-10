@@ -91,7 +91,7 @@ def test_user_registration_success(client):
         "username": "alice_admin",
         "email": "alice@greenshift.io",
         "password": "SuperSecretPassword123!",
-        "role": "ADMIN",
+        "role": "PLATFORM_ADMIN",
         "team_id": "team-core",
     }
     response = client.post("/auth/register", json=payload)
@@ -100,7 +100,7 @@ def test_user_registration_success(client):
     data = response.json()
     assert data["username"] == "alice_admin"
     assert data["email"] == "alice@greenshift.io"
-    assert data["role"] == "VIEWER"  # Fixed: public registration always assigns VIEWER
+    assert data["role"] == "COMPANY_USER"  # Fixed: public registration always assigns COMPANY_USER
     assert data["team_id"] == "team-core"
     assert data["is_active"] is True
     assert "id" in data
@@ -116,13 +116,13 @@ def test_user_registration_api_v1_prefix(client):
         "username": "bob_operator",
         "email": "bob@greenshift.io",
         "password": "OperatorSecretPassword123!",
-        "role": "OPERATOR",
+        "role": "COMPANY_ADMIN",
     }
     response = client.post("/api/v1/auth/register", json=payload)
     assert response.status_code == 201
     data = response.json()
     assert data["username"] == "bob_operator"
-    assert data["role"] == "VIEWER"  # Fixed: public registration always assigns VIEWER
+    assert data["role"] == "COMPANY_USER"  # Fixed: public registration always assigns COMPANY_USER
 
 
 def test_user_registration_duplicate_username(client):
@@ -130,7 +130,7 @@ def test_user_registration_duplicate_username(client):
         "username": "charlie_lead",
         "email": "charlie1@greenshift.io",
         "password": "Password123!",
-        "role": "TEAM_LEAD",
+        "role": "COMPANY_ADMIN",
     }
     res1 = client.post("/auth/register", json=payload)
     assert res1.status_code == 201
@@ -140,7 +140,7 @@ def test_user_registration_duplicate_username(client):
         "username": "charlie_lead",
         "email": "charlie2@greenshift.io",
         "password": "Password456!",
-        "role": "TEAM_LEAD",
+        "role": "COMPANY_ADMIN",
     }
     res2 = client.post("/auth/register", json=payload_dup)
     assert res2.status_code == 409
@@ -152,7 +152,7 @@ def test_user_registration_duplicate_email(client):
         "username": "david_user",
         "email": "david@greenshift.io",
         "password": "Password123!",
-        "role": "VIEWER",
+        "role": "COMPANY_USER",
     }
     res1 = client.post("/auth/register", json=payload)
     assert res1.status_code == 201
@@ -162,7 +162,7 @@ def test_user_registration_duplicate_email(client):
         "username": "david_alternate",
         "email": "david@greenshift.io",
         "password": "Password456!",
-        "role": "VIEWER",
+        "role": "COMPANY_USER",
     }
     res2 = client.post("/auth/register", json=payload_dup)
     assert res2.status_code == 409
@@ -190,7 +190,7 @@ def test_user_login_success_with_username(client):
         "username": "eva_viewer",
         "email": "eva@greenshift.io",
         "password": "ViewerPassword123!",
-        "role": "VIEWER",
+        "role": "COMPANY_USER",
         "team_id": "analytics",
     })
 
@@ -205,7 +205,7 @@ def test_user_login_success_with_username(client):
     assert data["token_type"] == "bearer"
     assert data["expires_in"] == settings.jwt_expire_minutes * 60
     assert data["user"]["username"] == "eva_viewer"
-    assert data["user"]["role"] == "VIEWER"
+    assert data["user"]["role"] == "COMPANY_USER"
 
     # Decode and verify JWT payload
     payload = jwt.decode(
@@ -214,7 +214,7 @@ def test_user_login_success_with_username(client):
         algorithms=[settings.jwt_algorithm],
     )
     assert payload["username"] == "eva_viewer"
-    assert payload["role"] == "VIEWER"
+    assert payload["role"] == "COMPANY_USER"
     assert payload["team_id"] == "analytics"
     assert "user_id" in payload
 
@@ -224,7 +224,7 @@ def test_user_login_success_with_email(client):
         "username": "frank_lead",
         "email": "frank@greenshift.io",
         "password": "FrankPassword123!",
-        "role": "TEAM_LEAD",
+        "role": "COMPANY_ADMIN",
     })
 
     # Login using email as identifier
@@ -241,7 +241,7 @@ def test_user_login_invalid_password(client):
         "username": "grace_op",
         "email": "grace@greenshift.io",
         "password": "CorrectPassword123!",
-        "role": "OPERATOR",
+        "role": "COMPANY_USER",
     })
 
     login_res = client.post("/auth/login", json={
@@ -267,7 +267,7 @@ def test_user_login_deactivated_user(client):
         "username": "inactive_user",
         "email": "inactive@greenshift.io",
         "password": "Password123!",
-        "role": "OPERATOR",
+        "role": "COMPANY_USER",
     })
     user_id = reg.json()["id"]
 
@@ -299,7 +299,7 @@ def test_protected_endpoint_with_valid_token(client):
         "username": "helen_admin",
         "email": "helen@greenshift.io",
         "password": "AdminPassword123!",
-        "role": "ADMIN",
+        "role": "PLATFORM_ADMIN",
     })
     login_res = client.post("/auth/login", json={
         "username": "helen_admin",
@@ -312,7 +312,7 @@ def test_protected_endpoint_with_valid_token(client):
     me_res = client.get("/auth/me", headers=headers)
     assert me_res.status_code == 200
     assert me_res.json()["username"] == "helen_admin"
-    assert me_res.json()["role"] == "VIEWER"
+    assert me_res.json()["role"] == "COMPANY_USER"
 
     # Call /api/v1/auth/me
     me_res_v1 = client.get("/api/v1/auth/me", headers=headers)
@@ -339,7 +339,7 @@ def test_protected_endpoint_with_expired_token(client):
         "username": "ian_exp",
         "email": "ian@greenshift.io",
         "password": "Password123!",
-        "role": "VIEWER",
+        "role": "COMPANY_USER",
     })
     user_id = reg.json()["id"]
 
@@ -347,7 +347,7 @@ def test_protected_endpoint_with_expired_token(client):
     expired_token = create_access_token(
         user_id=user_id,
         username="ian_exp",
-        role="VIEWER",
+        role="COMPANY_USER",
         expires_delta=timedelta(minutes=-10),
     )
 
@@ -362,13 +362,13 @@ def test_protected_endpoint_with_expired_token(client):
 # ====================================================================
 
 def test_role_based_access_control_dependency(client):
-    # Seed an ADMIN in database, and register a VIEWER publicly
+    # Seed a PLATFORM_ADMIN in database, and register a COMPANY_USER publicly
     with SessionLocal() as db:
         db.add(UserORM(
             username="admin_role_user",
             email="admin_role@greenshift.io",
             hashed_password=hash_password("Password123!"),
-            role=UserRole.ADMIN,
+            role=UserRole.PLATFORM_ADMIN,
             is_active=True,
         ))
         db.commit()
@@ -377,7 +377,7 @@ def test_role_based_access_control_dependency(client):
         "username": "viewer_role_user",
         "email": "viewer_role@greenshift.io",
         "password": "Password123!",
-        "role": "VIEWER",
+        "role": "COMPANY_USER",
     })
 
     admin_token = client.post("/auth/login", json={
@@ -394,7 +394,7 @@ def test_role_based_access_control_dependency(client):
     test_rbac_app = FastAPI()
 
     @test_rbac_app.get("/admin-only")
-    def admin_endpoint(user: UserORM = Depends(require_roles(UserRole.ADMIN))):
+    def admin_endpoint(user: UserORM = Depends(require_roles(UserRole.PLATFORM_ADMIN))):
         return {"message": "hello admin", "user": user.username}
 
     rbac_client = TestClient(test_rbac_app)

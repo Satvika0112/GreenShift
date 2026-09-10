@@ -263,7 +263,7 @@ def main():
         seed_default_users(db_session)
         admin_u = db_session.query(UserORM).filter(UserORM.username == "admin").first()
         admin_id = admin_u.id if admin_u else 1
-    admin_token = create_access_token(user_id=admin_id, username="admin", role="ADMIN")
+    admin_token = create_access_token(user_id=admin_id, username="admin", role="PLATFORM_ADMIN")
     headers = {"Authorization": f"Bearer {admin_token}"}
 
     r_inv = client.get("/api/v1/regional/inventory")

@@ -66,7 +66,7 @@ def seed_admins():
             username="alpha_admin",
             email="admin@alpha.com",
             hashed_password=hash_password("CompanyAdmin123!"),
-            role=UserRole.ADMIN,
+            role=UserRole.COMPANY_ADMIN,
             tenant_id="tenant-alpha",
             is_active=True,
             approval_status=UserApprovalStatus.APPROVED.value,
@@ -85,7 +85,7 @@ def seed_admins():
             "company_admin_token": create_access_token(
                 user_id=c_admin.id,
                 username=c_admin.username,
-                role=UserRole.ADMIN.value,
+                role=UserRole.COMPANY_ADMIN.value,
                 tenant_id="tenant-alpha",
             ),
             "company_admin_id": c_admin.id,
@@ -108,7 +108,7 @@ def test_public_registration_creates_inactive_pending_user_when_auth_enabled(cli
     assert resp.status_code == 201
     data = resp.json()
     assert data["username"] == "candidate_alice"
-    assert data["role"] == "VIEWER"
+    assert data["role"] == "COMPANY_USER"
     assert data["is_active"] is False
     assert data["approval_status"] == "PENDING"
 
@@ -205,7 +205,7 @@ def test_deactivated_user_login_rejected_with_clear_message(client, seed_admins,
             username="deact_user",
             email="deact@alpha.com",
             hashed_password=hash_password("Password123!"),
-            role=UserRole.VIEWER,
+            role=UserRole.COMPANY_USER,
             tenant_id="tenant-alpha",
             is_active=False,
             approval_status=UserApprovalStatus.APPROVED.value,
@@ -233,14 +233,14 @@ def test_company_admin_creates_user_within_own_tenant(client, seed_admins):
         "username": "alpha_operator",
         "email": "op@alpha.com",
         "password": "SecurePassword123!",
-        "role": "OPERATOR",
+        "role": "COMPANY_USER",
         "team_id": "core-team",
     })
     assert resp.status_code == 201
     data = resp.json()
     assert data["username"] == "alpha_operator"
     assert data["email"] == "op@alpha.com"
-    assert data["role"] == "OPERATOR"
+    assert data["role"] == "COMPANY_USER"
     assert data["tenant_id"] == "tenant-alpha"
     assert data["is_active"] is True
     assert data["approval_status"] == "APPROVED"
@@ -253,11 +253,10 @@ def test_company_admin_creates_user_within_own_tenant(client, seed_admins):
     assert login_resp.status_code == 200
 
 
-def test_company_admin_cannot_create_platform_admin_or_admin(client, seed_admins):
-    """Company Admin cannot escalate privileges by creating PLATFORM_ADMIN or ADMIN."""
+def test_company_admin_cannot_create_platform_admin(client, seed_admins):
+    """Company Admin cannot escalate privileges by creating a PLATFORM_ADMIN."""
     headers = {"Authorization": f"Bearer {seed_admins['company_admin_token']}"}
 
-    # Attempt to create PLATFORM_ADMIN
     r1 = client.post("/api/v1/admin/users", headers=headers, json={
         "username": "escalated_padmin",
         "email": "esc_p@alpha.com",
@@ -267,15 +266,19 @@ def test_company_admin_cannot_create_platform_admin_or_admin(client, seed_admins
     assert r1.status_code == 403
     assert "platform admin" in r1.json()["detail"].lower()
 
-    # Attempt to create ADMIN
+
+def test_legacy_admin_role_string_rejected_by_schema(client, seed_admins):
+    """The removed legacy ADMIN role string is no longer valid input at all (422),
+    not merely blocked by authorization (403) — it doesn't exist as a role anymore."""
+    headers = {"Authorization": f"Bearer {seed_admins['company_admin_token']}"}
+
     r2 = client.post("/api/v1/admin/users", headers=headers, json={
         "username": "escalated_admin",
         "email": "esc_a@alpha.com",
         "password": "SecurePassword123!",
         "role": "ADMIN",
     })
-    assert r2.status_code == 403
-    assert "platform admin" in r2.json()["detail"].lower()
+    assert r2.status_code == 422
 
 
 def test_company_admin_cannot_create_user_in_other_tenant(client, seed_admins):
@@ -286,7 +289,7 @@ def test_company_admin_cannot_create_user_in_other_tenant(client, seed_admins):
         "username": "infiltrator",
         "email": "infiltrator@beta.com",
         "password": "SecurePassword123!",
-        "role": "OPERATOR",
+        "role": "COMPANY_USER",
         "tenant_id": "tenant-beta",  # Other tenant!
     })
     assert resp.status_code == 403
@@ -301,11 +304,11 @@ def test_platform_admin_can_create_user_in_any_tenant(client, seed_admins):
         "username": "beta_admin",
         "email": "admin@beta.com",
         "password": "SecurePassword123!",
-        "role": "ADMIN",
+        "role": "COMPANY_ADMIN",
         "tenant_id": "tenant-beta",
     })
     assert resp.status_code == 201
     data = resp.json()
     assert data["username"] == "beta_admin"
     assert data["tenant_id"] == "tenant-beta"
-    assert data["role"] == "ADMIN"
+    assert data["role"] == "COMPANY_ADMIN"

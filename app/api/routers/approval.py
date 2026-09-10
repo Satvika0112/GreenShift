@@ -64,9 +64,9 @@ def api_approve_schedule(
     """
     Explicitly approve a proposed schedule for a job.
     Enforces server-side RBAC and tenant authorization:
-      - PLATFORM_ADMIN / ADMIN: Full approval access across all companies.
-      - COMPANY_ADMIN / TEAM_LEAD: Authorized only for jobs belonging to their company/team.
-      - COMPANY_USER / OPERATOR / VIEWER: Forbidden (403).
+      - PLATFORM_ADMIN: Full approval access across all companies.
+      - COMPANY_ADMIN: Authorized only for jobs belonging to their own company.
+      - COMPANY_USER: Forbidden (403).
     """
     try:
         return approve_schedule(
@@ -115,9 +115,9 @@ def api_decline_schedule(
     Decline a proposed schedule for a job.
     Requires a non-empty decline reason.
     Enforces server-side RBAC and tenant authorization:
-      - PLATFORM_ADMIN / ADMIN: Full decline access across all companies.
-      - COMPANY_ADMIN / TEAM_LEAD: Authorized only for jobs belonging to their company/team.
-      - COMPANY_USER / OPERATOR / VIEWER: Forbidden (403).
+      - PLATFORM_ADMIN: Full decline access across all companies.
+      - COMPANY_ADMIN: Authorized only for jobs belonging to their own company.
+      - COMPANY_USER: Forbidden (403).
     """
     try:
         return decline_schedule(

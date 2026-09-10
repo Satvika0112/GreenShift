@@ -59,9 +59,9 @@ class ApprovalPermissionError(ValueError):
 def check_user_approval_permission(job: JobORM, user: Optional[UserORM] = None) -> None:
     """
     Enforces server-side RBAC and tenant authorization rules:
-      - PLATFORM_ADMIN / ADMIN: Full access to approve/decline any job across all companies.
-      - COMPANY_ADMIN / TEAM_LEAD: Can approve/decline only jobs matching user's tenant_id / team_id.
-      - COMPANY_USER / OPERATOR / VIEWER: Cannot approve schedules (raises 403).
+      - PLATFORM_ADMIN: Full access to approve/decline any job across all companies.
+      - COMPANY_ADMIN: Can approve/decline only jobs matching user's tenant_id.
+      - COMPANY_USER: Cannot approve schedules (raises 403).
     """
     if user is None:
         return  # Service-level backwards compatibility if no user context is passed
@@ -69,34 +69,16 @@ def check_user_approval_permission(job: JobORM, user: Optional[UserORM] = None) 
     user_role = user.role.value if hasattr(user.role, "value") else str(user.role)
 
     # Platform Admin has global permissions
-    if user_role in (UserRole.PLATFORM_ADMIN.value, UserRole.ADMIN.value) and not user.tenant_id:
+    if user_role == UserRole.PLATFORM_ADMIN.value and not user.tenant_id:
         return
 
-    # Company Admin / Team Lead
-    if user_role in (UserRole.PLATFORM_ADMIN.value, UserRole.ADMIN.value, UserRole.COMPANY_ADMIN.value, UserRole.TEAM_LEAD.value):
+    # Company Admin — tenant-scoped, no team restriction
+    if user_role in (UserRole.PLATFORM_ADMIN.value, UserRole.COMPANY_ADMIN.value):
         if user.tenant_id and job.tenant_id and user.tenant_id != job.tenant_id:
             # Cross-tenant access -> 404 (not 403) to avoid leaking job existence,
             # consistent with app.api.tenant_scope.get_tenant_jobs.
             raise ApprovalNotFoundError(f"Job '{job.job_id}' not found")
-        if user_role == UserRole.TEAM_LEAD.value and user.team_id and job.team_id:
-            if user.team_id.strip().lower() != job.team_id.strip().lower():
-                raise ApprovalPermissionError(
-                    f"Team lead of team '{user.team_id}' is not authorized to approve/decline jobs for team '{job.team_id}'",
-                    status_code=403,
-                )
         return
-
-    if user_role in (UserRole.COMPANY_USER.value, UserRole.USER.value, UserRole.OPERATOR.value):
-        raise ApprovalPermissionError(
-            f"Role '{user_role}' is not authorized to approve or decline schedules",
-            status_code=403,
-        )
-
-    if user_role == UserRole.VIEWER.value:
-        raise ApprovalPermissionError(
-            "Role 'VIEWER' has read-only access and cannot approve or decline schedules",
-            status_code=403,
-        )
 
     raise ApprovalPermissionError(
         f"Role '{user_role}' is not authorized to approve or decline schedules",

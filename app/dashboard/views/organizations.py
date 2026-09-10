@@ -140,11 +140,11 @@ def _render_users_tab():
             st.dataframe(pd.DataFrame(users), use_container_width=True, hide_index=True)
         else:
             default_users = [
-                {"Username": "admin",          "Email": "admin@greenshift.io",        "Role": "ADMIN",     "Team": "All Teams",  "Status": "ACTIVE"},
-                {"Username": "lead_alpha",     "Email": "lead_alpha@greenshift.io",   "Role": "TEAM_LEAD", "Team": "team_alpha", "Status": "ACTIVE"},
-                {"Username": "lead_beta",      "Email": "lead_beta@greenshift.io",    "Role": "TEAM_LEAD", "Team": "team_beta",  "Status": "ACTIVE"},
-                {"Username": "operator_ops",   "Email": "ops@greenshift.io",          "Role": "OPERATOR",  "Team": "team_alpha", "Status": "ACTIVE"},
-                {"Username": "auditor_viewer", "Email": "auditor@greenshift.io",      "Role": "VIEWER",    "Team": "All Teams",  "Status": "ACTIVE"},
+                {"Username": "admin",          "Email": "admin@greenshift.io",        "Role": "PLATFORM_ADMIN", "Team": "All Teams",  "Status": "ACTIVE"},
+                {"Username": "lead_alpha",     "Email": "lead_alpha@greenshift.io",   "Role": "COMPANY_ADMIN",  "Team": "team_alpha", "Status": "ACTIVE"},
+                {"Username": "lead_beta",      "Email": "lead_beta@greenshift.io",    "Role": "COMPANY_ADMIN",  "Team": "team_beta",  "Status": "ACTIVE"},
+                {"Username": "operator_ops",   "Email": "ops@greenshift.io",          "Role": "COMPANY_USER",   "Team": "team_alpha", "Status": "ACTIVE"},
+                {"Username": "auditor_viewer", "Email": "auditor@greenshift.io",      "Role": "COMPANY_USER",   "Team": "All Teams",  "Status": "ACTIVE"},
             ]
             st.dataframe(pd.DataFrame(default_users), use_container_width=True, hide_index=True)
 
@@ -161,7 +161,7 @@ def _render_users_tab():
             with cu_pass:
                 new_password = st.text_input("Password", type="password", placeholder="••••••••")
             with cu_role:
-                new_role = st.selectbox("Role", ["VIEWER", "OPERATOR", "TEAM_LEAD", "ADMIN"])
+                new_role = st.selectbox("Role", ["COMPANY_USER", "COMPANY_ADMIN", "PLATFORM_ADMIN"])
             with cu_team:
                 new_team = st.selectbox("Assigned Team", ["analytics", "ai_research", "batch_ops", "team_alpha", "team_beta"])
 
@@ -172,13 +172,13 @@ def _render_users_tab():
                     st.warning("Please fill in all required user fields.")
                 else:
                     try:
-                        if token and new_role != "VIEWER":
+                        if token and new_role != "COMPANY_USER":
                             admin_create_user_api(
                                 username=new_username,
                                 email=new_email,
                                 password=new_password,
                                 role=new_role,
-                                team_id=new_team if new_role != "ADMIN" else None,
+                                team_id=new_team if new_role != "PLATFORM_ADMIN" else None,
                                 token=token,
                             )
                         else:
@@ -187,7 +187,7 @@ def _render_users_tab():
                                 email=new_email,
                                 password=new_password,
                                 role=new_role,
-                                team_id=new_team if new_role != "ADMIN" else None,
+                                team_id=new_team if new_role != "PLATFORM_ADMIN" else None,
                             )
                         st.success(f"User `{new_username}` registered successfully!")
                         st.rerun()
@@ -197,14 +197,14 @@ def _render_users_tab():
     with tab_matrix:
         st.markdown("#### Role Authorization Matrix")
         matrix_data = [
-            {"Action": "View Dashboards & Telemetry",          "ADMIN": "✓ Full",     "TEAM_LEAD": "✓ Full",         "OPERATOR": "✓ Full",    "VIEWER": "✓ Read-Only"},
-            {"Action": "Submit Workloads",                     "ADMIN": "✓ Any Team", "TEAM_LEAD": "✓ Own Team",     "OPERATOR": "✓ Assigned","VIEWER": "✕ Blocked"},
-            {"Action": "Approve / Decline Schedules",          "ADMIN": "✓ Any Team", "TEAM_LEAD": "✓ Own Team Only","OPERATOR": "✕ Blocked", "VIEWER": "✕ Blocked"},
-            {"Action": "Dispatch Approved Workloads to K8s",   "ADMIN": "✓ Full",     "TEAM_LEAD": "✓ Own Team",     "OPERATOR": "✓ Full",    "VIEWER": "✕ Blocked"},
-            {"Action": "Cancel Active Workloads",              "ADMIN": "✓ Full",     "TEAM_LEAD": "✓ Own Team",     "OPERATOR": "✓ Full",    "VIEWER": "✕ Blocked"},
-            {"Action": "Verify SHA-256 Audit Chain",           "ADMIN": "✓ Full",     "TEAM_LEAD": "✓ Full",         "OPERATOR": "✓ Full",    "VIEWER": "✓ Full"},
-            {"Action": "Manage Users & RBAC",                  "ADMIN": "✓ Full",     "TEAM_LEAD": "✕ Blocked",      "OPERATOR": "✕ Blocked", "VIEWER": "✕ Blocked"},
-            {"Action": "Platform Settings",                    "ADMIN": "✓ Full",     "TEAM_LEAD": "✕ Blocked",      "OPERATOR": "✕ Blocked", "VIEWER": "✕ Blocked"},
+            {"Action": "View Dashboards & Telemetry",          "PLATFORM_ADMIN": "✓ Full",     "COMPANY_ADMIN": "✓ Own Company", "COMPANY_USER": "✓ Own Company"},
+            {"Action": "Submit Workloads",                     "PLATFORM_ADMIN": "✓ Any Company", "COMPANY_ADMIN": "✓ Own Company", "COMPANY_USER": "✓ Own Company"},
+            {"Action": "Approve / Decline Schedules",          "PLATFORM_ADMIN": "✓ Any Company", "COMPANY_ADMIN": "✓ Own Company", "COMPANY_USER": "✕ Blocked"},
+            {"Action": "Dispatch Approved Workloads to K8s",   "PLATFORM_ADMIN": "✓ Full",     "COMPANY_ADMIN": "✓ Own Company", "COMPANY_USER": "✓ Own Company"},
+            {"Action": "Cancel Active Workloads",              "PLATFORM_ADMIN": "✓ Full",     "COMPANY_ADMIN": "✓ Own Company", "COMPANY_USER": "✓ Own Company"},
+            {"Action": "Verify SHA-256 Audit Chain",           "PLATFORM_ADMIN": "✓ Full",     "COMPANY_ADMIN": "✓ Full",        "COMPANY_USER": "✓ Full"},
+            {"Action": "Manage Users & RBAC",                  "PLATFORM_ADMIN": "✓ Full",     "COMPANY_ADMIN": "✓ Own Company", "COMPANY_USER": "✕ Blocked"},
+            {"Action": "Platform Settings",                    "PLATFORM_ADMIN": "✓ Full",     "COMPANY_ADMIN": "✕ Blocked",     "COMPANY_USER": "✕ Blocked"},
         ]
         st.dataframe(pd.DataFrame(matrix_data), use_container_width=True, hide_index=True)
 

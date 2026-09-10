@@ -141,8 +141,8 @@ def render_job_monitoring_view() -> None:
                     except Exception as exc:
                         st.error(f"Scheduling failed: {exc}")
             elif current_status == "PENDING_APPROVAL":
-                curr_role = st.session_state.get("user_role", "VIEWER")
-                if curr_role in ("ADMIN", "TEAM_LEAD"):
+                curr_role = st.session_state.get("user_role", "COMPANY_USER")
+                if curr_role in ("PLATFORM_ADMIN", "COMPANY_ADMIN"):
                     if st.button("✓ Approve Schedule", type="primary", use_container_width=True):
                         try:
                             sd_id = dec.get("id", 0) if dec else 0

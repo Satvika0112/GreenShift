@@ -86,7 +86,7 @@ def register(
         username=body.username,
         email=body.email,
         hashed_password=hashed_pw,
-        role=UserRole.VIEWER,
+        role=UserRole.COMPANY_USER,
         team_id=body.team_id,
         is_active=is_active,
         approval_status=approval_status,
@@ -95,7 +95,7 @@ def register(
     db.commit()
     db.refresh(user)
 
-    role_str = UserRole.VIEWER.value
+    role_str = UserRole.COMPANY_USER.value
     try:
         record_user_registered(
             db,
@@ -141,14 +141,12 @@ def register(
 def admin_create_user(
     request: Request,
     body: UserRegisterRequest,
-    current_admin: UserORM = Depends(require_roles(UserRole.ADMIN)),
+    current_admin: UserORM = Depends(require_roles(UserRole.PLATFORM_ADMIN)),
     db: Session = Depends(get_db),
 ):
     """
     Deprecated, tenant-safe alias of the authoritative `POST /admin/users`.
-    A Company Admin may only create users within their own tenant and may
-    never assign PLATFORM_ADMIN/ADMIN. A Platform Admin (role=ADMIN or
-    PLATFORM_ADMIN with no tenant) may assign any role for any tenant.
+    Platform Admin only — a Company Admin should use `POST /admin/users` instead.
     """
     if not is_company_admin(current_admin):
         raise HTTPException(
@@ -172,13 +170,13 @@ def admin_create_user(
                 detail=f"Email '{body.email}' is already registered",
             )
 
-    assigned_role = body.role if body.role is not None else UserRole.VIEWER
+    assigned_role = body.role if body.role is not None else UserRole.COMPANY_USER
     caller_is_platform_admin = is_platform_admin(current_admin)
 
-    if assigned_role in (UserRole.PLATFORM_ADMIN, UserRole.ADMIN) and not caller_is_platform_admin:
+    if assigned_role == UserRole.PLATFORM_ADMIN and not caller_is_platform_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only Platform Admins can assign PLATFORM_ADMIN or ADMIN roles",
+            detail="Only Platform Admins can assign the PLATFORM_ADMIN role",
         )
 
     requested_tenant = getattr(body, "tenant_id", None)
@@ -322,11 +320,11 @@ def get_me(current_user: UserORM = Depends(get_current_user)):
 )
 def list_users_legacy(
     db: Session = Depends(get_db),
-    current_admin: UserORM = Depends(require_roles(UserRole.ADMIN, UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN)),
+    current_admin: UserORM = Depends(require_roles(UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN)),
 ):
     """Deprecated legacy endpoint: please use /api/v1/admin/users."""
     query = db.query(UserORM)
-    if current_admin.tenant_id and current_admin.role not in (UserRole.ADMIN, UserRole.PLATFORM_ADMIN):
+    if current_admin.tenant_id and current_admin.role != UserRole.PLATFORM_ADMIN:
         query = query.filter(UserORM.tenant_id == current_admin.tenant_id)
     return query.all()
 

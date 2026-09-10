@@ -66,11 +66,9 @@ def validate_job_for_dispatch(job: JobORM, user: Optional[object] = None) -> Non
 
     Rules:
     1. User authorization (if user is provided):
-       - ADMIN: full access to dispatch any job across all teams.
-       - OPERATOR: operational execution rights, allowed to dispatch.
-       - TEAM_LEAD: allowed to dispatch jobs belonging to their own team.
-         Attempting another team's job -> raises DispatchPermissionError(403).
-       - VIEWER: read-only access -> raises DispatchPermissionError(403).
+       - PLATFORM_ADMIN: full access to dispatch any job across all companies.
+       - COMPANY_ADMIN / COMPANY_USER: allowed to dispatch jobs within their own company
+         (cross-company access is blocked below regardless of role).
     2. Status enforcement:
        - PENDING_APPROVAL -> raises DispatchBlockedError(403, "Job {job.job_id} is pending approval and cannot be dispatched")
        - DECLINED -> raises DispatchBlockedError(403, "Job {job.job_id} has been declined and cannot be dispatched")
@@ -91,23 +89,8 @@ def validate_job_for_dispatch(job: JobORM, user: Optional[object] = None) -> Non
                 status_code=403,
             )
 
-        if role_str in ("PLATFORM_ADMIN", "ADMIN"):
-            pass  # Admin has full dispatch access
-        elif role_str in ("COMPANY_ADMIN", "OPERATOR"):
-            pass  # Company admin and operator have dispatch access
-        elif role_str == "TEAM_LEAD":
-            user_team = (getattr(user, "team_id", None) or "").strip().lower()
-            job_team = (job.team_id or "").strip().lower()
-            if not user_team or user_team != job_team:
-                raise DispatchPermissionError(
-                    f"Team lead from team '{getattr(user, 'team_id', None)}' cannot dispatch job belonging to team '{job.team_id}'",
-                    status_code=403,
-                )
-        elif role_str == "VIEWER":
-            raise DispatchPermissionError(
-                "Viewer role has read-only access and cannot trigger dispatch",
-                status_code=403,
-            )
+        if role_str in ("PLATFORM_ADMIN", "COMPANY_ADMIN", "COMPANY_USER"):
+            pass  # Platform Admin has global access; Company Admin/User have within-company access
         else:
             raise DispatchPermissionError(
                 f"Role '{role_str}' is not authorized to trigger dispatch",
@@ -168,7 +151,7 @@ def dispatch_job(db: Session, job: JobORM, user: Optional[object] = None) -> Kub
     Preconditions:
         - job.status == APPROVED (or QUEUED for idempotency)
         - job.schedule_decision is not None and matches job.job_id
-        - user (if supplied) has permission to dispatch (ADMIN, OPERATOR, or matching TEAM_LEAD)
+        - user (if supplied) has permission to dispatch (PLATFORM_ADMIN, or COMPANY_ADMIN/COMPANY_USER within their own company)
 
     Args:
         db:   SQLAlchemy session

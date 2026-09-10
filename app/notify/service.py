@@ -113,21 +113,21 @@ def notify_users(
 
 
 def resolve_tenant_admin_user_ids(db: Session, tenant_id: Optional[str]) -> List[int]:
-    """Company Admins (and legacy tenant-scoped ADMIN) for a given tenant."""
+    """Company Admins for a given tenant."""
     if not tenant_id:
         return []
     q = db.query(UserORM.id).filter(
         UserORM.tenant_id == tenant_id,
-        UserORM.role.in_([UserRole.COMPANY_ADMIN, UserRole.ADMIN, UserRole.TEAM_LEAD]),
+        UserORM.role == UserRole.COMPANY_ADMIN,
         UserORM.is_active == True,  # noqa: E712
     )
     return [row[0] for row in q.all()]
 
 
 def resolve_platform_admin_user_ids(db: Session) -> List[int]:
-    """Global Platform Admins (role PLATFORM_ADMIN, or legacy ADMIN with no tenant)."""
+    """Global Platform Admins (role PLATFORM_ADMIN, no tenant)."""
     q = db.query(UserORM.id).filter(
-        UserORM.role.in_([UserRole.PLATFORM_ADMIN, UserRole.ADMIN]),
+        UserORM.role == UserRole.PLATFORM_ADMIN,
         UserORM.tenant_id.is_(None),
         UserORM.is_active == True,  # noqa: E712
     )

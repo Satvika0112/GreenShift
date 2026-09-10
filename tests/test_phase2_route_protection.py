@@ -1,14 +1,21 @@
 """
 GreenShift — Phase 2 Security Hardening Test Suite: API Route Protection
 
+GreenShift supports exactly three application roles: PLATFORM_ADMIN,
+COMPANY_ADMIN, COMPANY_USER (see app.shared.models.UserRole). COMPANY_USER
+can submit/schedule/dispatch its own company's workloads (this was already
+true of the canonical COMPANY_USER role before role consolidation — the
+legacy VIEWER alias, which was strictly read-only, has been folded into it)
+but cannot approve/decline schedules or reach admin endpoints.
+
 Validates:
 1. Unauthenticated access across all protected endpoints returns 401 Unauthorized
 2. Role-based access control (RBAC):
-   - VIEWER cannot submit, schedule, approve, or dispatch workloads (403 Forbidden)
-   - TEAM_LEAD cannot submit, schedule, approve, or dispatch other teams' workloads (403 Forbidden)
-   - TEAM_LEAD can manage own team's workloads
-   - OPERATOR can submit, schedule, and dispatch approved workloads
-   - ADMIN has full access across all operations
+   - COMPANY_USER can submit, schedule, and dispatch its own team's workloads
+   - COMPANY_USER cannot submit/schedule for another team (team-scoped)
+   - COMPANY_USER cannot approve/decline schedules or reach admin endpoints
+   - COMPANY_ADMIN cannot schedule/view another team's job when team-scoped
+   - PLATFORM_ADMIN has full access across all operations
 3. Error response sanitization (no internal stack traces / db errors exposed)
 4. Full End-to-End Authenticated Pipeline Workflow
 """
@@ -107,11 +114,10 @@ DUMMY_PASSWORD_HASH = hash_password("TestPassword123!")
 def auth_tokens(client):
     """Seed test users and generate JWT access tokens for all standard roles."""
     roles = [
-        ("admin_p2", "admin_p2@greenshift.io", "ADMIN", None),
-        ("lead_alpha_p2", "lead_alpha@greenshift.io", "TEAM_LEAD", "team_alpha"),
-        ("lead_beta_p2", "lead_beta@greenshift.io", "TEAM_LEAD", "team_beta"),
-        ("operator_p2", "operator_p2@greenshift.io", "OPERATOR", "team_alpha"),
-        ("viewer_p2", "viewer_p2@greenshift.io", "VIEWER", "team_alpha"),
+        ("admin_p2", "admin_p2@greenshift.io", "PLATFORM_ADMIN", None),
+        ("lead_alpha_p2", "lead_alpha@greenshift.io", "COMPANY_ADMIN", "team_alpha"),
+        ("lead_beta_p2", "lead_beta@greenshift.io", "COMPANY_ADMIN", "team_beta"),
+        ("user_alpha_p2", "user_alpha_p2@greenshift.io", "COMPANY_USER", "team_alpha"),
     ]
     tokens = {}
     db = SessionLocal()
@@ -179,15 +185,15 @@ def test_unauthenticated_endpoints_return_401(client, method, path, payload):
 
 
 # ====================================================================
-# 2. VIEWER Role Restrictions (403 Forbidden on Write/Execute)
+# 2. COMPANY_USER Role Boundaries
 # ====================================================================
 
-def test_viewer_cannot_submit_workloads(client, auth_tokens):
-    """VIEWER role must receive 403 Forbidden when attempting to submit a job."""
-    viewer_token = auth_tokens["VIEWER_team_alpha"]
-    headers = {"Authorization": f"Bearer {viewer_token}"}
+def test_company_user_can_submit_and_schedule_own_team_workloads(client, auth_tokens):
+    """COMPANY_USER can submit and schedule a workload for its own team."""
+    user_token = auth_tokens["COMPANY_USER_team_alpha"]
+    headers = {"Authorization": f"Bearer {user_token}"}
     payload = {
-        "job_id": "JOB-VIEWER-SUBMIT",
+        "job_id": "JOB-USER-SUBMIT",
         "team_id": "team_alpha",
         "deadline": (utcnow() + timedelta(hours=6)).isoformat(),
         "runtime_minutes": 30,
@@ -196,46 +202,52 @@ def test_viewer_cannot_submit_workloads(client, auth_tokens):
         "container_image": "greenshift/workload:latest",
     }
     res = client.post("/api/v1/jobs", json=payload, headers=headers)
-    assert res.status_code == 403
-    assert "operation not permitted" in res.json()["detail"].lower()
+    assert res.status_code == 201
+
+    sched_res = client.post("/api/v1/schedule/JOB-USER-SUBMIT", headers=headers)
+    assert sched_res.status_code == 200
 
 
-def test_viewer_cannot_schedule_workloads(client, auth_tokens):
-    """VIEWER role must receive 403 Forbidden when attempting to trigger scheduling."""
-    admin_token = auth_tokens["ADMIN"]
-    viewer_token = auth_tokens["VIEWER_team_alpha"]
+def test_company_user_cannot_approve_schedules(client, auth_tokens):
+    """COMPANY_USER must receive 403 Forbidden when attempting to approve a schedule."""
+    admin_token = auth_tokens["PLATFORM_ADMIN"]
+    user_token = auth_tokens["COMPANY_USER_team_alpha"]
+    headers_admin = {"Authorization": f"Bearer {admin_token}"}
+    headers_user = {"Authorization": f"Bearer {user_token}"}
 
-    # Submit job as Admin
     client.post("/api/v1/jobs", json={
-        "job_id": "JOB-FOR-VIEWER-SCHED",
+        "job_id": "JOB-FOR-USER-APPROVE",
         "team_id": "team_alpha",
         "deadline": (utcnow() + timedelta(hours=6)).isoformat(),
         "runtime_minutes": 30,
         "power_kw": 2.0,
         "region": "IN-TG",
         "container_image": "greenshift/workload:latest",
-    }, headers={"Authorization": f"Bearer {admin_token}"})
+    }, headers=headers_admin)
+    sched_res = client.post("/api/v1/schedule/JOB-FOR-USER-APPROVE", headers=headers_admin)
+    schedule_id = sched_res.json()["schedule_id"]
 
-    # Viewer attempts to schedule
-    res = client.post("/api/v1/schedule/JOB-FOR-VIEWER-SCHED", headers={"Authorization": f"Bearer {viewer_token}"})
+    res = client.post(
+        "/api/v1/approval/JOB-FOR-USER-APPROVE/approve",
+        json={"schedule_id": schedule_id, "reason": "Attempted self-approval"},
+        headers=headers_user,
+    )
     assert res.status_code == 403
-    assert "operation not permitted" in res.json()["detail"].lower()
+    assert "not authorized" in res.json()["detail"].lower()
 
 
-def test_viewer_cannot_dispatch_workloads(client, auth_tokens):
-    """VIEWER role must receive 403 Forbidden when attempting to dispatch a workload."""
-    viewer_token = auth_tokens["VIEWER_team_alpha"]
-    res = client.post("/api/v1/dispatch/JOB-SAMPLE", headers={"Authorization": f"Bearer {viewer_token}"})
-    # 403 Forbidden (either RBAC check or dispatch permission)
-    assert res.status_code in (403, 404)
-    if res.status_code == 403:
-        assert "not authorized" in res.json()["detail"].lower() or "operation not permitted" in res.json()["detail"].lower()
+def test_company_user_cannot_access_admin_endpoints(client, auth_tokens):
+    """COMPANY_USER must receive 403 Forbidden when attempting to reach admin endpoints."""
+    user_token = auth_tokens["COMPANY_USER_team_alpha"]
+    headers = {"Authorization": f"Bearer {user_token}"}
+    res = client.get("/api/v1/admin/users", headers=headers)
+    assert res.status_code == 403
 
 
-def test_viewer_can_read_telemetry_reports_and_trust(client, auth_tokens):
-    """VIEWER role can successfully access read-only telemetry, reports, and trust ledger."""
-    viewer_token = auth_tokens["VIEWER_team_alpha"]
-    headers = {"Authorization": f"Bearer {viewer_token}"}
+def test_company_user_can_read_telemetry_reports_and_trust(client, auth_tokens):
+    """COMPANY_USER can successfully access read-only telemetry, reports, and trust ledger."""
+    user_token = auth_tokens["COMPANY_USER_team_alpha"]
+    headers = {"Authorization": f"Bearer {user_token}"}
 
     # 1. GET /jobs
     res_jobs = client.get("/api/v1/jobs", headers=headers)
@@ -256,13 +268,13 @@ def test_viewer_can_read_telemetry_reports_and_trust(client, auth_tokens):
 
 
 # ====================================================================
-# 3. Cross-Tenant Authorization Tests (TEAM_LEAD boundaries)
+# 3. Team-Scoping Authorization Tests
 # ====================================================================
 
-def test_team_lead_cannot_submit_for_another_team(client, auth_tokens):
-    """TEAM_LEAD of team_alpha cannot submit a job for team_beta."""
-    lead_alpha_token = auth_tokens["TEAM_LEAD_team_alpha"]
-    headers = {"Authorization": f"Bearer {lead_alpha_token}"}
+def test_company_user_cannot_submit_for_another_team(client, auth_tokens):
+    """COMPANY_USER of team_alpha cannot submit a job for team_beta."""
+    user_alpha_token = auth_tokens["COMPANY_USER_team_alpha"]
+    headers = {"Authorization": f"Bearer {user_alpha_token}"}
     payload = {
         "job_id": "JOB-ALPHA-ATTEMPT-BETA",
         "team_id": "team_beta",
@@ -277,10 +289,12 @@ def test_team_lead_cannot_submit_for_another_team(client, auth_tokens):
     assert "cannot submit jobs for team 'team_beta'" in res.json()["detail"].lower()
 
 
-def test_team_lead_cannot_schedule_another_team_job(client, auth_tokens):
-    """TEAM_LEAD of team_alpha cannot trigger scheduling for a team_beta job."""
-    admin_token = auth_tokens["ADMIN"]
-    lead_alpha_token = auth_tokens["TEAM_LEAD_team_alpha"]
+def test_company_admin_cannot_schedule_another_teams_job_when_team_scoped(client, auth_tokens):
+    """A Company Admin with a team_id set is still team-scoped for job lookup/scheduling
+    (team_id-based scoping in app.api.tenant_scope.get_tenant_jobs applies to any
+    non-Platform-Admin identity, independent of the Company Admin/Company User tier)."""
+    admin_token = auth_tokens["PLATFORM_ADMIN"]
+    lead_alpha_token = auth_tokens["COMPANY_ADMIN_team_alpha"]
 
     # Submit job for team_beta
     client.post("/api/v1/jobs", json={
@@ -293,7 +307,7 @@ def test_team_lead_cannot_schedule_another_team_job(client, auth_tokens):
         "container_image": "greenshift/workload:latest",
     }, headers={"Authorization": f"Bearer {admin_token}"})
 
-    # Team Lead Alpha attempts to schedule Beta's job
+    # Company Admin of team_alpha attempts to schedule team_beta's job
     res = client.post("/api/v1/schedule/JOB-BETA-001", headers={"Authorization": f"Bearer {lead_alpha_token}"})
     assert res.status_code == 403
     assert "belongs to another team" in res.json()["detail"].lower()
@@ -305,7 +319,7 @@ def test_team_lead_cannot_schedule_another_team_job(client, auth_tokens):
 
 def test_internal_errors_do_not_expose_stack_traces(client, auth_tokens):
     """Ensure unexpected 500 errors return clean messages without python tracebacks or SQL syntax."""
-    admin_token = auth_tokens["ADMIN"]
+    admin_token = auth_tokens["PLATFORM_ADMIN"]
     headers = {"Authorization": f"Bearer {admin_token}"}
 
     # Force a mock error during schedule_and_store
@@ -352,14 +366,14 @@ def test_end_to_end_authenticated_pipeline(client):
             username="e2e_admin",
             email="e2e_admin@greenshift.io",
             hashed_password=hash_password("AdminPassword123!"),
-            role=UserRole.ADMIN,
+            role=UserRole.PLATFORM_ADMIN,
             is_active=True,
         )
         op_u = UserORM(
             username="e2e_operator",
             email="e2e_operator@greenshift.io",
             hashed_password=hash_password("OpsPassword123!"),
-            role=UserRole.OPERATOR,
+            role=UserRole.COMPANY_USER,
             team_id="team_alpha",
             is_active=True,
         )

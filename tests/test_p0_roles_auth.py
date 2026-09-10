@@ -1,16 +1,20 @@
 """
 Tests for P0-BE-2: Platform Admin vs Company Admin vs Company User Authorization.
 
+GreenShift supports exactly three application roles: PLATFORM_ADMIN,
+COMPANY_ADMIN, COMPANY_USER (see app.shared.models.UserRole). Legacy roles
+(ADMIN, TEAM_LEAD, OPERATOR, USER, VIEWER) no longer exist.
+
 Verifies:
 1. Platform Admin has global access across all tenants and full company/user/key management.
 2. Company Admin is strictly locked to identity.tenant_id:
    - Can only view/manage users, API keys, and company details within own tenant.
    - Cross-tenant access returns 404 (or 403 where appropriate).
-   - Cannot create/assign PLATFORM_ADMIN or ADMIN roles (403).
+   - Cannot create/assign the PLATFORM_ADMIN role (403).
    - Cannot deactivate company (403).
    - Cannot create companies (403).
-   - Rule 3: API keys cannot be granted ADMIN, PLATFORM_ADMIN, or COMPANY_ADMIN (400).
-3. Non-admins (COMPANY_USER, OPERATOR, VIEWER, TEAM_LEAD) are forbidden from all /admin/* endpoints (403).
+   - Rule 3: API keys cannot be granted PLATFORM_ADMIN or COMPANY_ADMIN (400).
+3. Company User is forbidden from all /admin/* endpoints (403).
 """
 
 import pytest
@@ -90,8 +94,6 @@ def test_setup():
         a_id, acme_admin_headers = make_user("acme_adm", "acme_adm@acme.com", UserRole.COMPANY_ADMIN, "tenant-acme")
         g_id, globex_admin_headers = make_user("globex_adm", "globex_adm@globex.com", UserRole.COMPANY_ADMIN, "tenant-globex")
         u_id, acme_user_headers = make_user("acme_usr", "acme_usr@acme.com", UserRole.COMPANY_USER, "tenant-acme")
-        o_id, operator_headers = make_user("oper_usr", "oper_usr@acme.com", UserRole.OPERATOR, "tenant-acme")
-        l_id, team_lead_headers = make_user("lead_usr", "lead_usr@acme.com", UserRole.TEAM_LEAD, "tenant-acme")
 
     return {
         "plat_id": p_id,
@@ -102,8 +104,6 @@ def test_setup():
         "globex_admin_headers": globex_admin_headers,
         "acme_user_id": u_id,
         "acme_user_headers": acme_user_headers,
-        "operator_headers": operator_headers,
-        "team_lead_headers": team_lead_headers,
     }
 
 
@@ -203,28 +203,28 @@ def test_company_admin_cross_tenant_user_deactivate_returns_404(client, test_set
 def test_company_admin_can_create_api_key_for_own_tenant(client, test_setup):
     resp = client.post(
         "/api/v1/admin/api-keys",
-        json={"role": "OPERATOR", "label": "Acme CI"},
+        json={"role": "COMPANY_USER", "label": "Acme CI"},
         headers=test_setup["acme_admin_headers"],
     )
     assert resp.status_code == 201
     data = resp.json()
     assert data["tenant_id"] == "tenant-acme"
-    assert data["role"] == "OPERATOR"
+    assert data["role"] == "COMPANY_USER"
     assert "api_key" in data
 
 
 def test_company_admin_cannot_create_api_key_for_other_tenant(client, test_setup):
     resp = client.post(
         "/api/v1/admin/api-keys",
-        json={"role": "OPERATOR", "label": "Injected Key", "tenant_id": "tenant-globex"},
+        json={"role": "COMPANY_USER", "label": "Injected Key", "tenant_id": "tenant-globex"},
         headers=test_setup["acme_admin_headers"],
     )
     assert resp.status_code == 403
 
 
-def test_api_key_cannot_be_granted_admin_or_platform_admin_or_company_admin(client, test_setup):
+def test_api_key_cannot_be_granted_platform_admin_or_company_admin(client, test_setup):
     # Rule 3
-    for bad_role in ["ADMIN", "PLATFORM_ADMIN", "COMPANY_ADMIN"]:
+    for bad_role in ["PLATFORM_ADMIN", "COMPANY_ADMIN"]:
         resp = client.post(
             "/api/v1/admin/api-keys",
             json={"role": bad_role, "label": f"Bad {bad_role}"},
@@ -239,7 +239,7 @@ def test_company_admin_list_api_keys_scoped_to_tenant(client, test_setup):
             id="globex-key-1",
             key_hash="dummy_hash_1",
             tenant_id="tenant-globex",
-            role=UserRole.OPERATOR,
+            role=UserRole.COMPANY_USER,
             label="Globex Key",
             is_active=True,
         )
@@ -266,7 +266,7 @@ def test_company_admin_cross_tenant_revoke_api_key_returns_404(client, test_setu
             id="globex-key-revoke-test",
             key_hash="dummy_hash_revoke",
             tenant_id="tenant-globex",
-            role=UserRole.OPERATOR,
+            role=UserRole.COMPANY_USER,
             label="Globex Key",
             is_active=True,
         )
@@ -286,7 +286,7 @@ def test_platform_admin_can_revoke_any_api_key(client, test_setup):
             id="globex-key-plat-revoke",
             key_hash="dummy_hash_plat_revoke",
             tenant_id="tenant-globex",
-            role=UserRole.OPERATOR,
+            role=UserRole.COMPANY_USER,
             label="Globex Key",
             is_active=True,
         )
@@ -302,19 +302,20 @@ def test_platform_admin_can_revoke_any_api_key(client, test_setup):
 
 
 # ─── 4. Non-Admin / Company User Forbidden Tests ───────────────────────────────
+#
+# Note: the legacy TEAM_LEAD and OPERATOR roles no longer exist. TEAM_LEAD was
+# folded into COMPANY_ADMIN (it already had approve/dispatch rights beyond a
+# plain Company User) so a former team-lead now legitimately has admin access
+# to its own company — already covered by the Company Admin tests above.
+# OPERATOR was folded into COMPANY_USER (it already had no approval or admin
+# rights beyond a plain Company User) so its "forbidden from admin" behavior
+# is exactly what this test already asserts for COMPANY_USER.
 
 def test_company_user_forbidden_from_admin_endpoints(client, test_setup):
     headers = test_setup["acme_user_headers"]
     assert client.get("/api/v1/admin/companies", headers=headers).status_code == 403
     assert client.post("/api/v1/admin/companies", json={"name": "X"}, headers=headers).status_code == 403
     assert client.get("/api/v1/admin/users", headers=headers).status_code == 403
-    assert client.post("/api/v1/admin/users", json={"email": "x@x.com", "password": "p", "role": "USER"}, headers=headers).status_code == 403
+    assert client.post("/api/v1/admin/users", json={"email": "x@x.com", "password": "p", "role": "COMPANY_USER"}, headers=headers).status_code == 403
     assert client.get("/api/v1/admin/api-keys", headers=headers).status_code == 403
-    assert client.post("/api/v1/admin/api-keys", json={"role": "OPERATOR"}, headers=headers).status_code == 403
-
-
-def test_team_lead_and_operator_forbidden_from_admin_endpoints(client, test_setup):
-    for h in [test_setup["team_lead_headers"], test_setup["operator_headers"]]:
-        assert client.get("/api/v1/admin/companies", headers=h).status_code == 403
-        assert client.get("/api/v1/admin/users", headers=h).status_code == 403
-        assert client.get("/api/v1/admin/api-keys", headers=h).status_code == 403
+    assert client.post("/api/v1/admin/api-keys", json={"role": "COMPANY_USER"}, headers=headers).status_code == 403

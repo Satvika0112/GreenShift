@@ -198,7 +198,7 @@ class TestOperationalMetricsTracking:
             username="admin",
             email="admin@test.com",
             hashed_password="hash",
-            role=UserRole.ADMIN,
+            role=UserRole.PLATFORM_ADMIN,
         )
         now = utcnow()
         job1 = JobORM(

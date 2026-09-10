@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.shared.database import get_db
-from app.shared.auth import require_viewer, AuthenticatedIdentity
+from app.shared.auth import require_company_member, AuthenticatedIdentity
 from app.shared.models import JobORM, JobStatus, AuditEventORM, ScheduleDecisionORM, UserORM
 from app.shared.utils import get_logger
 
@@ -20,7 +20,7 @@ router = APIRouter()
 @router.get("/dashboard/summary")
 def get_dashboard_summary(
     db: Session = Depends(get_db),
-    identity: Optional[AuthenticatedIdentity] = Depends(require_viewer),
+    identity: Optional[AuthenticatedIdentity] = Depends(require_company_member),
 ):
     """Aggregate summary data for the Streamlit dashboard."""
     try:

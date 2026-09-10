@@ -646,8 +646,8 @@ def _render_monitoring_tab():
                     except Exception as exc:
                         st.error(f"Scheduling failed: {exc}")
             elif current_status == "PENDING_APPROVAL":
-                curr_role = st.session_state.get("user_role", "VIEWER")
-                if curr_role in ("ADMIN", "TEAM_LEAD"):
+                curr_role = st.session_state.get("user_role", "COMPANY_USER")
+                if curr_role in ("PLATFORM_ADMIN", "COMPANY_ADMIN"):
                     if st.button("✓ Approve Schedule", type="primary", use_container_width=True, key=f"mon_app_{selected_id}"):
                         try:
                             approve_job_api(selected_id, schedule_id=dec.get("id", 0), token=token)
@@ -682,7 +682,7 @@ def _render_approvals_tab():
     with a3:
         st.markdown(render_metric_card("Approval Gate Policy", "STRICT", "Backend enforced"), unsafe_allow_html=True)
     with a4:
-        st.markdown(render_metric_card("Operator Access", st.session_state.get("user_role", "OPERATOR"), "Active RBAC role", tag="ACTIVE"), unsafe_allow_html=True)
+        st.markdown(render_metric_card("Operator Access", st.session_state.get("user_role", "COMPANY_USER"), "Active RBAC role", tag="ACTIVE"), unsafe_allow_html=True)
 
     tab_pending, tab_declined = st.tabs(["⏳ Pending Approvals", "🛑 Declined History"])
 
