@@ -7,9 +7,9 @@ import {
   Shield,
   ArrowRight,
   Sparkles,
-  AlertCircle,
 } from 'lucide-react';
 import { useAuth, PRESET_CREDENTIALS } from '../context/AuthContext';
+import { InlineBanner } from '../components/common/InlineBanner';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -116,22 +116,8 @@ export const LoginPage: React.FC = () => {
           }}
         >
           {error && (
-            <div
-              style={{
-                background: 'rgba(239, 68, 68, 0.15)',
-                border: '1px solid #ef4444',
-                color: '#ef4444',
-                padding: '0.65rem 0.85rem',
-                borderRadius: 'var(--radius-sm)',
-                marginBottom: '1.25rem',
-                fontSize: '0.82rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-              }}
-            >
-              <AlertCircle size={16} style={{ flexShrink: 0 }} />
-              <span>{error}</span>
+            <div style={{ marginBottom: '1.25rem' }}>
+              <InlineBanner variant="error">{error}</InlineBanner>
             </div>
           )}
 

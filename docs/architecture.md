@@ -92,9 +92,10 @@ External Inputs (Electricity Maps API, Tariff CSV)
 - **BRSR Compliance**: Computes Scope 2 purchased electricity emissions, SLA performance, and chargeback allocations.
 
 ### AGENT 5 — PRESENT
-- **Purpose**: Human-in-the-loop observability and executive reporting.
-- **Streamlit Dashboard**: Real-time KPI cards, diurnal carbon/tariff curve visualizations, team budget gauges, and audit health indicator.
-- **Exporting**: One-click BRSR CSV and Markdown summary generation.
+- **Purpose**: Human-in-the-loop observability, executive reporting, and operational governance.
+- **Enterprise React Control Plane (Official Frontend)**: Modern React 19 + TypeScript + Vite application (`frontend/`) served via Nginx in production and Vite proxy in development. Provides full multi-tenant RBAC, live Kubernetes job monitoring, interactive Pareto scheduling explainability, and cryptographic trust chain verification.
+- **Legacy Analytics Dashboard**: Streamlit dashboard on port 8501 (`app/dashboard/main.py`) retained for Python analytics and prototyping.
+- **Exporting**: One-click BRSR CSV and Markdown ESG summary generation.
 
 ---
 

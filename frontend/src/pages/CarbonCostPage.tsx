@@ -7,7 +7,6 @@ import {
   Leaf,
   Globe,
   RefreshCw,
-  AlertCircle,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -23,6 +22,7 @@ import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { sustainabilityApi } from '../api/endpoints';
 import { RegionInfo } from '../types/api';
 
@@ -104,6 +104,9 @@ export const CarbonCostPage: React.FC = () => {
       }
 
       setChartData(points);
+      if (carbonRes.status === 'rejected' && tariffRes.status === 'rejected') {
+        setErrorMsg('Failed to load carbon and tariff profiles for ' + selectedRegion);
+      }
     } catch (err: any) {
       setErrorMsg('Failed to load carbon and tariff profiles for ' + selectedRegion);
     } finally {
@@ -130,24 +133,7 @@ export const CarbonCostPage: React.FC = () => {
         }
       />
 
-      {errorMsg && (
-        <div
-          style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid #ef4444',
-            color: '#ef4444',
-            padding: '1rem',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <AlertCircle size={20} />
-          <span>{errorMsg}</span>
-        </div>
-      )}
+      {errorMsg && <InlineBanner variant="error">{errorMsg}</InlineBanner>}
 
       {/* Region Selector & Status */}
       <GlassCard>

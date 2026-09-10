@@ -1,6 +1,6 @@
 # 🌿 GreenShift — Carbon- & Cost-Aware Kubernetes Platform
 
-GreenShift is a **Kubernetes-native, carbon- and cost-aware compute scheduling and optimization platform** for deferrable workloads across Indian regional electrical grids. It dynamically evaluates regional Time-of-Day (ToD) and Flat electricity tariffs alongside live grid carbon telemetry from Electricity Maps, applies rigorous constraint-first cost optimization with carbon tie-breaking, evaluates quantitative Baseline vs GreenShift impact, dispatches workloads as native Kubernetes Jobs, records every decision in a tamper-evident SHA-256 hash-chain audit ledger, and presents savings via a 9-tab Streamlit dashboard and BRSR-compliant ESG exports.
+GreenShift is a **Kubernetes-native, carbon- and cost-aware compute scheduling and optimization platform** for deferrable workloads across Indian regional electrical grids. It dynamically evaluates regional Time-of-Day (ToD) and Flat electricity tariffs alongside live grid carbon telemetry from Electricity Maps, applies rigorous constraint-first cost optimization with carbon tie-breaking, evaluates quantitative Baseline vs GreenShift impact, dispatches workloads as native Kubernetes Jobs, records every decision in a tamper-evident SHA-256 hash-chain audit ledger, and presents savings via an Enterprise React Control Plane and BRSR-compliant ESG exports.
 
 ---
 
@@ -40,7 +40,7 @@ KUBERNETES CLUSTER (batch/v1 Jobs, Labels, Resource Limits)
 TRUST AGENT (SHA-256 Tamper-Evident Hash Chain Audit Ledger)
   │
   ▼
-PRESENT AGENT / DASHBOARD (10 Target Tabs: Overview, Jobs, Approvals, Carbon, Cost, Regional Data, Kubernetes, Impact, Audit, Export)
+PRESENT AGENT / CONTROL PLANE (Enterprise React Control Plane + BRSR ESG Reporting)
 ```
 
 ---

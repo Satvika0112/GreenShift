@@ -1,18 +1,42 @@
 import React, { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth, PRESET_CREDENTIALS } from '../../context/AuthContext';
-import { UserCheck, Shield, LogOut, Check, Activity, RefreshCw } from 'lucide-react';
+import { UserCheck, Shield, LogOut, Check, Activity, RefreshCw, Menu } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { NotificationBell } from './NotificationBell';
+import { monitoringApi } from '../../api/endpoints';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 
 interface HeaderProps {
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  onToggleNav?: () => void;
+  isNavOpen?: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onRefresh, isRefreshing = false }) => {
-  const { user, login, logout } = useAuth();
+export const Header: React.FC<HeaderProps> = ({
+  onRefresh,
+  isRefreshing = false,
+  onToggleNav,
+  isNavOpen = false,
+}) => {
+  const { user, login, logout, isAuthenticated } = useAuth();
   const [showRoleMenu, setShowRoleMenu] = useState(false);
   const [switching, setSwitching] = useState(false);
   const navigate = useNavigate();
+  const isNarrow = useMediaQuery('(max-width: 900px)');
+
+  // Real connectivity probe against GET /live — matches the same 15s cadence
+  // already used by the sidebar's badge queries. Replaces a previous always-on
+  // "CONNECTED" pill that never reflected actual backend reachability.
+  const { data: liveStatus, isError: isLiveError } = useQuery({
+    queryKey: ['headerLiveStatus'],
+    queryFn: () => monitoringApi.getSystemLive(),
+    enabled: isAuthenticated,
+    refetchInterval: 15000,
+    retry: false,
+  });
+  const isLive = liveStatus?.status === 'alive';
 
   const handleSwitchUser = async (cred: typeof PRESET_CREDENTIALS[0]) => {
     setSwitching(true);
@@ -41,53 +65,75 @@ export const Header: React.FC<HeaderProps> = ({ onRefresh, isRefreshing = false 
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '0 1.75rem',
+        padding: isNarrow ? '0 1rem' : '0 1.75rem',
         position: 'sticky',
         top: 0,
         zIndex: 30,
       }}
     >
-      {/* Left: Cluster Grid Telemetry Status */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+      {/* Left: Nav Toggle (mobile) + Cluster Grid Telemetry Status */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', minWidth: 0 }}>
+        {onToggleNav && (
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={onToggleNav}
+            title="Toggle navigation"
+            aria-label="Toggle navigation menu"
+            aria-expanded={isNavOpen}
+            style={{ padding: '0.4rem 0.55rem', flexShrink: 0 }}
+          >
+            <Menu size={16} />
+          </button>
+        )}
+
         <div
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: '0.5rem',
-            background: 'rgba(16, 185, 129, 0.08)',
-            border: '1px solid rgba(16, 185, 129, 0.2)',
+            background: isLive ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.1)',
+            border: `1px solid ${isLive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.25)'}`,
             padding: '0.35rem 0.75rem',
             borderRadius: 'var(--radius-full)',
+            flexShrink: 0,
           }}
         >
-          <span className="pulse-dot" style={{ color: '#10b981' }} />
-          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#10b981', letterSpacing: '0.02em' }}>
-            GRID TELEMETRY: CONNECTED
+          <span className="pulse-dot" style={{ color: isLive ? '#10b981' : '#ef4444' }} />
+          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isLive ? '#10b981' : '#ef4444', letterSpacing: '0.02em' }}>
+            {isNarrow
+              ? isLive ? 'CONNECTED' : isLiveError ? 'UNREACHABLE' : 'CHECKING...'
+              : isLive ? 'BACKEND: CONNECTED' : isLiveError ? 'BACKEND: UNREACHABLE' : 'BACKEND: CHECKING...'}
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          <Activity size={14} />
-          <span>Multi-Region Carbon Dispatch Engine</span>
-        </div>
+        {!isNarrow && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            <Activity size={14} />
+            <span>Multi-Region Carbon Dispatch Engine</span>
+          </div>
+        )}
       </div>
 
       {/* Right: Persona Switcher, Refresh, User Profile */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: isNarrow ? '0.5rem' : '0.85rem' }}>
         {onRefresh && (
           <button
             className="btn btn-secondary btn-sm"
             onClick={onRefresh}
             disabled={isRefreshing}
             title="Refresh Control Plane Data"
+            aria-label="Refresh Control Plane Data"
           >
             <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
-            <span>Sync</span>
+            {!isNarrow && <span>Sync</span>}
           </button>
         )}
 
-        {/* Development Persona Switcher (Authenticates against backend) */}
-        {(import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO_PERSONAS === 'true') && (
+        <NotificationBell />
+
+        {/* Development Persona Switcher (Authenticates against backend) — hidden
+            on narrow screens where its 260px dropdown would overflow the viewport. */}
+        {!isNarrow && (import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO_PERSONAS === 'true') && (
           <div style={{ position: 'relative' }}>
             <button
               className="btn btn-secondary btn-sm"
@@ -185,10 +231,12 @@ export const Header: React.FC<HeaderProps> = ({ onRefresh, isRefreshing = false 
           >
             {user?.username?.charAt(0).toUpperCase() || 'U'}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ fontSize: '0.82rem', fontWeight: 700 }}>{user?.username}</span>
-            <span style={{ fontSize: '0.68rem', color: '#10b981', fontWeight: 600 }}>{user?.role}</span>
-          </div>
+          {!isNarrow && (
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontSize: '0.82rem', fontWeight: 700 }}>{user?.username}</span>
+              <span style={{ fontSize: '0.68rem', color: '#10b981', fontWeight: 600 }}>{user?.role}</span>
+            </div>
+          )}
         </div>
 
         {/* User logout */}
@@ -197,6 +245,7 @@ export const Header: React.FC<HeaderProps> = ({ onRefresh, isRefreshing = false 
           style={{ padding: '0.4rem 0.6rem', marginLeft: '0.5rem' }}
           onClick={handleLogout}
           title="Sign Out"
+          aria-label="Sign Out"
         >
           <LogOut size={15} color="#94a3b8" />
         </button>

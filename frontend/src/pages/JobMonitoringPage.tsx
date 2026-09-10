@@ -1,24 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Activity,
   Server,
-  Terminal,
-  Cpu,
   RefreshCw,
-  Search,
-  Filter,
-  CheckCircle2,
-  Clock,
-  HardDrive,
-  AlertTriangle,
-  Play,
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { dispatchApi } from '../api/endpoints';
 import { KubernetesExecution, KubernetesClusterState } from '../types/api';
 
@@ -31,10 +22,15 @@ export const JobMonitoringPage: React.FC = () => {
   const [logFilter, setLogFilter] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const fetchTelemetry = async () => {
-    setIsRefreshing(true);
+  const fetchTelemetry = async (silent = false) => {
+    if (silent) {
+      setIsAutoRefreshing(true);
+    } else {
+      setIsRefreshing(true);
+    }
     setErrorMsg(null);
     try {
       const [execRes, stateRes, healthRes] = await Promise.allSettled([
@@ -48,6 +44,8 @@ export const JobMonitoringPage: React.FC = () => {
         if (!selectedExecId && execRes.value.length > 0) {
           setSelectedExecId(String(execRes.value[0].execution_id));
         }
+      } else if (execRes.status === 'rejected' && !silent) {
+        setErrorMsg('Failed to poll Kubernetes execution telemetry.');
       }
       if (stateRes.status === 'fulfilled') {
         setClusterState(stateRes.value);
@@ -56,15 +54,23 @@ export const JobMonitoringPage: React.FC = () => {
         setK8sHealth(healthRes.value);
       }
     } catch (err: any) {
-      setErrorMsg('Failed to poll Kubernetes execution telemetry.');
+      if (!silent) setErrorMsg('Failed to poll Kubernetes execution telemetry.');
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
+      setIsAutoRefreshing(false);
     }
   };
 
   useEffect(() => {
     fetchTelemetry();
+    // Sensible auto-refresh so this monitoring view stays live without manual
+    // intervention — matches the same 15s cadence already used by AppShell's
+    // sidebar badges and NotificationBell's list refresh, rather than the
+    // aggressive fixed 5s claim the page previously made (and never honored).
+    const interval = setInterval(() => fetchTelemetry(true), 15000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const selectedExec = executions.find((e) => String(e.execution_id) === String(selectedExecId)) || executions[0];
@@ -75,31 +81,14 @@ export const JobMonitoringPage: React.FC = () => {
         title="Kubernetes Cluster & Job Execution Telemetry"
         subtitle="Real-time pod scheduling, worker telemetry, execution logs, and node resource allocation across edge clusters"
         actions={
-          <button className="btn btn-secondary" onClick={fetchTelemetry} disabled={isRefreshing}>
+          <button className="btn btn-secondary" onClick={() => fetchTelemetry()} disabled={isRefreshing}>
             <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
             <span>{isRefreshing ? 'Polling Clusters...' : 'Poll Clusters'}</span>
           </button>
         }
       />
 
-      {errorMsg && (
-        <div
-          style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid #ef4444',
-            color: '#ef4444',
-            padding: '1rem',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <AlertTriangle size={20} />
-          <span>{errorMsg}</span>
-        </div>
-      )}
+      {errorMsg && <InlineBanner variant="error">{errorMsg}</InlineBanner>}
 
       {/* Cluster Node Summary Bar */}
       <div
@@ -195,11 +184,13 @@ export const JobMonitoringPage: React.FC = () => {
             </div>
           </GlassCard>
 
-          {/* Right: Live Pod Telemetry & Logs */}
+          {/* Right: Execution Details — only real fields from the backend's
+              execution record. GreenShift does not expose real pod stdout
+              logs via any API, so no log stream is simulated here. */}
           <GlassCard
-            title="Pod Execution Telemetry & Status Logs"
+            title="Execution Details"
             subtitle={`Pod: ${selectedExec?.pod_name || `${selectedExec?.kubernetes_job_name || 'k8s'}-pod`} • Namespace: ${selectedExec?.kubernetes_namespace || selectedExec?.namespace || 'greenshift'}`}
-            badge={<span className="badge badge-info">POLLING TELEMETRY</span>}
+            badge={<span className="badge badge-info">{isAutoRefreshing ? 'AUTO-REFRESHING' : 'LIVE'}</span>}
           >
             {selectedExec ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -226,33 +217,31 @@ export const JobMonitoringPage: React.FC = () => {
 
                 <div
                   style={{
-                    background: '#04070e',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.6rem',
+                    background: 'var(--bg-surface-elevated)',
                     border: '1px solid var(--border-subtle)',
                     borderRadius: 'var(--radius-sm)',
                     padding: '1rem',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '0.78rem',
-                    color: '#34d399',
-                    lineHeight: 1.6,
-                    height: '280px',
-                    overflowY: 'auto',
+                    fontSize: '0.8rem',
                   }}
                 >
-                  <div>[greenshift-dispatcher] Claim verified for job: {selectedExec.job_id}</div>
-                  <div>[greenshift-dispatcher] Submitting Kubernetes batch Job manifest: {selectedExec.kubernetes_job_name}</div>
-                  <div>[kubernetes-cluster] Target namespace: {selectedExec.kubernetes_namespace || selectedExec.namespace || 'greenshift'}</div>
-                  <div>[kubernetes-cluster] Pod name: {selectedExec.pod_name || `${selectedExec.kubernetes_job_name}-pod`}</div>
-                  <div>[kubernetes-cluster] Kubernetes execution state: {selectedExec.k8s_status || selectedExec.gs_status}</div>
+                  <DetailRow label="Job ID" value={selectedExec.job_id} mono />
+                  <DetailRow label="Kubernetes Job" value={selectedExec.kubernetes_job_name} mono />
+                  <DetailRow label="Namespace" value={selectedExec.kubernetes_namespace || selectedExec.namespace || 'greenshift'} mono />
+                  <DetailRow label="Pod Name" value={selectedExec.pod_name || '—'} mono />
                   {selectedExec.actual_start && (
-                    <div>[kubernetes-telemetry] Container execution commenced at {new Date(selectedExec.actual_start).toISOString()}</div>
+                    <DetailRow label="Started" value={new Date(selectedExec.actual_start).toLocaleString()} />
                   )}
                   {selectedExec.actual_end && (
-                    <div>[kubernetes-telemetry] Container execution completed at {new Date(selectedExec.actual_end).toISOString()}</div>
+                    <DetailRow label="Completed" value={new Date(selectedExec.actual_end).toLocaleString()} />
                   )}
                   {selectedExec.error_message && (
-                    <div style={{ color: '#ef4444' }}>[kubernetes-error] {selectedExec.error_message}</div>
+                    <div style={{ marginTop: '0.4rem', padding: '0.6rem 0.75rem', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-sm)', color: '#ef4444' }}>
+                      <strong>Error:</strong> {selectedExec.error_message}
+                    </div>
                   )}
-                  <div>[info] Note: Pod telemetry is polled at 5-second intervals from cluster status API.</div>
                 </div>
               </div>
             ) : null}
@@ -262,3 +251,12 @@ export const JobMonitoringPage: React.FC = () => {
     </div>
   );
 };
+
+const DetailRow: React.FC<{ label: string; value: string; mono?: boolean }> = ({ label, value, mono }) => (
+  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+    <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+    <span style={{ fontFamily: mono ? 'var(--font-mono)' : undefined, color: 'var(--text-primary)', textAlign: 'right', wordBreak: 'break-all' }}>
+      {value}
+    </span>
+  </div>
+);

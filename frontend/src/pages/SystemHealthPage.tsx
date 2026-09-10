@@ -16,6 +16,7 @@ import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { monitoringApi } from '../api/endpoints';
 import { SystemHealthReport } from '../types/api';
 
@@ -24,7 +25,8 @@ interface SubsystemProbe {
   name: string;
   role: string;
   status: 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
-  latencyMs: number;
+  // null when the backend does not report a per-component latency — never fabricated.
+  latencyMs: number | null;
   reason?: string;
   icon: any;
 }
@@ -82,8 +84,25 @@ export const SystemHealthPage: React.FC = () => {
       setIsReadyOk(false);
     }
 
+    if (healthData) {
+      results.push({
+        id: 'health_check',
+        name: 'Full Health Check Endpoint',
+        role: 'Aggregated GET /health round-trip — application, database, Redis, Kubernetes, carbon data',
+        status: healthData.status === 'healthy' ? 'healthy' : healthData.status === 'degraded' ? 'degraded' : 'unhealthy',
+        latencyMs: healthLatency,
+        icon: Activity,
+      });
+    }
+
     if (healthData && healthData.components) {
       const comp = healthData.components;
+
+      // Sub-component status/reason below are real fields from GET /health's
+      // `components` object. The backend does not report a per-component
+      // round-trip latency, so none is fabricated here — only the one real
+      // measured latency for the /health call itself is shown above, attributed
+      // to that call, not divided up as if each subsystem had its own timing.
 
       // Database
       results.push({
@@ -91,7 +110,7 @@ export const SystemHealthPage: React.FC = () => {
         name: 'PostgreSQL / SQLite State Store',
         role: 'ACID System-of-Record & Cryptographic Audit Ledger',
         status: (comp.database?.status as any) || 'unknown',
-        latencyMs: healthLatency,
+        latencyMs: null,
         reason: comp.database?.reason,
         icon: Database,
       });
@@ -102,7 +121,7 @@ export const SystemHealthPage: React.FC = () => {
         name: 'Redis Cache & Telemetry Store',
         role: 'Distributed Rate Limiting & Regional Carbon Observation Cache',
         status: (comp.redis?.status as any) || 'unknown',
-        latencyMs: Math.max(1, Math.round(healthLatency * 0.4)),
+        latencyMs: null,
         reason: comp.redis?.reason,
         icon: Activity,
       });
@@ -113,7 +132,7 @@ export const SystemHealthPage: React.FC = () => {
         name: 'Kubernetes Cluster Controller',
         role: 'Dynamic Job Execution, Node Feasibility & Pod Dispatcher',
         status: (comp.kubernetes?.status as any) || 'unknown',
-        latencyMs: Math.max(2, Math.round(healthLatency * 0.8)),
+        latencyMs: null,
         reason: comp.kubernetes?.reason,
         icon: Cpu,
       });
@@ -124,19 +143,9 @@ export const SystemHealthPage: React.FC = () => {
         name: 'Carbon Intensity Grid Feed',
         role: 'Marginal Emissions Telemetry & Fallback Hierarchy',
         status: (comp.carbon_data?.status as any) || 'unknown',
-        latencyMs: Math.max(3, Math.round(healthLatency * 0.6)),
+        latencyMs: null,
         reason: comp.carbon_data?.reason || comp.carbon_data?.mode,
         icon: Globe,
-      });
-
-      // Tariff Engine
-      results.push({
-        id: 'tariff_engine',
-        name: 'Time-of-Day (ToD) Tariff Engine',
-        role: 'Multi-Region Electricity Spot & Commercial Rate Evaluator',
-        status: 'healthy',
-        latencyMs: Math.max(1, Math.round(healthLatency * 0.3)),
-        icon: Zap,
       });
     }
 
@@ -165,24 +174,7 @@ export const SystemHealthPage: React.FC = () => {
         }
       />
 
-      {errorMsg && (
-        <div
-          style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid #ef4444',
-            color: '#ef4444',
-            padding: '1rem',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <AlertTriangle size={20} />
-          <span>{errorMsg}</span>
-        </div>
-      )}
+      {errorMsg && <InlineBanner variant="error">{errorMsg}</InlineBanner>}
 
       {/* Overall Health Status Card */}
       <div
@@ -302,21 +294,23 @@ export const SystemHealthPage: React.FC = () => {
                 </div>
               )}
 
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  marginTop: '1rem',
-                  paddingTop: '0.75rem',
-                  borderTop: '1px solid var(--border-subtle)',
-                  fontSize: '0.78rem',
-                }}
-              >
-                <span style={{ color: 'var(--text-secondary)' }}>Roundtrip Latency:</span>
-                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#38bdf8' }}>
-                  {svc.latencyMs} ms
-                </span>
-              </div>
+              {svc.latencyMs !== null && (
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    marginTop: '1rem',
+                    paddingTop: '0.75rem',
+                    borderTop: '1px solid var(--border-subtle)',
+                    fontSize: '0.78rem',
+                  }}
+                >
+                  <span style={{ color: 'var(--text-secondary)' }}>Roundtrip Latency:</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#38bdf8' }}>
+                    {svc.latencyMs} ms
+                  </span>
+                </div>
+              )}
             </GlassCard>
           );
         })}

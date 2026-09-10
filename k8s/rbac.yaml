@@ -55,3 +55,34 @@ roleRef:
   kind: Role
   name: greenshift-dispatcher-role
   apiGroup: rbac.authorization.k8s.io
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: greenshift-cluster-reader
+  labels:
+    app: greenshift
+rules:
+  # Nodes & Namespaces — read (for cluster telemetry & health monitoring)
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces"]
+    verbs:     ["get", "list"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: greenshift-cluster-reader-binding
+  labels:
+    app: greenshift
+subjects:
+  - kind: ServiceAccount
+    name: greenshift-dispatcher
+    namespace: greenshift
+roleRef:
+  kind: ClusterRole
+  name: greenshift-cluster-reader
+  apiGroup: rbac.authorization.k8s.io

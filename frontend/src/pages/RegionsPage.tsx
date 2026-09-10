@@ -8,13 +8,13 @@ import {
   Layers,
   CheckCircle2,
   RefreshCw,
-  AlertTriangle,
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { sustainabilityApi, dispatchApi, workloadsApi } from '../api/endpoints';
 import { RegionInfo, KubernetesClusterState, Job } from '../types/api';
 
@@ -44,6 +44,9 @@ export const RegionsPage: React.FC = () => {
       ]);
 
       const baseRegions: RegionInfo[] = regRes.status === 'fulfilled' ? regRes.value || [] : [];
+      if (regRes.status === 'rejected') {
+        setErrorMsg('Failed to load regional cluster data from backend.');
+      }
       if (k8sRes.status === 'fulfilled') {
         setClusterState(k8sRes.value);
       }
@@ -124,24 +127,7 @@ export const RegionsPage: React.FC = () => {
         }
       />
 
-      {errorMsg && (
-        <div
-          style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid #ef4444',
-            color: '#ef4444',
-            padding: '1rem',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <AlertTriangle size={20} />
-          <span>{errorMsg}</span>
-        </div>
-      )}
+      {errorMsg && <InlineBanner variant="error">{errorMsg}</InlineBanner>}
 
       {/* Cluster Node Summary Bar */}
       {clusterState && (

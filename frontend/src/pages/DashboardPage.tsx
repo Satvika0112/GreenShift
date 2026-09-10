@@ -11,7 +11,6 @@ import {
   CheckCircle2,
   ArrowUpRight,
   RefreshCw,
-  AlertTriangle,
   UploadCloud,
 } from 'lucide-react';
 import { KPICard } from '../components/common/KPICard';
@@ -19,6 +18,7 @@ import { GlassCard } from '../components/common/GlassCard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { PageHeader } from '../components/layout/PageHeader';
 import { monitoringApi, workloadsApi, sustainabilityApi } from '../api/endpoints';
 import { Job, DashboardSummary, FleetHeadline, RegionInfo } from '../types/api';
@@ -26,7 +26,7 @@ import { useAuth } from '../context/AuthContext';
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isPlatformAdmin } = useAuth();
 
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [headline, setHeadline] = useState<FleetHeadline | null>(null);
@@ -51,6 +51,9 @@ export const DashboardPage: React.FC = () => {
       if (sumRes.status === 'fulfilled') setSummary(sumRes.value);
       if (headRes.status === 'fulfilled') setHeadline(headRes.value);
       if (jobsRes.status === 'fulfilled') setJobs(jobsRes.value || []);
+      if (sumRes.status === 'rejected' && headRes.status === 'rejected') {
+        setError('Unable to retrieve fleet metrics from backend. Ensure FastAPI service is running.');
+      }
       if (regRes.status === 'fulfilled') {
         const regList = regRes.value || [];
         setRegions(regList);
@@ -100,7 +103,7 @@ export const DashboardPage: React.FC = () => {
       {/* Page Header */}
       <PageHeader
         title="Fleet Operations Control Plane"
-        subtitle={`Real-time carbon-aware workload orchestration across multi-region Kubernetes clusters. Active Scope: ${user?.role === 'ADMIN' ? 'Global Organization (All Teams)' : `Team: ${user?.team_id}`}`}
+        subtitle={`Real-time carbon-aware workload orchestration across multi-region Kubernetes clusters. Active Scope: ${isPlatformAdmin ? 'Global Organization (All Teams)' : `Team: ${user?.team_id}`}`}
         actions={
           <div style={{ display: 'flex', gap: '0.6rem' }}>
             <button className="btn btn-secondary" onClick={fetchData} disabled={isLoading}>
@@ -115,24 +118,7 @@ export const DashboardPage: React.FC = () => {
         }
       />
 
-      {error && (
-        <div
-          style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid #ef4444',
-            color: '#ef4444',
-            padding: '1rem',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <AlertTriangle size={20} />
-          <span>{error}</span>
-        </div>
-      )}
+      {error && <InlineBanner variant="error">{error}</InlineBanner>}
 
       {/* Headline Carbon Impact Banner */}
       <div

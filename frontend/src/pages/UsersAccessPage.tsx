@@ -7,9 +7,7 @@ import {
   Trash2,
   Copy,
   CheckCircle2,
-  XCircle,
   RefreshCw,
-  AlertTriangle,
   Building2,
   UserPlus,
   Check,
@@ -19,6 +17,7 @@ import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { authApi, companyApi } from '../api/endpoints';
 import { User, UserRole } from '../types/api';
 import { useAuth } from '../context/AuthContext';
@@ -34,7 +33,7 @@ export const UsersAccessPage: React.FC = () => {
   // Key creation state
   const [isCreatingKey, setIsCreatingKey] = useState(false);
   const [newKeyLabel, setNewKeyLabel] = useState('');
-  const [newKeyRole, setNewKeyRole] = useState('OPERATOR');
+  const [newKeyRole, setNewKeyRole] = useState('COMPANY_USER');
   const [newKeyTenant, setNewKeyTenant] = useState('');
   const [rawGeneratedKey, setRawGeneratedKey] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -45,7 +44,7 @@ export const UsersAccessPage: React.FC = () => {
   const [newUsername, setNewUsername] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
   const [newUserRole, setNewUserRole] = useState<UserRole>('COMPANY_USER');
-  const [newUserTeam, setNewUserTeam] = useState('team-acme');
+  const [newUserTeam, setNewUserTeam] = useState('');
   const [newUserTenant, setNewUserTenant] = useState('');
   const [isCreatingUser, setIsCreatingUser] = useState(false);
 
@@ -66,6 +65,8 @@ export const UsersAccessPage: React.FC = () => {
 
         if (usersRes.status === 'fulfilled' && Array.isArray(usersRes.value)) {
           setUsers(usersRes.value);
+        } else if (usersRes.status === 'rejected') {
+          setErrorMsg('Failed to fetch directory data from backend.');
         }
         if (keysRes.status === 'fulfilled' && Array.isArray(keysRes.value)) {
           setApiKeys(keysRes.value);
@@ -100,7 +101,7 @@ export const UsersAccessPage: React.FC = () => {
         username: newUsername || undefined,
         password: newUserPassword,
         role: newUserRole,
-        team_id: newUserTeam,
+        team_id: newUserTeam || undefined,
         tenant_id: isPlatformAdmin ? (newUserTenant || undefined) : undefined,
       });
 
@@ -189,43 +190,9 @@ export const UsersAccessPage: React.FC = () => {
         }
       />
 
-      {errorMsg && (
-        <div
-          style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid #ef4444',
-            color: '#ef4444',
-            padding: '0.85rem 1rem',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <AlertTriangle size={18} />
-          <span>{errorMsg}</span>
-        </div>
-      )}
+      {errorMsg && <InlineBanner variant="error">{errorMsg}</InlineBanner>}
 
-      {successMsg && (
-        <div
-          style={{
-            background: 'rgba(16, 185, 129, 0.15)',
-            border: '1px solid #10b981',
-            color: '#10b981',
-            padding: '0.85rem 1rem',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <CheckCircle2 size={18} />
-          <span>{successMsg}</span>
-        </div>
-      )}
+      {successMsg && <InlineBanner variant="success">{successMsg}</InlineBanner>}
 
       {rawGeneratedKey && (
         <div
@@ -477,11 +444,8 @@ export const UsersAccessPage: React.FC = () => {
 
             <div className="form-group" style={{ marginBottom: 0, width: '150px' }}>
               <label className="form-label">Key Role</label>
-              <select className="select" value={newKeyRole} onChange={(e) => setNewKeyRole(e.target.value)}>
-                <option value="OPERATOR">OPERATOR</option>
-                <option value="USER">USER</option>
+              <select className="select" value={newKeyRole} onChange={(e) => setNewKeyRole(e.target.value)} disabled>
                 <option value="COMPANY_USER">COMPANY_USER</option>
-                <option value="VIEWER">VIEWER</option>
               </select>
             </div>
 
@@ -655,18 +619,17 @@ export const UsersAccessPage: React.FC = () => {
                     onChange={(e) => setNewUserRole(e.target.value as UserRole)}
                   >
                     <option value="COMPANY_USER">COMPANY_USER</option>
-                    <option value="OPERATOR">OPERATOR</option>
-                    <option value="VIEWER">VIEWER</option>
                     <option value="COMPANY_ADMIN">COMPANY_ADMIN</option>
                     {isPlatformAdmin && <option value="PLATFORM_ADMIN">PLATFORM_ADMIN</option>}
                   </select>
                 </div>
 
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Team ID</label>
+                  <label className="form-label">Team ID (Optional)</label>
                   <input
                     type="text"
                     className="input"
+                    placeholder="Auto / None"
                     value={newUserTeam}
                     onChange={(e) => setNewUserTeam(e.target.value)}
                   />

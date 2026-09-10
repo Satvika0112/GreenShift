@@ -7,7 +7,6 @@ import {
   DollarSign,
   TrendingDown,
   CheckCircle2,
-  AlertCircle,
   Clock,
   Sparkles,
   ArrowRight,
@@ -18,14 +17,18 @@ import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { EmptyState } from '../components/common/EmptyState';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { schedulingApi, workloadsApi } from '../api/endpoints';
 import { Job, ScheduleDecision } from '../types/api';
 import { useAuth } from '../context/AuthContext';
+import { GreenShiftRecommendation } from '../components/decision/GreenShiftRecommendation';
+import { WhyThisWindow } from '../components/decision/WhyThisWindow';
+import { ImmediateVsGreenShift } from '../components/decision/ImmediateVsGreenShift';
 
 export const SchedulingPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { user, isViewer } = useAuth();
+  const { user } = useAuth();
   const initialJobId = searchParams.get('jobId') || '';
 
   const [selectedJobId, setSelectedJobId] = useState<string>(initialJobId);
@@ -51,6 +54,8 @@ export const SchedulingPage: React.FC = () => {
         if (!selectedJobId && resJobs.value.length > 0) {
           setSelectedJobId(resJobs.value[0].job_id);
         }
+      } else if (resJobs.status === 'rejected') {
+        setErrorMessage('Failed to load workloads from backend.');
       }
       if (resCap.status === 'fulfilled') {
         setCapacitySummary(resCap.value);
@@ -151,24 +156,7 @@ export const SchedulingPage: React.FC = () => {
         }
       />
 
-      {errorMessage && (
-        <div
-          style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid #ef4444',
-            color: '#ef4444',
-            padding: '1rem',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <AlertCircle size={18} />
-          <span>{errorMessage}</span>
-        </div>
-      )}
+      {errorMessage && <InlineBanner variant="error">{errorMessage}</InlineBanner>}
 
       {/* Control Configuration Bar */}
       <GlassCard title="Optimizer Workload Selector">
@@ -192,7 +180,7 @@ export const SchedulingPage: React.FC = () => {
             className="btn btn-primary"
             style={{ height: '40px' }}
             onClick={handleRunOptimizer}
-            disabled={isCalculating || !selectedJobId || isViewer}
+            disabled={isCalculating || !selectedJobId}
           >
             <Cpu size={16} className={isCalculating ? 'animate-spin' : ''} />
             <span>{isCalculating ? 'Evaluating Optimal Windows...' : 'Run Scheduling Engine'}</span>
@@ -223,69 +211,19 @@ export const SchedulingPage: React.FC = () => {
         </div>
       )}
 
-      {/* Decision Summary Banner */}
+      {/* Signature GreenShift decision components */}
       {decision ? (
-        <div
-          style={{
-            background: 'var(--bg-surface)',
-            border: '1px solid rgba(16, 185, 129, 0.3)',
-            borderRadius: 'var(--radius-md)',
-            padding: '1.5rem',
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-            gap: '1.25rem',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Recommended Region</div>
-            <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#ffffff', fontFamily: 'var(--font-mono)' }}>
-              {decision.region_id || decision.recommended_region || selectedJob?.region || 'IN-TG'}
-            </div>
-            <div style={{ fontSize: '0.75rem', color: '#10b981', marginTop: '0.2rem' }}>
-              Grid Intensity: {decision.carbon_intensity ? `${decision.carbon_intensity.toFixed(1)} gCO₂/kWh` : 'N/A'}
-            </div>
-          </div>
-
-          <div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Target Execution Window</div>
-            <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>
-              {decision.selected_start ? new Date(decision.selected_start).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Immediate'}
-            </div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-              Duration: {selectedJob?.runtime_minutes || 60} mins
-            </div>
-          </div>
-
-          <div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Emissions Reduction</div>
-            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#10b981', fontFamily: 'var(--font-mono)' }}>
-              {decision.carbon_reduction_pct !== undefined ? `-${decision.carbon_reduction_pct.toFixed(1)}%` : 'N/A'}
-            </div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              Avoids {decision.carbon_avoided ? `${decision.carbon_avoided.toFixed(2)} kg CO₂e` : '0 kg'} vs baseline
-            </div>
-          </div>
-
-          <div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Cost Savings</div>
-            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>
-              {decision.cost_difference ? `$${decision.cost_difference.toFixed(2)}` : decision.cost_saved_usd ? `$${decision.cost_saved_usd}` : '$0.00'}
-            </div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              {decision.cost_reduction_pct ? `-${decision.cost_reduction_pct.toFixed(1)}% TOD tariff savings` : 'Time-of-Day Tariff'}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
-            <button
-              className="btn btn-secondary"
-              onClick={() => navigate(`/workloads/${selectedJobId}`)}
-            >
+        <>
+          <GreenShiftRecommendation decision={decision} fallbackRegion={selectedJob?.region} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary btn-sm" onClick={() => navigate(`/workloads/${selectedJobId}`)}>
               <span>Inspect Workload</span>
               <ArrowRight size={14} />
             </button>
           </div>
-        </div>
+          <ImmediateVsGreenShift decision={decision} />
+          <WhyThisWindow decision={decision} />
+        </>
       ) : (
         <div style={{ background: 'var(--bg-surface)', padding: '1.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', textAlign: 'center' }}>
           <Clock size={28} style={{ color: 'var(--text-muted)', margin: '0 auto 0.5rem auto' }} />
@@ -294,52 +232,6 @@ export const SchedulingPage: React.FC = () => {
             Click "Run Scheduling Engine" above to trigger carbon-aware slot evaluation across grid forecasts.
           </div>
         </div>
-      )}
-
-      {/* Explainability & Rejection Breakdown */}
-      {decision && (
-        <GlassCard title="Explainability Matrix & Rejection Taxonomy">
-          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '1.5rem' }}>
-            <div>
-              <h4 style={{ fontSize: '0.9rem', marginBottom: '0.5rem', color: '#ffffff' }}>Deterministic Scoring Rationale</h4>
-              <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                {decision.reason || 'GreenShift evaluated regional 15-minute generation forecasts against Time-of-Day electricity tariffs and Kubernetes cluster capacity constraints.'}
-              </p>
-              <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'var(--bg-surface-elevated)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: '#38bdf8' }}>
-                Deterministic Ranking #{decision.deterministic_rank || decision.deterministic_ranking || 1} • Evaluated {decision.candidates_evaluated || 0} Candidates ({decision.feasible_candidates_count || 0} Feasible)
-              </div>
-            </div>
-
-            <div>
-              <h4 style={{ fontSize: '0.9rem', marginBottom: '0.5rem', color: '#ffffff' }}>Window Rejection Breakdown</h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {decision.rejection_summary && Object.keys(decision.rejection_summary).length > 0 ? (
-                  Object.entries(decision.rejection_summary).map(([reason, count]) => (
-                    <div
-                      key={reason}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '0.5rem 0.75rem',
-                        background: 'var(--bg-surface-elevated)',
-                        borderRadius: 'var(--radius-sm)',
-                        fontSize: '0.8rem',
-                      }}
-                    >
-                      <span style={{ color: 'var(--text-secondary)' }}>{reason.replace(/_/g, ' ')}</span>
-                      <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#ef4444' }}>{String(count)} windows</span>
-                    </div>
-                  ))
-                ) : (
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    All evaluated candidate slots met SLA deadline and resource feasibility constraints.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </GlassCard>
       )}
 
       {/* Real Cluster Capacity Map Summary */}

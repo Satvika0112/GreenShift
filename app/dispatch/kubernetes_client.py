@@ -191,13 +191,16 @@ def check_kubernetes_available(force: bool = False) -> bool:
             parsed = urlparse(host)
             host_name = parsed.hostname or "localhost"
             port = parsed.port or (443 if parsed.scheme == "https" else 80)
-            # Quick 0.2s socket probe to prevent urllib3 TCP connect hang
-            with socket.create_connection((host_name, port), timeout=0.2):
+            # Quick 2.0s socket probe to prevent urllib3 TCP connect hang
+            with socket.create_connection((host_name, port), timeout=2.0):
                 pass
 
         core = get_core_v1()
-        core.list_namespace(limit=1, _request_timeout=3)
-        logger.debug("Kubernetes API health check passed (namespace list successful)")
+        try:
+            core.list_namespace(limit=1, _request_timeout=3)
+        except Exception:
+            core.list_namespaced_pod(namespace=settings.k8s_namespace, limit=1, _request_timeout=3)
+        logger.debug("Kubernetes API health check passed")
         _last_k8s_available = True
     except Exception as exc:
         logger.debug("Kubernetes API health check failed: %s", exc)

@@ -21,24 +21,67 @@ spec:
 
 ---
 
+# API Service Alias (Resolves http://api:8000 upstream for Nginx)
 apiVersion: v1
 kind: Service
 metadata:
-  name: greenshift-dashboard
+  name: api
   namespace: greenshift
   labels:
     app: greenshift
-    component: dashboard
+    component: api
 spec:
   selector:
     app: greenshift
-    component: dashboard
+    component: api
   ports:
     - name: http
-      port: 8501
-      targetPort: 8501
-  # Use NodePort for local Kubernetes dev access
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
+
+---
+
+# Enterprise React Control Plane Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: greenshift-frontend
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: frontend
+spec:
+  selector:
+    app: greenshift
+    component: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
   type: NodePort
+
+---
+
+# Redis Cache Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: redis
+spec:
+  selector:
+    app: greenshift
+    component: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+  type: ClusterIP
+
 
 ---
 

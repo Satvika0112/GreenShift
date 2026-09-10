@@ -14,6 +14,11 @@ import {
   CreateJobInput,
   User,
   AuthTokenResponse,
+  NotificationItem,
+  UnreadCountResponse,
+  AuditVerifyResponse,
+  AnchorStatus,
+  AnchorCreateResult,
 } from '../types/api';
 
 // ==========================================
@@ -425,6 +430,31 @@ export const reportsApi = {
 };
 
 // ==========================================
+// NOTIFICATIONS
+// ==========================================
+export const notificationsApi = {
+  getNotifications: async (params?: { unread_only?: boolean; limit?: number }): Promise<NotificationItem[]> => {
+    const res = await apiClient.get<NotificationItem[]>('/api/v1/notifications', { params });
+    return res.data;
+  },
+
+  getUnreadCount: async (): Promise<UnreadCountResponse> => {
+    const res = await apiClient.get<UnreadCountResponse>('/api/v1/notifications/unread-count');
+    return res.data;
+  },
+
+  markRead: async (notificationId: number): Promise<NotificationItem> => {
+    const res = await apiClient.patch<NotificationItem>(`/api/v1/notifications/${notificationId}/read`);
+    return res.data;
+  },
+
+  markAllRead: async (): Promise<{ marked_read: number }> => {
+    const res = await apiClient.patch<{ marked_read: number }>('/api/v1/notifications/read-all');
+    return res.data;
+  },
+};
+
+// ==========================================
 // AUDIT & TRUST CHAIN
 // ==========================================
 export const auditApi = {
@@ -440,25 +470,18 @@ export const auditApi = {
     return res.data;
   },
 
-  verifyTrustChain: async (): Promise<{
-    is_valid?: boolean;
-    valid?: boolean;
-    checked_events?: number;
-    event_count?: number;
-    message?: string;
-    errors?: string[];
-  }> => {
-    const res = await apiClient.get('/api/v1/trust/verify');
+  verifyTrustChain: async (): Promise<AuditVerifyResponse> => {
+    const res = await apiClient.get<AuditVerifyResponse>('/api/v1/trust/verify');
     return res.data;
   },
 
-  verifyAnchor: async (): Promise<any> => {
-    const res = await apiClient.get('/api/v1/trust/anchor/verify');
+  verifyAnchor: async (): Promise<AnchorStatus> => {
+    const res = await apiClient.get<AnchorStatus>('/api/v1/trust/anchor/verify');
     return res.data;
   },
 
-  createAnchor: async (): Promise<any> => {
-    const res = await apiClient.post('/api/v1/trust/anchor/create');
+  createAnchor: async (): Promise<AnchorCreateResult> => {
+    const res = await apiClient.post<AnchorCreateResult>('/api/v1/trust/anchor/create');
     return res.data;
   },
 };

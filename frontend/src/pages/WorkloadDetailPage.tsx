@@ -24,14 +24,18 @@ import { GlassCard } from '../components/common/GlassCard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { workloadsApi, schedulingApi, dispatchApi } from '../api/endpoints';
 import { Job, ScheduleDecision, KubernetesExecution, AuditEvent } from '../types/api';
 import { useAuth } from '../context/AuthContext';
+import { GreenShiftRecommendation } from '../components/decision/GreenShiftRecommendation';
+import { WhyThisWindow } from '../components/decision/WhyThisWindow';
+import { ImmediateVsGreenShift } from '../components/decision/ImmediateVsGreenShift';
 
 export const WorkloadDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user, isViewer } = useAuth();
+  const { user } = useAuth();
 
   const [job, setJob] = useState<any | null>(null);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
@@ -199,7 +203,7 @@ export const WorkloadDetailPage: React.FC = () => {
                 <button
                   className="btn btn-primary"
                   onClick={handleTriggerSchedule}
-                  disabled={isScheduling || isViewer}
+                  disabled={isScheduling}
                 >
                   <SparklesIcon size={14} />
                   <span>{isScheduling ? 'Calculating...' : 'Schedule Now'}</span>
@@ -209,7 +213,7 @@ export const WorkloadDetailPage: React.FC = () => {
                 <button
                   className="btn btn-primary"
                   onClick={handleDispatch}
-                  disabled={isDispatching || isViewer}
+                  disabled={isDispatching}
                 >
                   <Send size={14} />
                   <span>{isDispatching ? 'Dispatching...' : 'Dispatch Pod'}</span>
@@ -219,7 +223,6 @@ export const WorkloadDetailPage: React.FC = () => {
                 <button
                   className="btn btn-danger"
                   onClick={handleCancel}
-                  disabled={isViewer}
                 >
                   <XCircle size={14} />
                   <span>Cancel Job</span>
@@ -231,23 +234,9 @@ export const WorkloadDetailPage: React.FC = () => {
       </div>
 
       {actionNotice && (
-        <div
-          style={{
-            background: actionNotice.type === 'success' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.15)',
-            border: `1px solid ${actionNotice.type === 'success' ? '#10b981' : '#ef4444'}`,
-            color: actionNotice.type === 'success' ? '#10b981' : '#ef4444',
-            padding: '0.85rem 1.25rem',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.85rem',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-          }}
-        >
-          {actionNotice.type === 'success' ? '✓' : <AlertCircle size={16} />}
-          <span>{actionNotice.text}</span>
-        </div>
+        <InlineBanner variant={actionNotice.type === 'success' ? 'success' : 'error'}>
+          {actionNotice.text}
+        </InlineBanner>
       )}
 
       {/* Lifecycle Progress Bar */}
@@ -333,10 +322,8 @@ export const WorkloadDetailPage: React.FC = () => {
         </div>
       </GlassCard>
 
-      {/* 2-Column Grid: Specification & Carbon Decision */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr', gap: '1.5rem' }}>
-        {/* Left: Job Specifications */}
-        <GlassCard title="Compute & Workload Specification">
+      {/* Job Specifications */}
+      <GlassCard title="Compute & Workload Specification">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)' }}>
               <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Container Image</span>
@@ -389,91 +376,14 @@ export const WorkloadDetailPage: React.FC = () => {
           </div>
         </GlassCard>
 
-        {/* Right: Carbon Optimization Decision */}
-        <GlassCard
-          title="Carbon-Aware Scheduling Decision"
-          subtitle={decision ? `Objective: ${decision.scheduler_objective || decision.objective || 'CARBON_FIRST'} (Rank #${decision.deterministic_rank || decision.deterministic_ranking || 1})` : 'Scheduling status'}
-          badge={decision ? <span className="badge badge-success">OPTIMAL WINDOW</span> : <span className="badge badge-neutral">PENDING</span>}
-        >
-          {decision ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
-              {/* Window start / end */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--bg-surface-elevated)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)' }}>
-                <div>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Selected Start Time</div>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>
-                    {new Date(decision.selected_start).toLocaleString()}
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Selected End Time</div>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>
-                    {new Date(decision.selected_end).toLocaleString()}
-                  </div>
-                </div>
-              </div>
-
-              {/* Delta Comparison Box */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '1rem',
-                  background: 'var(--bg-surface-elevated)',
-                  border: '1px solid rgba(16, 185, 129, 0.25)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '1rem',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Optimized Emissions</div>
-                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#10b981', fontFamily: 'var(--font-mono)' }}>
-                    {decision.carbon_emission ? `${decision.carbon_emission.toFixed(2)} kg` : 'N/A'}
-                  </div>
-                  {decision.carbon_reduction_pct !== undefined && (
-                    <div style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600 }}>
-                      ▼ -{decision.carbon_reduction_pct.toFixed(1)}% vs baseline ({decision.baseline_carbon_emission ? `${decision.baseline_carbon_emission.toFixed(2)} kg` : 'N/A'})
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Optimized Energy Cost</div>
-                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>
-                    {decision.electricity_cost ? `$${decision.electricity_cost.toFixed(2)}` : decision.native_cost ? `${decision.native_cost.toFixed(2)} ${decision.currency || 'USD'}` : 'N/A'}
-                  </div>
-                  {decision.cost_reduction_pct !== undefined && (
-                    <div style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 600 }}>
-                      ▼ -{decision.cost_reduction_pct.toFixed(1)}% vs baseline
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {decision.reason && (
-                <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.03)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                  <strong>Scheduling Rationale:</strong> {decision.reason}
-                </div>
-              )}
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', textAlign: 'center' }}>
-                <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.5rem', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Candidates Evaluated</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{decision.candidates_evaluated || 0}</div>
-                </div>
-                <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.5rem', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Feasible Windows</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#10b981' }}>{decision.feasible_candidates_count || 0}</div>
-                </div>
-                <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.5rem', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Grid Intensity</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>
-                    {decision.carbon_intensity ? `${decision.carbon_intensity.toFixed(1)} g/kWh` : 'N/A'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
+        {decision ? (
+        <>
+          <GreenShiftRecommendation decision={decision} fallbackRegion={job.region} />
+          <ImmediateVsGreenShift decision={decision} />
+          <WhyThisWindow decision={decision} />
+        </>
+        ) : (
+          <GlassCard title="GreenShift Recommendation" badge={<span className="badge badge-neutral">PENDING</span>}>
             <EmptyState
               title="No Scheduling Decision"
               description="This workload is awaiting automated scheduling or manual optimizer execution."
@@ -483,9 +393,8 @@ export const WorkloadDetailPage: React.FC = () => {
                 onClick: handleTriggerSchedule,
               }}
             />
-          )}
-        </GlassCard>
-      </div>
+          </GlassCard>
+        )}
 
       {/* Kubernetes Execution & Container Logs */}
       <GlassCard

@@ -10,10 +10,10 @@ import {
   Cpu,
   ArrowRight,
   CheckCircle2,
-  AlertCircle,
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { workloadsApi, sustainabilityApi } from '../api/endpoints';
 import { CreateJobInput, RegionInfo } from '../types/api';
 import { useAuth } from '../context/AuthContext';
@@ -251,22 +251,8 @@ export const SubmitWorkloadPage: React.FC = () => {
       <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         <GlassCard title="Workload Configuration">
           {errorMsg && (
-            <div
-              style={{
-                padding: '0.75rem 1rem',
-                background: 'rgba(239, 68, 68, 0.15)',
-                border: '1px solid #ef4444',
-                color: '#ef4444',
-                borderRadius: 'var(--radius-sm)',
-                marginBottom: '1rem',
-                fontSize: '0.85rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-              }}
-            >
-              <AlertCircle size={16} />
-              <span>{errorMsg}</span>
+            <div style={{ marginBottom: '1rem' }}>
+              <InlineBanner variant="error">{errorMsg}</InlineBanner>
             </div>
           )}
 

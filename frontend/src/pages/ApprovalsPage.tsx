@@ -7,21 +7,20 @@ import {
   Leaf,
   DollarSign,
   UserCheck,
-  Check,
   RefreshCw,
-  AlertTriangle,
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { approvalsApi } from '../api/endpoints';
 import { PendingApprovalItem } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 
 export const ApprovalsPage: React.FC = () => {
-  const { user, isViewer, isOperator, isAdmin } = useAuth();
+  const { user, isAdmin } = useAuth();
 
   const [pendingItems, setPendingItems] = useState<PendingApprovalItem[]>([]);
   const [declinedItems, setDeclinedItems] = useState<any[]>([]);
@@ -33,7 +32,7 @@ export const ApprovalsPage: React.FC = () => {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const canAuthorize = isAdmin || user?.role === 'TEAM_LEAD';
+  const canAuthorize = isAdmin;
 
   const fetchApprovals = async () => {
     setIsLoading(true);
@@ -46,6 +45,8 @@ export const ApprovalsPage: React.FC = () => {
 
       if (pendingRes.status === 'fulfilled' && Array.isArray(pendingRes.value)) {
         setPendingItems(pendingRes.value);
+      } else if (pendingRes.status === 'rejected') {
+        setErrorMessage('Failed to load pending approval queues from backend.');
       }
       if (declinedRes.status === 'fulfilled' && Array.isArray(declinedRes.value)) {
         setDeclinedItems(declinedRes.value);
@@ -57,13 +58,25 @@ export const ApprovalsPage: React.FC = () => {
     }
   };
 
+  // Close modal on Escape key
+  useEffect(() => {
+    if (!selectedItem) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isProcessing) {
+        setSelectedItem(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedItem, isProcessing]);
+
   useEffect(() => {
     fetchApprovals();
   }, [user]);
 
   const handleApprove = async (item: PendingApprovalItem) => {
     if (!canAuthorize) {
-      alert('Only Admin or Team Lead can approve workloads.');
+      alert('Only a Company Admin or Platform Admin can approve workloads.');
       return;
     }
     setIsProcessing(true);
@@ -88,7 +101,7 @@ export const ApprovalsPage: React.FC = () => {
 
   const handleDecline = async (item: PendingApprovalItem) => {
     if (!canAuthorize) {
-      alert('Only Admin or Team Lead can decline workloads.');
+      alert('Only a Company Admin or Platform Admin can decline workloads.');
       return;
     }
     if (!approvalNote.trim()) {
@@ -130,58 +143,14 @@ export const ApprovalsPage: React.FC = () => {
         }
       />
 
-      {successMessage && (
-        <div
-          style={{
-            background: 'rgba(16, 185, 129, 0.12)',
-            border: '1px solid #10b981',
-            color: '#10b981',
-            padding: '0.85rem 1.25rem',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.85rem',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-          }}
-        >
-          <Check size={16} />
-          <span>{successMessage}</span>
-        </div>
-      )}
+      {successMessage && <InlineBanner variant="success">{successMessage}</InlineBanner>}
 
-      {errorMessage && (
-        <div
-          style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid #ef4444',
-            color: '#ef4444',
-            padding: '0.85rem 1.25rem',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-          }}
-        >
-          <AlertTriangle size={16} />
-          <span>{errorMessage}</span>
-        </div>
-      )}
+      {errorMessage && <InlineBanner variant="error">{errorMessage}</InlineBanner>}
 
       {!canAuthorize && (
-        <div
-          style={{
-            background: 'rgba(56, 189, 248, 0.08)',
-            border: '1px solid rgba(56, 189, 248, 0.25)',
-            color: '#38bdf8',
-            padding: '0.75rem 1rem',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.8rem',
-          }}
-        >
-          ℹ Role '{user?.role}' has read-only observation permissions. Only Team Lead or Admin may authorize or decline workloads.
-        </div>
+        <InlineBanner variant="info">
+          Role '{user?.role}' has read-only observation permissions. Only a Company Admin or Platform Admin may authorize or decline workloads.
+        </InlineBanner>
       )}
 
       {/* Navigation Tabs */}
@@ -326,6 +295,9 @@ export const ApprovalsPage: React.FC = () => {
       {/* Modal for Decline / Rationale */}
       {selectedItem && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="governance-decision-title"
           style={{
             position: 'fixed',
             inset: 0,
@@ -351,7 +323,7 @@ export const ApprovalsPage: React.FC = () => {
             }}
           >
             <div>
-              <h3 style={{ fontSize: '1.2rem', marginBottom: '0.25rem' }}>
+              <h3 id="governance-decision-title" style={{ fontSize: '1.2rem', marginBottom: '0.25rem' }}>
                 Governance Decision — {selectedItem.job_id}
               </h3>
               <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>

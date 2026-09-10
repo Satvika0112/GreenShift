@@ -17,9 +17,12 @@ data:
   K8S_NAMESPACE: "greenshift"
   K8S_IN_CLUSTER: "true"
   CACHE_TTL_SECONDS: "300"
-  DISPATCHER_POLL_INTERVAL_SECONDS: "30"
+  API_PORT: "8000"
+  POSTGRES_PORT: "5432"
   # Database (point to the postgres service)
-  DATABASE_URL: "postgresql://greenshift:greenshift@postgres:5432/greenshift"
+  DATABASE_URL: "postgresql://greenshift:greenshift_k8s_local_2026@postgres:5432/greenshift"
+  # Redis Cache & Rate Limiting
+  REDIS_URL: "redis://redis:6379/0"
   # Real Indian Data Sources Paths
   JOB_DATA_PATH: "/data/jobs/greenshift_workloads_final.csv"
   MASTER_TARIFF_DATASET: "/data/tariff/master_tod_tariff_all_regions.csv"

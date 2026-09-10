@@ -18,15 +18,10 @@ export type JobStatus =
   | 'FAILED'
   | 'CANCELLED';
 
-export type UserRole = 
+export type UserRole =
   | 'PLATFORM_ADMIN'
   | 'COMPANY_ADMIN'
-  | 'COMPANY_USER'
-  | 'ADMIN'
-  | 'OPERATOR'
-  | 'TEAM_LEAD'
-  | 'USER'
-  | 'VIEWER';
+  | 'COMPANY_USER';
 
 export interface User {
   id: number | string;
@@ -226,20 +221,17 @@ export interface KubernetesClusterState {
   nodes: K8sNode[];
 }
 
+// Matches app.shared.models.AuditEvent exactly (Pydantic response_model on
+// GET /api/v1/trust/events, /trust/jobs/{job_id}).
 export interface AuditEvent {
-  id?: number | string;
-  event_id?: number | string;
-  sequence?: number;
+  event_id: string;
+  sequence: number;
   event_type: string;
-  actor_id?: string;
-  target_id?: string;
-  target_type?: string;
-  job_id?: string;
+  job_id: string | null;
   timestamp: string;
-  payload?: Record<string, any>;
+  payload_hash: string;
   previous_hash: string;
   current_hash: string;
-  signature?: string;
 }
 
 export interface DashboardSummary {
@@ -308,6 +300,59 @@ export interface SystemHealthReport {
     kubernetes?: { status: string; reason?: string };
     carbon_data?: { status: string; mode?: string; reason?: string };
   };
+}
+
+export interface NotificationItem {
+  id: number;
+  job_id?: string | null;
+  event_type: string;
+  category: string;
+  severity: 'INFO' | 'WARNING' | 'CRITICAL' | string;
+  title: string;
+  message: string;
+  action_url?: string | null;
+  created_at: string;
+  read_at?: string | null;
+  is_read: boolean;
+}
+
+export interface UnreadCountResponse {
+  unread_count: number;
+}
+
+// Matches app.shared.models.AuditVerifyResponse exactly (response_model on
+// GET /api/v1/trust/verify) — no other fields exist on this response.
+export interface AuditVerifyResponse {
+  valid: boolean;
+  event_count: number;
+  message: string;
+}
+
+// Matches the dict shapes returned by app.trust.anchor.verify_anchor()
+// (GET /api/v1/trust/anchor/verify) — a plain dict, not a Pydantic model, so
+// this mirrors the exact keys read from app/trust/anchor.py.
+export interface AnchorRecord {
+  timestamp: string;
+  sequence: number;
+  root_hash: string;
+  event_count: number;
+  latest_event_id: string;
+  latest_event_type: string;
+}
+
+export interface AnchorStatus {
+  status: 'no_anchor_file' | 'empty_anchor_file' | 'corrupt_anchor_file' | 'event_not_found' | 'verified' | 'tampered';
+  verified: boolean;
+  message: string;
+  anchor?: AnchorRecord;
+  total_anchors?: number;
+}
+
+// POST /api/v1/trust/anchor/create response (app/api/routers/trust.py).
+export interface AnchorCreateResult {
+  status: 'created' | 'empty_chain';
+  anchor?: AnchorRecord;
+  message?: string;
 }
 
 export interface CreateJobInput {

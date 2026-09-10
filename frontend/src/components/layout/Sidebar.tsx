@@ -1,5 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import {
   LayoutDashboard,
   Layers,
@@ -38,13 +39,18 @@ interface NavSection {
 interface SidebarProps {
   pendingApprovalsCount?: number;
   activeJobsCount?: number;
+  isMobileOpen?: boolean;
+  onNavigate?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   pendingApprovalsCount = 0,
   activeJobsCount = 0,
+  isMobileOpen = false,
+  onNavigate,
 }) => {
   const { user, isAdmin } = useAuth();
+  const isNarrow = useMediaQuery('(max-width: 900px)');
 
   const navSections: NavSection[] = [
     {
@@ -85,6 +91,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         { to: '/health', label: 'System Health', icon: Server },
         { to: '/users', label: 'Users & RBAC', icon: Users },
+      ],
+    },
+    {
+      title: 'ACCOUNT',
+      items: [
         { to: '/settings', label: 'Settings', icon: Settings },
       ],
     },
@@ -92,6 +103,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
+      aria-label="Control Plane Sidebar"
       style={{
         width: 'var(--sidebar-width)',
         minWidth: 'var(--sidebar-width)',
@@ -100,10 +112,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         borderRight: '1px solid var(--border-subtle)',
         display: 'flex',
         flexDirection: 'column',
-        position: 'sticky',
+        position: isNarrow ? 'fixed' : 'sticky',
         top: 0,
-        zIndex: 40,
+        left: 0,
+        zIndex: 100,
         userSelect: 'none',
+        transform: isNarrow && !isMobileOpen ? 'translateX(-100%)' : 'translateX(0)',
+        transition: isNarrow ? 'transform 0.22s ease' : undefined,
+        boxShadow: isNarrow && isMobileOpen ? 'var(--shadow-lg)' : undefined,
       }}
     >
       {/* Brand Header */}
@@ -174,7 +190,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Navigation Sections */}
-      <div
+      <nav
+        aria-label="Primary Navigation"
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -206,6 +223,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     key={item.to}
                     to={item.to}
                     end={item.to === '/'}
+                    onClick={onNavigate}
                     style={({ isActive }) => ({
                       display: 'flex',
                       alignItems: 'center',
@@ -247,7 +265,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           );
         })}
-      </div>
+      </nav>
 
       {/* User Footer with Role Badge */}
       <div
@@ -282,7 +300,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {user?.username || 'admin'}
             </span>
             <span style={{ fontSize: '0.68rem', color: '#10b981', fontWeight: 600 }}>
-              {user?.role || 'ADMIN'}
+              {user?.role || 'COMPANY_USER'}
             </span>
           </div>
         </div>

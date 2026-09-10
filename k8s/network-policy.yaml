@@ -34,12 +34,12 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Allow HTTP port 8000 from Dashboard and external clients / ingress controllers
+    # Allow HTTP port 8000 from React Frontend and external clients / ingress controllers
     - from:
         - podSelector:
             matchLabels:
               app: greenshift
-              component: dashboard
+              component: frontend
         - namespaceSelector: {}
       ports:
         - protocol: TCP
@@ -54,6 +54,23 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # Allow connection to Redis cache (port 6379)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Kubernetes API Server communication
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+        - protocol: TCP
+          port: 8443
     # Allow external HTTPS egress (port 443) for Carbon & Tariff APIs
     - to:
         - ipBlock:
@@ -151,6 +168,15 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # Connect to Redis cache
+    - to:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
     # External HTTPS egress (port 443) for Carbon / Electricity Maps API
     - to:
         - ipBlock:
@@ -197,6 +223,15 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # Connect to Redis cache
+    - to:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
     # DNS resolution
     - ports:
         - protocol: UDP
@@ -284,27 +319,27 @@ spec:
 
 ---
 
-# 8. Dashboard Network Policy
+# 9. Enterprise React Control Plane Network Policy
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: greenshift-dashboard-netpol
+  name: greenshift-frontend-netpol
   namespace: greenshift
 spec:
   podSelector:
     matchLabels:
       app: greenshift
-      component: dashboard
+      component: frontend
   policyTypes:
     - Ingress
     - Egress
   ingress:
-    # Accept HTTP traffic on port 8501 from external users / Ingress / NodePort
+    # Accept HTTP traffic on port 80 from external users / Ingress / NodePort
     - ports:
         - protocol: TCP
-          port: 8501
+          port: 80
   egress:
-    # Connect to GreenShift API (port 8000)
+    # Proxy API requests to GreenShift API (port 8000)
     - to:
         - podSelector:
             matchLabels:
@@ -319,3 +354,39 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+
+---
+
+# 10. Redis Shared Cache Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: greenshift-redis-netpol
+  namespace: greenshift
+spec:
+  podSelector:
+    matchLabels:
+      app: greenshift
+      component: redis
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Accept connections on port 6379 from authorized backend services
+    - from:
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: api
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: ingest
+        - podSelector:
+            matchLabels:
+              app: greenshift
+              component: scheduler
+      ports:
+        - protocol: TCP
+          port: 6379
+  egress: []

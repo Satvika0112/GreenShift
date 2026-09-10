@@ -21,7 +21,6 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
         justifyContent: 'space-between',
         flexWrap: 'wrap',
         gap: '1rem',
-        marginBottom: '1.75rem',
       }}
     >
       <div>

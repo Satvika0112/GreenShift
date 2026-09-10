@@ -17,7 +17,7 @@ import { GlassCard } from '../components/common/GlassCard';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
 import { auditApi } from '../api/endpoints';
-import { AuditEvent } from '../types/api';
+import { AuditEvent, AnchorStatus } from '../types/api';
 
 export const AuditTrustPage: React.FC = () => {
   const [events, setEvents] = useState<AuditEvent[]>([]);
@@ -25,16 +25,17 @@ export const AuditTrustPage: React.FC = () => {
   const [isCreatingAnchor, setIsCreatingAnchor] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [anchorStatus, setAnchorStatus] = useState<any | null>(null);
+  const [anchorStatus, setAnchorStatus] = useState<AnchorStatus | null>(null);
   const [verificationResult, setVerificationResult] = useState<{
     status: 'VALID' | 'INVALID';
-    chainLength: number;
+    eventCount: number;
     message: string;
-    brokenAt?: number | null;
   } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchLedger = async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const [eventsRes, anchorRes] = await Promise.allSettled([
         auditApi.getAuditEvents(100),
@@ -43,12 +44,14 @@ export const AuditTrustPage: React.FC = () => {
 
       if (eventsRes.status === 'fulfilled' && eventsRes.value?.events) {
         setEvents(eventsRes.value.events);
+      } else if (eventsRes.status === 'rejected') {
+        setLoadError('Failed to load cryptographic audit ledger from backend.');
       }
       if (anchorRes.status === 'fulfilled') {
         setAnchorStatus(anchorRes.value);
       }
     } catch {
-      // Ignore initial load error
+      setLoadError('Failed to load cryptographic audit ledger from backend.');
     } finally {
       setIsLoading(false);
     }
@@ -61,19 +64,18 @@ export const AuditTrustPage: React.FC = () => {
   const handleVerifyChain = async () => {
     setIsVerifying(true);
     try {
+      // AuditVerifyResponse has exactly these 3 fields — the backend's own
+      // `message` is displayed verbatim rather than constructing one here.
       const res = await auditApi.verifyTrustChain();
       setVerificationResult({
-        status: (res as any).valid || res.is_valid ? 'VALID' : 'INVALID',
-        chainLength: (res as any).chain_length || res.checked_events || events.length,
-        message: ((res as any).valid || res.is_valid)
-          ? `All ${(res as any).chain_length || res.checked_events || events.length} SHA-256 cryptographic blocks verified unbroken.`
-          : `Tampering detected at sequence ${(res as any).broken_at_sequence || 'unknown'}: ${res.errors?.join(', ') || 'Hash mismatch'}`,
-        brokenAt: (res as any).broken_at_sequence,
+        status: res.valid ? 'VALID' : 'INVALID',
+        eventCount: res.event_count,
+        message: res.message,
       });
     } catch (err: any) {
       setVerificationResult({
         status: 'INVALID',
-        chainLength: events.length,
+        eventCount: events.length,
         message: err.response?.data?.detail || 'Verification failed. Backend error.',
       });
     } finally {
@@ -132,6 +134,22 @@ export const AuditTrustPage: React.FC = () => {
         }
       />
 
+      {loadError && (
+        <div
+          style={{
+            background: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid rgba(239, 68, 68, 0.3)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '0.85rem 1.25rem',
+            color: '#ef4444',
+            fontSize: '0.85rem',
+            fontWeight: 600,
+          }}
+        >
+          ⚠ {loadError}
+        </div>
+      )}
+
       {/* Verification Status Banner */}
       {verificationResult && (
         <div
@@ -181,7 +199,7 @@ export const AuditTrustPage: React.FC = () => {
           </div>
 
           <div style={{ textAlign: 'right', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            Verified Blocks: <strong style={{ color: '#ffffff', fontFamily: 'var(--font-mono)' }}>{verificationResult.chainLength}</strong>
+            Verified Blocks: <strong style={{ color: '#ffffff', fontFamily: 'var(--font-mono)' }}>{verificationResult.eventCount}</strong>
           </div>
         </div>
       )}
@@ -192,20 +210,20 @@ export const AuditTrustPage: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', fontSize: '0.8rem' }}>
             <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)' }}>
               <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Anchor Verification Status</div>
-              <div style={{ fontWeight: 700, color: anchorStatus.valid ? '#10b981' : '#f59e0b', marginTop: '0.2rem' }}>
-                {anchorStatus.valid ? 'VALIDATED ANCHOR' : anchorStatus.message || 'NO ANCHOR CREATED YET'}
+              <div style={{ fontWeight: 700, color: anchorStatus.verified ? '#10b981' : '#f59e0b', marginTop: '0.2rem' }}>
+                {anchorStatus.verified ? 'VALIDATED ANCHOR' : anchorStatus.message || 'NO ANCHOR CREATED YET'}
               </div>
             </div>
             <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)' }}>
               <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Anchored Sequence</div>
               <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#38bdf8', marginTop: '0.2rem' }}>
-                {anchorStatus.anchor?.sequence !== undefined ? `#${anchorStatus.anchor.sequence}` : anchorStatus.latest_anchor?.sequence !== undefined ? `#${anchorStatus.latest_anchor.sequence}` : 'N/A'}
+                {anchorStatus.anchor?.sequence !== undefined ? `#${anchorStatus.anchor.sequence}` : 'N/A'}
               </div>
             </div>
             <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)' }}>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Anchored Block Hash</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Anchored Block Root Hash</div>
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: '#10b981', marginTop: '0.2rem', wordBreak: 'break-all' }}>
-                {anchorStatus.anchor?.hash || anchorStatus.latest_anchor?.hash || 'N/A'}
+                {anchorStatus.anchor?.root_hash || 'N/A'}
               </div>
             </div>
           </div>
@@ -253,7 +271,7 @@ export const AuditTrustPage: React.FC = () => {
               </thead>
               <tbody>
                 {filteredEvents.map((evt, idx) => (
-                  <tr key={evt.id || idx}>
+                  <tr key={evt.event_id || idx}>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--text-muted)' }}>
                         #{evt.sequence ?? idx + 1}

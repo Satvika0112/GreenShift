@@ -14,8 +14,10 @@ import {
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { sustainabilityApi, monitoringApi } from '../api/endpoints';
+import { useAuth } from '../context/AuthContext';
 
 export const SettingsPage: React.FC = () => {
+  const { user, isCompanyAdmin } = useAuth();
   const [dataSources, setDataSources] = useState<any | null>(null);
   const [healthStatus, setHealthStatus] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -28,9 +30,11 @@ export const SettingsPage: React.FC = () => {
     return parseInt(localStorage.getItem('gs_pref_poll_interval') || '15', 10);
   });
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const fetchBackendConfig = async () => {
     setIsLoading(true);
+    setFetchError(null);
     try {
       const [sourcesRes, healthRes] = await Promise.allSettled([
         sustainabilityApi.getDataSourcesStatus(),
@@ -43,8 +47,11 @@ export const SettingsPage: React.FC = () => {
       if (healthRes.status === 'fulfilled') {
         setHealthStatus(healthRes.value);
       }
+      if (sourcesRes.status === 'rejected' && healthRes.status === 'rejected') {
+        setFetchError('Failed to retrieve live backend runtime configuration and health metrics.');
+      }
     } catch {
-      // Ignore
+      setFetchError('Failed to retrieve live backend runtime configuration.');
     } finally {
       setIsLoading(false);
     }
@@ -75,6 +82,22 @@ export const SettingsPage: React.FC = () => {
         }
       />
 
+      {fetchError && (
+        <div
+          style={{
+            background: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid rgba(239, 68, 68, 0.3)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '0.85rem 1.25rem',
+            color: '#ef4444',
+            fontSize: '0.85rem',
+            fontWeight: 600,
+          }}
+        >
+          ⚠ {fetchError}
+        </div>
+      )}
+
       {savedSuccess && (
         <div
           style={{
@@ -91,7 +114,43 @@ export const SettingsPage: React.FC = () => {
         </div>
       )}
 
-      {/* Backend Operational Configuration (Read-only verified settings) */}
+      {/* Profile — real authenticated identity, available to every role */}
+      <GlassCard title="Profile">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>Username</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#ffffff' }}>{user?.username}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>Email</span>
+            <span style={{ color: 'var(--text-primary)' }}>{user?.email}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>Role</span>
+            <span style={{ fontFamily: 'var(--font-mono)', color: '#10b981', fontWeight: 700 }}>{user?.role}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>Company</span>
+            <span style={{ color: 'var(--text-primary)' }}>{user?.company_name || user?.tenant_id || '—'}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>Team</span>
+            <span style={{ color: 'var(--text-primary)' }}>{user?.team_id || '—'}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>Account Status</span>
+            <span style={{ color: user?.is_active ? '#10b981' : '#ef4444', fontWeight: 600 }}>
+              {user?.is_active ? 'ACTIVE' : 'INACTIVE'}{user?.approval_status && user.approval_status !== 'APPROVED' ? ` · ${user.approval_status}` : ''}
+            </span>
+          </div>
+        </div>
+      </GlassCard>
+
+      {/* Role change / company / tenant are never editable from Settings — the
+          backend derives and owns those; only an authorized admin flow can change them. */}
+
+      {/* Backend Operational Configuration — admin-tier diagnostic info, not relevant to a plain Company User's own settings */}
+      {isCompanyAdmin && (
       <GlassCard title="Backend Runtime Architecture & Data Sources">
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.85rem' }}>
@@ -135,6 +194,7 @@ export const SettingsPage: React.FC = () => {
           </div>
         </div>
       </GlassCard>
+      )}
 
       {/* Client-Side Preferences */}
       <form onSubmit={handleSavePreferences} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -165,6 +225,20 @@ export const SettingsPage: React.FC = () => {
             <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
               Controls automatic query polling interval across dashboard views.
             </span>
+          </div>
+
+          <div
+            style={{
+              background: 'rgba(56, 189, 248, 0.05)',
+              border: '1px solid rgba(56, 189, 248, 0.2)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '0.7rem 0.9rem',
+              fontSize: '0.75rem',
+              color: '#94a3b8',
+              lineHeight: 1.45,
+            }}
+          >
+            <strong style={{ color: '#38bdf8' }}>Local Scope Notice:</strong> These preferences apply only to this client browser session (e.g. initial view preference and dashboard refresh cadence). They do not alter backend server-side scheduling policies, deadlines, or constraints.
           </div>
         </GlassCard>
 

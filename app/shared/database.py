@@ -178,6 +178,11 @@ def run_schema_migrations() -> None:
         ("schedule_decisions", "candidates_json", "TEXT", "TEXT"),
         ("schedule_decisions", "rejected_candidates_json", "TEXT", "TEXT"),
         ("schedule_decisions", "recommended_candidate_json", "TEXT", "TEXT"),
+        ("schedule_decisions", "candidates_evaluated", "INTEGER", "INTEGER"),
+        ("schedule_decisions", "feasible_candidates_count", "INTEGER", "INTEGER"),
+        ("schedule_decisions", "rejection_summary", "TEXT", "JSONB"),
+        ("schedule_decisions", "scheduler_objective", "VARCHAR", "VARCHAR"),
+        ("schedule_decisions", "deterministic_rank", "INTEGER", "INTEGER"),
     ]
 
     with engine.begin() as conn:

@@ -1,23 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import {
   TrendingDown,
-  Download,
   FileText,
   FileSpreadsheet,
   Leaf,
   DollarSign,
-  TreeDeciduous,
-  Car,
   ShieldCheck,
-  Calendar,
-  RefreshCw,
-  AlertTriangle,
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { KPICard } from '../components/common/KPICard';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { monitoringApi, reportsApi } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 
@@ -45,6 +40,9 @@ export const ImpactReportsPage: React.FC = () => {
       }
       if (headRes.status === 'fulfilled') {
         setHeadline(headRes.value);
+      }
+      if (impactRes.status === 'rejected') {
+        setErrorMsg('Failed to fetch fleet impact metrics from backend.');
       }
     } catch (err: any) {
       setErrorMsg('Failed to fetch fleet impact metrics from backend.');
@@ -103,8 +101,6 @@ export const ImpactReportsPage: React.FC = () => {
   const avgReductionPct = fleetImpact?.avg_carbon_reduction_pct ?? headline?.avg_carbon_reduction_pct ?? 0;
   const totalCostSaved = fleetImpact?.total_cost_saved_usd ?? headline?.total_cost_saved_usd ?? 0;
   const totalJobs = fleetImpact?.total_jobs_with_decisions ?? headline?.total_jobs ?? 0;
-  const treesPlanted = fleetImpact?.trees_equivalent_annual ?? Math.round(totalCarbonAvoided / 20.0);
-  const carMiles = fleetImpact?.car_miles_avoided ?? Math.round(totalCarbonAvoided * 2.47);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
@@ -125,40 +121,9 @@ export const ImpactReportsPage: React.FC = () => {
         }
       />
 
-      {downloadNotice && (
-        <div
-          style={{
-            background: 'rgba(16, 185, 129, 0.12)',
-            border: '1px solid rgba(16, 185, 129, 0.4)',
-            color: '#10b981',
-            padding: '0.75rem 1rem',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.85rem',
-            fontWeight: 600,
-          }}
-        >
-          ✓ {downloadNotice}
-        </div>
-      )}
+      {downloadNotice && <InlineBanner variant="success">{downloadNotice}</InlineBanner>}
 
-      {errorMsg && (
-        <div
-          style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid #ef4444',
-            color: '#ef4444',
-            padding: '1rem',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <AlertTriangle size={20} />
-          <span>{errorMsg}</span>
-        </div>
-      )}
+      {errorMsg && <InlineBanner variant="error">{errorMsg}</InlineBanner>}
 
       {isLoading ? (
         <LoadingSkeleton rows={6} height={60} />
@@ -196,61 +161,6 @@ export const ImpactReportsPage: React.FC = () => {
             />
           </div>
 
-          {/* Equivalency Impact Banner */}
-          <GlassCard title="Environmental Equivalence Conversions (EPA Metric Guidelines)">
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', background: 'var(--bg-surface-elevated)', padding: '1.25rem', borderRadius: 'var(--radius-sm)' }}>
-                <div
-                  style={{
-                    width: '46px',
-                    height: '46px',
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'rgba(16, 185, 129, 0.15)',
-                    color: '#10b981',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <TreeDeciduous size={24} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '1.6rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: '#ffffff' }}>
-                    {treesPlanted.toLocaleString()} Trees
-                  </div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                    Equivalent carbon sequestered by urban tree seedlings grown for 10 years
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', background: 'var(--bg-surface-elevated)', padding: '1.25rem', borderRadius: 'var(--radius-sm)' }}>
-                <div
-                  style={{
-                    width: '46px',
-                    height: '46px',
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'rgba(56, 189, 248, 0.15)',
-                    color: '#38bdf8',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Car size={24} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '1.6rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: '#ffffff' }}>
-                    {carMiles.toLocaleString()} Miles
-                  </div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                    Avoided passenger vehicle gasoline emissions equivalent
-                  </div>
-                </div>
-              </div>
-            </div>
-          </GlassCard>
-
           {/* Team Breakdown Table */}
           {fleetImpact?.by_team && Object.keys(fleetImpact.by_team).length > 0 && (
             <GlassCard title="Carbon Avoidance by Engineering Team">
@@ -272,7 +182,7 @@ export const ImpactReportsPage: React.FC = () => {
                           <span style={{ fontWeight: 600, color: '#ffffff' }}>{team}</span>
                         </td>
                         <td>
-                          <span style={{ fontFamily: 'var(--font-mono)' }}>{data.count || 0}</span>
+                          <span style={{ fontFamily: 'var(--font-mono)' }}>{data.job_count || 0}</span>
                         </td>
                         <td>
                           <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#10b981' }}>
@@ -317,7 +227,7 @@ export const ImpactReportsPage: React.FC = () => {
                           <span style={{ fontWeight: 600, color: '#38bdf8' }}>{reg}</span>
                         </td>
                         <td>
-                          <span style={{ fontFamily: 'var(--font-mono)' }}>{data.count || 0}</span>
+                          <span style={{ fontFamily: 'var(--font-mono)' }}>{data.job_count || 0}</span>
                         </td>
                         <td>
                           <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#10b981' }}>

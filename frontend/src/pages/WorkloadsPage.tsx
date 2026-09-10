@@ -11,20 +11,20 @@ import {
   Eye,
   RefreshCw,
   UploadCloud,
-  AlertCircle,
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
+import { InlineBanner } from '../components/common/InlineBanner';
 import { workloadsApi, schedulingApi, dispatchApi, sustainabilityApi } from '../api/endpoints';
 import { Job, JobStatus } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 
 export const WorkloadsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user, isAdmin, isViewer } = useAuth();
+  const { user, isAdmin } = useAuth();
 
   const [jobs, setJobs] = useState<Job[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -49,6 +49,8 @@ export const WorkloadsPage: React.FC = () => {
 
       if (resJobs.status === 'fulfilled') {
         setJobs(resJobs.value || []);
+      } else if (resJobs.status === 'rejected') {
+        setActionMessage({ type: 'error', text: 'Failed to load workloads from backend.' });
       }
       if (resRegions.status === 'fulfilled') {
         setAvailableRegions((resRegions.value || []).map((r) => r.region_id));
@@ -134,7 +136,7 @@ export const WorkloadsPage: React.FC = () => {
   const uniqueRegions = Array.from(new Set([...availableRegions, ...jobs.map((j) => j.region)])).filter(Boolean);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       <PageHeader
         title="Workloads Registry"
         subtitle="Manage and monitor batch compute workloads, execution states, and carbon constraints"
@@ -143,7 +145,7 @@ export const WorkloadsPage: React.FC = () => {
             <button
               className="btn btn-secondary"
               onClick={handleBulkLoad}
-              disabled={isBulkLoading || isViewer}
+              disabled={isBulkLoading}
               title="Bulk load standard workload dataset into database"
             >
               <UploadCloud size={14} className={isBulkLoading ? 'animate-spin' : ''} />
@@ -153,7 +155,7 @@ export const WorkloadsPage: React.FC = () => {
               <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
               <span>Refresh</span>
             </button>
-            <button className="btn btn-primary" onClick={() => navigate('/submit')} disabled={isViewer}>
+            <button className="btn btn-primary" onClick={() => navigate('/submit')}>
               <PlusCircle size={15} />
               <span>Submit Workload</span>
             </button>
@@ -162,23 +164,9 @@ export const WorkloadsPage: React.FC = () => {
       />
 
       {actionMessage && (
-        <div
-          style={{
-            background: actionMessage.type === 'success' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.15)',
-            border: `1px solid ${actionMessage.type === 'success' ? '#10b981' : '#ef4444'}`,
-            color: actionMessage.type === 'success' ? '#10b981' : '#ef4444',
-            padding: '0.75rem 1rem',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.85rem',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-          }}
-        >
-          {actionMessage.type === 'success' ? '✓' : <AlertCircle size={16} />}
-          <span>{actionMessage.text}</span>
-        </div>
+        <InlineBanner variant={actionMessage.type === 'success' ? 'success' : 'error'}>
+          {actionMessage.text}
+        </InlineBanner>
       )}
 
       {/* Filter & Search Bar */}
@@ -364,7 +352,7 @@ export const WorkloadsPage: React.FC = () => {
                           <Eye size={13} />
                         </button>
 
-                        {(job.status === 'SUBMITTED' || job.status === 'VALIDATED') && !isViewer && (
+                        {(job.status === 'SUBMITTED' || job.status === 'VALIDATED') && (
                           <button
                             className="btn btn-outline-emerald btn-sm"
                             style={{ padding: '0.3rem 0.5rem' }}
@@ -375,7 +363,7 @@ export const WorkloadsPage: React.FC = () => {
                           </button>
                         )}
 
-                        {(job.status === 'SCHEDULED' || job.status === 'APPROVED' || job.status === 'READY') && !isViewer && (
+                        {(job.status === 'SCHEDULED' || job.status === 'APPROVED' || job.status === 'READY') && (
                           <button
                             className="btn btn-primary btn-sm"
                             style={{ padding: '0.3rem 0.5rem' }}
@@ -386,7 +374,7 @@ export const WorkloadsPage: React.FC = () => {
                           </button>
                         )}
 
-                        {job.status !== 'COMPLETED' && job.status !== 'CANCELLED' && job.status !== 'FAILED' && !isViewer && (
+                        {job.status !== 'COMPLETED' && job.status !== 'CANCELLED' && job.status !== 'FAILED' && (
                           <button
                             className="btn btn-secondary btn-sm"
                             style={{ padding: '0.3rem 0.5rem', color: '#ef4444' }}

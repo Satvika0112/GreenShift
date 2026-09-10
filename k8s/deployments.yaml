@@ -9,7 +9,7 @@ metadata:
     app: greenshift
     component: api
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: greenshift
@@ -20,6 +20,8 @@ spec:
         app: greenshift
         component: api
     spec:
+      enableServiceLinks: false
+      serviceAccountName: greenshift-dispatcher
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -96,6 +98,7 @@ spec:
         app: greenshift
         component: ingest
     spec:
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -146,6 +149,7 @@ spec:
         app: greenshift
         component: scheduler
     spec:
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -196,6 +200,7 @@ spec:
         app: greenshift
         component: dispatcher
     spec:
+      enableServiceLinks: false
       serviceAccountName: greenshift-dispatcher
       securityContext:
         runAsNonRoot: true
@@ -244,6 +249,7 @@ spec:
         app: greenshift
         component: trust
     spec:
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -264,56 +270,23 @@ spec:
               cpu: "300m"
               memory: "256Mi"
 
+
 ---
-# Dashboard Deployment
-apiVersion: apps/v1
-kind: Deployment
+# PostgreSQL Persistent Volume Claim
+apiVersion: v1
+kind: PersistentVolumeClaim
 metadata:
-  name: greenshift-dashboard
+  name: greenshift-postgres-pvc
   namespace: greenshift
   labels:
     app: greenshift
-    component: dashboard
+    component: postgres
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: greenshift
-      component: dashboard
-  template:
-    metadata:
-      labels:
-        app: greenshift
-        component: dashboard
-    spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-      containers:
-        - name: dashboard
-          image: greenshift/dashboard:latest
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 8501
-          envFrom:
-            - configMapRef:
-                name: greenshift-config
-          env:
-            - name: GREENSHIFT_API_URL
-              value: "http://greenshift-api:8000"
-          readinessProbe:
-            httpGet:
-              path: /_stcore/health
-              port: 8501
-            initialDelaySeconds: 10
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: "200m"
-              memory: "256Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
 
 ---
 # PostgreSQL Deployment (for production Kubernetes)
@@ -353,6 +326,12 @@ spec:
                 secretKeyRef:
                   name: greenshift-db-secrets
                   key: postgres-password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata
           resources:
             requests:
               cpu: "200m"
@@ -360,3 +339,109 @@ spec:
             limits:
               cpu: "500m"
               memory: "512Mi"
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: greenshift-postgres-pvc
+
+---
+# Redis Shared Cache Deployment (Carbon API Telemetry & Rate Limiting)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: greenshift
+      component: redis
+  template:
+    metadata:
+      labels:
+        app: greenshift
+        component: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+
+---
+# Enterprise React Control Plane Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greenshift-frontend
+  namespace: greenshift
+  labels:
+    app: greenshift
+    component: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: greenshift
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: greenshift
+        component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: greenshift/frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"

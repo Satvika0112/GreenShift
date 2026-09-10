@@ -13,22 +13,20 @@ interface AuthContextType {
   isAdmin: boolean;
   isPlatformAdmin: boolean;
   isCompanyAdmin: boolean;
-  isTeamLead: boolean;
-  isOperator: boolean;
-  isViewer: boolean;
   refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Known seed credentials for the existing GreenShift backend
+// Known seed credentials for the existing GreenShift backend.
+// GreenShift has exactly three roles: PLATFORM_ADMIN, COMPANY_ADMIN, COMPANY_USER.
 export const PRESET_CREDENTIALS = [
   { key: 'admin', label: 'Platform Admin', username: 'admin', password: 'admin123', role: 'PLATFORM_ADMIN', team: 'platform' },
   { key: 'company_admin', label: 'Company Admin', username: 'company_admin', password: 'admin123', role: 'COMPANY_ADMIN', team: 'team-acme' },
   { key: 'company_user', label: 'Company User', username: 'company_user', password: 'user123', role: 'COMPANY_USER', team: 'team-acme' },
-  { key: 'lead_a', label: 'Lead A', username: 'lead_a', password: 'lead123', role: 'COMPANY_ADMIN', team: 'team-a' },
-  { key: 'operator', label: 'Operator', username: 'operator', password: 'operator123', role: 'OPERATOR', team: 'operations' },
-  { key: 'viewer', label: 'Viewer', username: 'viewer', password: 'viewer123', role: 'VIEWER', team: 'general' },
+  { key: 'lead_a', label: 'Company Admin (Lead A)', username: 'lead_a', password: 'lead123', role: 'COMPANY_ADMIN', team: 'team-a' },
+  { key: 'operator', label: 'Company User (Operator)', username: 'operator', password: 'operator123', role: 'COMPANY_USER', team: 'operations' },
+  { key: 'viewer', label: 'Company User (Viewer)', username: 'viewer', password: 'viewer123', role: 'COMPANY_USER', team: 'general' },
 ];
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -104,12 +102,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const isPlatformAdmin = user?.role === 'PLATFORM_ADMIN' || (user?.role === 'ADMIN' && !user?.tenant_id);
-  const isCompanyAdmin = isPlatformAdmin || user?.role === 'COMPANY_ADMIN' || (user?.role === 'ADMIN' && !!user?.tenant_id);
+  const isPlatformAdmin = user?.role === 'PLATFORM_ADMIN';
+  const isCompanyAdmin = isPlatformAdmin || user?.role === 'COMPANY_ADMIN';
   const isAdmin = isCompanyAdmin;
-  const isTeamLead = user?.role === 'TEAM_LEAD';
-  const isOperator = user?.role === 'OPERATOR';
-  const isViewer = user?.role === 'VIEWER';
 
   const hasRole = (roles: UserRole[]) => {
     if (!user) return false;
@@ -130,9 +125,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAdmin,
         isPlatformAdmin,
         isCompanyAdmin,
-        isTeamLead,
-        isOperator,
-        isViewer,
         refreshUser,
       }}
     >
