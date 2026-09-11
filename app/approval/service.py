@@ -231,7 +231,7 @@ def approve_schedule(
                 message=f"Schedule for workload '{job.job_id}' was approved by {approved_by or 'admin'}.",
                 tenant_id=job.tenant_id,
                 job_id=job.job_id,
-                email_required=False,
+                email_required=True,
             )
         except Exception as exc:
             logger.warning("Notification failed for job %s approval: %s", job.job_id, exc)
@@ -372,7 +372,7 @@ def decline_schedule(
                 message=f"Schedule for workload '{job.job_id}' was declined by {approved_by or 'admin'}. Reason: {approval.reason}",
                 tenant_id=job.tenant_id,
                 job_id=job.job_id,
-                email_required=False,
+                email_required=True,
             )
         except Exception as exc:
             logger.warning("Notification failed for job %s decline: %s", job.job_id, exc)

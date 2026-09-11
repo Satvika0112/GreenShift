@@ -75,7 +75,9 @@ def _deliver_one(db: Session, notif: NotificationORM) -> None:
 
     notif.email_attempts = (notif.email_attempts or 0) + 1
     try:
-        send_email(recipient.email, notif.title, notif.message)
+        from app.notify.templates import render_email
+        subject, body = render_email(db, notif)
+        send_email(recipient.email, subject, body)
         notif.email_status = "SENT"
         notif.email_sent_at = now
         notif.last_error = None
@@ -92,6 +94,17 @@ def _deliver_one(db: Session, notif: NotificationORM) -> None:
                 "Notification %s email delivery permanently failed after %d attempts",
                 notif.id, notif.email_attempts,
             )
+            try:
+                from app.shared.models import EventType
+                from app.trust.ledger import append_event
+                append_event(
+                    db, EventType.EMAIL_DELIVERY_FAILED, job_id=notif.job_id,
+                    payload={"notification_id": notif.id, "recipient_user_id": notif.recipient_user_id, "attempts": notif.email_attempts},
+                )
+            except Exception:
+                # Audit is best-effort here too — must never block the
+                # notifications-table commit below.
+                pass
         else:
             notif.next_attempt_at = now + timedelta(seconds=_backoff_seconds(notif.email_attempts))
             logger.info(

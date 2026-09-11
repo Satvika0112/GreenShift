@@ -214,6 +214,10 @@ class Settings(BaseSettings):
     smtp_from_address: str = Field(default="noreply@greenshift.local")
     notification_email_max_attempts: int = Field(default=5)
     notification_poll_interval_seconds: int = Field(default=15)
+    frontend_base_url: str = Field(
+        default="http://localhost:3000",
+        description="Base URL used to build links back into the app from notification emails.",
+    )
 
     @model_validator(mode="after")
     def _default_auth_enabled_for_env(self) -> "Settings":

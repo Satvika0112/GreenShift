@@ -311,6 +311,25 @@ def dispatch_job(db: Session, job: JobORM, user: Optional[object] = None) -> Kub
     except Exception as exc:
         logger.warning("Audit record failed for job %s creation: %s", job.job_id, exc)
 
+    if job.submitted_by_user_id:
+        try:
+            from app.notify.service import create_notification
+            from app.shared.models import EventType
+            create_notification(
+                db,
+                recipient_user_id=job.submitted_by_user_id,
+                event_type=EventType.K8S_JOB_CREATED,
+                category="EXECUTION",
+                severity="INFO",
+                title=f"Workload {job.job_id} execution started",
+                message=f"Workload '{job.job_id}' was dispatched to Kubernetes and is now queued for execution.",
+                tenant_id=job.tenant_id,
+                job_id=job.job_id,
+                email_required=False,
+            )
+        except Exception as exc:
+            logger.warning("Notification failed for job %s dispatch: %s", job.job_id, exc)
+
     from app.shared.timezone import format_regional_time
     local_display = format_regional_time(decision.selected_start, region=job.region)
     logger.info(
@@ -457,7 +476,7 @@ def refresh_job_status(db: Session, execution: KubernetesExecutionORM) -> Kubern
                             message=f"Workload '{job.job_id}' completed successfully. Impact/report data is now available.",
                             tenant_id=job.tenant_id,
                             job_id=job.job_id,
-                            email_required=False,
+                            email_required=True,
                         )
                     else:
                         create_notification(

@@ -22,6 +22,8 @@ import {
   AuthTokenResponse,
   NotificationItem,
   UnreadCountResponse,
+  NotificationPreferences,
+  NotificationPreferencesUpdate,
   AuditVerifyResponse,
   AnchorStatus,
   AnchorCreateResult,
@@ -468,6 +470,16 @@ export const notificationsApi = {
 
   markAllRead: async (): Promise<{ marked_read: number }> => {
     const res = await apiClient.patch<{ marked_read: number }>('/api/v1/notifications/read-all');
+    return res.data;
+  },
+
+  getPreferences: async (): Promise<NotificationPreferences> => {
+    const res = await apiClient.get<NotificationPreferences>('/api/v1/notifications/preferences');
+    return res.data;
+  },
+
+  updatePreferences: async (update: NotificationPreferencesUpdate): Promise<NotificationPreferences> => {
+    const res = await apiClient.put<NotificationPreferences>('/api/v1/notifications/preferences', update);
     return res.data;
   },
 };

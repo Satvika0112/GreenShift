@@ -6,9 +6,12 @@ Endpoints:
 - GET   /notifications/unread-count
 - PATCH /notifications/{id}/read
 - PATCH /notifications/read-all
+- GET   /notifications/preferences
+- PUT   /notifications/preferences
 
 Recipient identity is always the authenticated caller — never a
-client-supplied user id. A user can only read/update their own notifications.
+client-supplied user id. A user can only read/update their own notifications
+and their own preferences.
 """
 
 from typing import List, Optional
@@ -16,10 +19,23 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.notify.service import get_notifications, get_unread_count, mark_all_read, mark_read
+from app.notify.service import (
+    get_notifications,
+    get_or_create_preferences,
+    get_unread_count,
+    mark_all_read,
+    mark_read,
+    update_preferences,
+)
 from app.shared.auth import get_current_user
 from app.shared.database import get_db
-from app.shared.models import NotificationResponse, UnreadCountResponse, UserORM
+from app.shared.models import (
+    NotificationPreferenceResponse,
+    NotificationPreferenceUpdateRequest,
+    NotificationResponse,
+    UnreadCountResponse,
+    UserORM,
+)
 
 router = APIRouter(tags=["Notifications"])
 
@@ -64,3 +80,26 @@ def api_mark_all_read(
 ):
     count = mark_all_read(db, recipient_user_id=current_user.id)
     return {"marked_read": count}
+
+
+@router.get("/notifications/preferences", response_model=NotificationPreferenceResponse)
+def api_get_preferences(
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """The authenticated user's own email notification preferences (lazily created with all-enabled defaults)."""
+    return get_or_create_preferences(db, user_id=current_user.id)
+
+
+@router.put("/notifications/preferences", response_model=NotificationPreferenceResponse)
+def api_update_preferences(
+    body: NotificationPreferenceUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """
+    Update the caller's own preferences. `email_system` is not an accepted
+    field on the request body — security/account/infrastructure email
+    notifications cannot be disabled.
+    """
+    return update_preferences(db, user_id=current_user.id, **body.model_dump(exclude_unset=True))

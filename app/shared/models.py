@@ -84,6 +84,8 @@ class EventType(str, enum.Enum):
     JOB_CANCELLED        = "JOB_CANCELLED"
     BUDGET_UPDATED       = "BUDGET_UPDATED"
     EXPORT_GENERATED     = "EXPORT_GENERATED"
+    SCHEDULING_FAILED    = "SCHEDULING_FAILED"
+    EMAIL_DELIVERY_FAILED = "EMAIL_DELIVERY_FAILED"
     # ── Carbon Provenance & Resilience Events ──
     CARBON_API_SUCCESS   = "CARBON_API_SUCCESS"
     CARBON_CACHE_UPDATED = "CARBON_CACHE_UPDATED"
@@ -662,6 +664,31 @@ class NotificationORM(Base):
         return self.read_at is not None
 
 
+class NotificationPreferenceORM(Base):
+    """
+    Per-user email notification preferences, one row per user (lazily
+    created with all-enabled defaults on first read/write — see
+    app.notify.service.get_or_create_preferences). Only the email channel
+    is gated by preference; in-app notifications are never suppressed.
+
+    `email_system` covers ACCOUNT/SECURITY/INFRASTRUCTURE categories and is
+    intentionally not exposed as editable by NotificationPreferenceUpdateRequest —
+    security-critical notifications cannot be silenced by the recipient.
+    """
+
+    __tablename__ = "notification_preferences"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    user_id          = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    email_workload   = Column(Boolean, nullable=False, default=True)
+    email_scheduling = Column(Boolean, nullable=False, default=True)
+    email_approval   = Column(Boolean, nullable=False, default=True)
+    email_execution  = Column(Boolean, nullable=False, default=True)
+    email_system     = Column(Boolean, nullable=False, default=True)
+    created_at       = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at       = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic Schemas — Request / Response & Regional Common Schema
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1221,3 +1248,27 @@ class NotificationResponse(BaseModel):
 
 class UnreadCountResponse(BaseModel):
     unread_count: int
+
+
+class NotificationPreferenceResponse(BaseModel):
+    """Current user's email notification preferences."""
+    model_config = ConfigDict(from_attributes=True)
+
+    email_workload: bool
+    email_scheduling: bool
+    email_approval: bool
+    email_execution: bool
+    # Security-critical — always true, included read-only for transparency.
+    email_system: bool = True
+
+
+class NotificationPreferenceUpdateRequest(BaseModel):
+    """
+    Partial update — only the categories a user may actually disable.
+    `email_system` is deliberately not a field here: security/account/
+    infrastructure notifications cannot be silenced by preference.
+    """
+    email_workload: Optional[bool] = None
+    email_scheduling: Optional[bool] = None
+    email_approval: Optional[bool] = None
+    email_execution: Optional[bool] = None

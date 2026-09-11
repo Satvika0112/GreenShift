@@ -15,10 +15,22 @@ from typing import List, Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.shared.models import EventType, NotificationORM, UserORM, UserRole
+from app.shared.models import EventType, NotificationORM, NotificationPreferenceORM, UserORM, UserRole
 from app.shared.utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+# category -> the NotificationPreferenceORM column governing its email channel.
+# ACCOUNT/SECURITY/INFRASTRUCTURE are intentionally not user-disableable — a
+# category missing from this map is treated as always-eligible (fail open
+# on the *allow* side only; create_notification's caller still decides
+# email_required in the first place, this only ever narrows it further).
+_CATEGORY_PREFERENCE_FIELD = {
+    "WORKLOAD": "email_workload",
+    "SCHEDULING": "email_scheduling",
+    "APPROVAL": "email_approval",
+    "EXECUTION": "email_execution",
+}
 
 
 def _dedup_key(event_type: EventType, job_id: Optional[str], suffix: Optional[str] = None) -> str:
@@ -26,6 +38,50 @@ def _dedup_key(event_type: EventType, job_id: Optional[str], suffix: Optional[st
     if suffix:
         key += f":{suffix}"
     return key
+
+
+def get_or_create_preferences(db: Session, user_id: int) -> NotificationPreferenceORM:
+    """Lazily create an all-enabled preference row on first access."""
+    prefs = db.query(NotificationPreferenceORM).filter(NotificationPreferenceORM.user_id == user_id).first()
+    if prefs is not None:
+        return prefs
+    prefs = NotificationPreferenceORM(user_id=user_id, created_at=utcnow())
+    db.add(prefs)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Concurrent first-access race — another request already created it.
+        db.rollback()
+        prefs = db.query(NotificationPreferenceORM).filter(NotificationPreferenceORM.user_id == user_id).first()
+        if prefs is not None:
+            return prefs
+        raise
+    db.refresh(prefs)
+    return prefs
+
+
+def update_preferences(db: Session, user_id: int, **fields) -> NotificationPreferenceORM:
+    """Update only the editable (non-security) preference fields that were actually supplied."""
+    prefs = get_or_create_preferences(db, user_id)
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if key not in _CATEGORY_PREFERENCE_FIELD.values():
+            continue  # never allow writing email_system or an unknown column here
+        setattr(prefs, key, value)
+    prefs.updated_at = utcnow()
+    db.commit()
+    db.refresh(prefs)
+    return prefs
+
+
+def _email_allowed_by_preference(db: Session, recipient_user_id: int, category: str) -> bool:
+    """Security-critical categories are always eligible; others follow the recipient's stored preference."""
+    field = _CATEGORY_PREFERENCE_FIELD.get(category)
+    if field is None:
+        return True
+    prefs = get_or_create_preferences(db, recipient_user_id)
+    return bool(getattr(prefs, field, True))
 
 
 def create_notification(
@@ -46,7 +102,16 @@ def create_notification(
     Persist one notification. Idempotent per (recipient, event_type, job_id[,suffix]):
     a duplicate logical event for the same recipient is silently absorbed, not
     inserted as a second row (uq_notifications_recipient_dedup).
+
+    The in-app notification is always created regardless of preference —
+    only the email channel is gated: if the caller requested email_required
+    but the recipient has disabled that category, the row is still created
+    with email_required=False (never silently dropped, never emailed
+    against the recipient's stated preference).
     """
+    if email_required and not _email_allowed_by_preference(db, recipient_user_id, category):
+        email_required = False
+
     notif = NotificationORM(
         tenant_id=tenant_id,
         recipient_user_id=recipient_user_id,

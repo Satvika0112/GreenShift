@@ -466,6 +466,22 @@ export interface UnreadCountResponse {
   unread_count: number;
 }
 
+// Matches GET/PUT /api/v1/notifications/preferences (app/shared/models.py
+// NotificationPreferenceResponse). `email_system` is read-only — the
+// backend never accepts it in an update request (security/account/
+// infrastructure notifications cannot be disabled by the recipient).
+export interface NotificationPreferences {
+  email_workload: boolean;
+  email_scheduling: boolean;
+  email_approval: boolean;
+  email_execution: boolean;
+  email_system: boolean;
+}
+
+export type NotificationPreferencesUpdate = Partial<
+  Pick<NotificationPreferences, 'email_workload' | 'email_scheduling' | 'email_approval' | 'email_execution'>
+>;
+
 // Matches app.shared.models.AuditVerifyResponse exactly (response_model on
 // GET /api/v1/trust/verify) — no other fields exist on this response.
 export interface AuditVerifyResponse {

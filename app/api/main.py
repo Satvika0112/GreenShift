@@ -35,6 +35,7 @@ async def _background_orchestrator():
     from app.shared.database import SessionLocal
     from app.decide.service import process_pending_jobs
     from app.dispatch.service import dispatch_loop_tick
+    from app.notify.email import process_pending_emails
 
     while True:
         try:
@@ -43,6 +44,7 @@ async def _background_orchestrator():
             try:
                 process_pending_jobs(db)
                 dispatch_loop_tick(db)
+                process_pending_emails(db)
             finally:
                 db.close()
         except asyncio.CancelledError:

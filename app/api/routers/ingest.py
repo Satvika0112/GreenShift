@@ -420,6 +420,24 @@ def cancel_workload(
     except Exception as exc:
         logger.warning(f"Failed to record audit event for job cancellation: {exc}")
 
+    if job.submitted_by_user_id:
+        try:
+            from app.notify.service import create_notification
+            create_notification(
+                db,
+                recipient_user_id=job.submitted_by_user_id,
+                event_type=EventType.JOB_CANCELLED,
+                category="WORKLOAD",
+                severity="WARNING",
+                title=f"Workload {job.job_id} cancelled",
+                message=f"Workload '{job.job_id}' was cancelled by {current_user.username}.",
+                tenant_id=job.tenant_id,
+                job_id=job.job_id,
+                email_required=False,
+            )
+        except Exception as exc:
+            logger.warning(f"Notification failed for job {job_id} cancellation: {exc}")
+
     logger.info("Job %s CANCELLED by %s (%s)", job_id, current_user.username, user_role)
     return {
         "job_id": job_id,

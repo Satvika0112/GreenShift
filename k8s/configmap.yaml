@@ -30,3 +30,13 @@ data:
   TARIFF_SEK_TO_USD: "0.095"
   TARIFF_AUD_TO_USD: "0.65"
   TARIFF_INDUSTRIAL_TYPES: "DATA_PROCESSING,ETL,HPC,BATCH,SIMULATION"
+  # Notification email delivery — off by default; in-app notifications
+  # always work regardless. SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD are
+  # credentials and live in secrets.example.yaml, not here.
+  SMTP_ENABLED: "false"
+  SMTP_PORT: "587"
+  SMTP_USE_TLS: "true"
+  SMTP_FROM_ADDRESS: "noreply@greenshift.local"
+  NOTIFICATION_EMAIL_MAX_ATTEMPTS: "5"
+  NOTIFICATION_POLL_INTERVAL_SECONDS: "15"
+  FRONTEND_BASE_URL: "http://localhost:3000"

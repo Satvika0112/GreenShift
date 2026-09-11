@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Settings,
   Save,
@@ -13,11 +14,34 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
-import { sustainabilityApi, monitoringApi } from '../api/endpoints';
+import { InlineBanner } from '../components/common/InlineBanner';
+import { sustainabilityApi, monitoringApi, notificationsApi } from '../api/endpoints';
+import { NotificationPreferencesUpdate } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 
+const PREFERENCE_TOGGLES: { field: keyof NotificationPreferencesUpdate; label: string; helper: string }[] = [
+  { field: 'email_workload', label: 'Workload', helper: 'Submitted, cancelled' },
+  { field: 'email_scheduling', label: 'Scheduling', helper: 'No feasible schedule found' },
+  { field: 'email_approval', label: 'Approval', helper: 'Approval required, approved, declined' },
+  { field: 'email_execution', label: 'Execution', helper: 'Execution completed, execution failed' },
+];
+
 export const SettingsPage: React.FC = () => {
-  const { user, isCompanyAdmin } = useAuth();
+  const { user, isCompanyAdmin, isAuthenticated } = useAuth();
+  const queryClient = useQueryClient();
+
+  const preferencesQ = useQuery({
+    queryKey: ['notificationPreferences'],
+    queryFn: () => notificationsApi.getPreferences(),
+    enabled: isAuthenticated,
+  });
+  const preferencesMutation = useMutation({
+    mutationFn: (update: NotificationPreferencesUpdate) => notificationsApi.updatePreferences(update),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['notificationPreferences'], data);
+    },
+  });
+
   const [dataSources, setDataSources] = useState<any | null>(null);
   const [healthStatus, setHealthStatus] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -148,6 +172,77 @@ export const SettingsPage: React.FC = () => {
 
       {/* Role change / company / tenant are never editable from Settings — the
           backend derives and owns those; only an authorized admin flow can change them. */}
+
+      {/* Notification email preferences — real backend-persisted per-user
+          settings (GET/PUT /api/v1/notifications/preferences). In-app
+          notifications are never affected by these — only whether GreenShift
+          also emails you for that category. Security/account/infrastructure
+          notifications are not listed here because the backend does not
+          allow disabling them. */}
+      <GlassCard title="Notification Email Preferences">
+        {preferencesQ.isLoading ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading preferences…</div>
+        ) : preferencesQ.isError ? (
+          <InlineBanner
+            variant="error"
+            action={
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => preferencesQ.refetch()}>
+                <RefreshCw size={13} />
+                <span>Retry</span>
+              </button>
+            }
+          >
+            Couldn't load notification preferences.
+          </InlineBanner>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
+              Choose which categories also send you an email. In-app notifications (the bell) are never affected.
+            </p>
+            {PREFERENCE_TOGGLES.map(({ field, label, helper }) => {
+              const checked = !!preferencesQ.data?.[field];
+              return (
+                <div
+                  key={field}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    paddingBottom: '0.6rem',
+                    borderBottom: '1px solid var(--border-subtle)',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{helper}</div>
+                  </div>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={preferencesMutation.isPending}
+                      onChange={(e) => preferencesMutation.mutate({ [field]: e.target.checked })}
+                      aria-label={`Email me for ${label} notifications`}
+                    />
+                  </label>
+                </div>
+              );
+            })}
+            <div
+              style={{
+                background: 'rgba(245, 158, 11, 0.06)',
+                border: '1px solid rgba(245, 158, 11, 0.25)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '0.6rem 0.85rem',
+                fontSize: '0.72rem',
+                color: '#f59e0b',
+              }}
+            >
+              Security and account notifications are always emailed and cannot be disabled here.
+            </div>
+          </div>
+        )}
+      </GlassCard>
 
       {/* Backend Operational Configuration — admin-tier diagnostic info, not relevant to a plain Company User's own settings */}
       {isCompanyAdmin && (

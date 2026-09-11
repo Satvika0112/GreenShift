@@ -98,6 +98,25 @@ def submit_job(
     db.commit()
     db.refresh(job)
 
+    if job.submitted_by_user_id:
+        try:
+            from app.notify.service import create_notification
+            from app.shared.models import EventType
+            create_notification(
+                db,
+                recipient_user_id=job.submitted_by_user_id,
+                event_type=EventType.JOB_SUBMITTED,
+                category="WORKLOAD",
+                severity="INFO",
+                title=f"Workload {job.job_id} submitted",
+                message=f"Workload '{job.job_id}' was submitted and is awaiting scheduling.",
+                tenant_id=job.tenant_id,
+                job_id=job.job_id,
+                email_required=False,
+            )
+        except Exception as exc:
+            logger.warning("Notification failed for job %s submission: %s", job.job_id, exc)
+
     logger.info(
         "Job registered: %s (team=%s, type=%s, region=%s, priority=%s, deferrable=%s)",
         job_id, request.team_id, request.job_type or "n/a",

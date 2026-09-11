@@ -177,25 +177,51 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
     db.refresh(saved_sd)
     decision.id = saved_sd.id
 
-    if job.status == JobStatus.PENDING_APPROVAL and job.submitted_by_user_id:
+    if job.status == JobStatus.PENDING_APPROVAL:
         try:
-            from app.notify.service import create_notification
+            from app.notify.service import create_notification, notify_users, resolve_platform_admin_user_ids, resolve_tenant_admin_user_ids
             from app.shared.models import EventType
-            create_notification(
-                db,
-                recipient_user_id=job.submitted_by_user_id,
-                event_type=EventType.SCHEDULE_PROPOSED,
-                category="SCHEDULING",
-                severity="INFO",
-                title=f"Workload {job.job_id} ready for approval",
-                message=(
-                    f"A schedule for workload '{job.job_id}' is ready for review "
-                    f"(carbon: {decision.carbon_emission:.4f} kg CO2, start: {decision.selected_start.isoformat()})."
-                ),
-                tenant_id=job.tenant_id,
-                job_id=job.job_id,
-                email_required=False,
-            )
+
+            if job.submitted_by_user_id:
+                create_notification(
+                    db,
+                    recipient_user_id=job.submitted_by_user_id,
+                    event_type=EventType.SCHEDULE_PROPOSED,
+                    category="SCHEDULING",
+                    severity="INFO",
+                    title=f"Workload {job.job_id} ready for approval",
+                    message=(
+                        f"A schedule for workload '{job.job_id}' is ready for review "
+                        f"(carbon: {decision.carbon_emission:.4f} kg CO2, start: {decision.selected_start.isoformat()})."
+                    ),
+                    tenant_id=job.tenant_id,
+                    job_id=job.job_id,
+                    email_required=False,
+                )
+
+            # Notify only the users actually authorized to approve/decline this
+            # job (app.approval.service.check_user_approval_permission: tenant's
+            # COMPANY_ADMINs + all PLATFORM_ADMINs) — never the submitter alone,
+            # and never anyone outside that real authorization set.
+            approver_ids = set(resolve_tenant_admin_user_ids(db, job.tenant_id)) | set(resolve_platform_admin_user_ids(db))
+            approver_ids.discard(job.submitted_by_user_id)
+            if approver_ids:
+                notify_users(
+                    db,
+                    recipient_user_ids=list(approver_ids),
+                    event_type=EventType.SCHEDULE_PROPOSED,
+                    category="APPROVAL",
+                    severity="INFO",
+                    title=f"Approval required — {job.job_id}",
+                    message=(
+                        f"Workload '{job.job_id}' has a proposed schedule awaiting your approval "
+                        f"(carbon: {decision.carbon_emission:.4f} kg CO2, start: {decision.selected_start.isoformat()})."
+                    ),
+                    tenant_id=job.tenant_id,
+                    job_id=job.job_id,
+                    dedup_suffix="approver",
+                    email_required=True,
+                )
         except Exception as exc:
             logger.warning("Notification failed for job %s schedule-proposed: %s", decision.job_id, exc)
 
@@ -431,6 +457,28 @@ def process_pending_jobs(db: Session) -> int:
             logger.error("Failed to schedule job %s: %s", job.job_id, exc)
             job.status = JobStatus.FAILED
             db.commit()
+            if job.submitted_by_user_id:
+                try:
+                    from app.notify.service import create_notification
+                    from app.shared.models import EventType
+                    create_notification(
+                        db,
+                        recipient_user_id=job.submitted_by_user_id,
+                        event_type=EventType.SCHEDULING_FAILED,
+                        category="SCHEDULING",
+                        severity="CRITICAL",
+                        title=f"No feasible schedule for {job.job_id}",
+                        message=(
+                            f"GreenShift could not find an execution window for workload "
+                            f"'{job.job_id}' that satisfies its deadline and constraints "
+                            f"(e.g. carbon budget). The workload was marked FAILED."
+                        ),
+                        tenant_id=job.tenant_id,
+                        job_id=job.job_id,
+                        email_required=True,
+                    )
+                except Exception as notif_exc:
+                    logger.warning("Notification failed for job %s scheduling failure: %s", job.job_id, notif_exc)
 
     return count
 
