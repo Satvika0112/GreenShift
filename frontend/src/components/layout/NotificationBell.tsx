@@ -1,17 +1,30 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { Bell, CheckCheck, Inbox } from 'lucide-react';
 import { notificationsApi } from '../../api/endpoints';
 import { NotificationItem } from '../../types/api';
 import { useAuth } from '../../context/AuthContext';
+import { useRealtimeNotifications } from '../../context/RealtimeNotificationContext';
 import { severityIcon, timeAgo } from '../../utils/notificationDisplay';
+
+const CONNECTION_LABEL: Record<string, string> = {
+  connected: 'Live',
+  connecting: 'Connecting…',
+  reconnecting: 'Reconnecting…',
+  disconnected: 'Offline (retrying)',
+  unavailable: 'Live updates unavailable — polling',
+  idle: '',
+};
 
 export const NotificationBell: React.FC = () => {
   const { isAuthenticated } = useAuth();
+  const { connectionStatus } = useRealtimeNotifications();
   const [isOpen, setIsOpen] = useState(false);
   const [filter, setFilter] = useState<'all' | 'unread'>('all');
   const containerRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   // Unread count: polled continuously (used for the badge, even while closed).
   const { data: unreadData } = useQuery({
@@ -137,9 +150,32 @@ export const NotificationBell: React.FC = () => {
               borderBottom: '1px solid var(--border-subtle)',
             }}
           >
-            <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-              Notifications
-            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+              <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Notifications
+              </span>
+              {CONNECTION_LABEL[connectionStatus] && (
+                <span
+                  style={{
+                    fontSize: '0.62rem',
+                    fontWeight: 600,
+                    color: connectionStatus === 'connected' ? '#10b981' : 'var(--text-muted)',
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      width: '6px',
+                      height: '6px',
+                      borderRadius: '50%',
+                      marginRight: '0.3rem',
+                      background: connectionStatus === 'connected' ? '#10b981' : '#94a3b8',
+                    }}
+                  />
+                  {CONNECTION_LABEL[connectionStatus]}
+                </span>
+              )}
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', borderRadius: 'var(--radius-sm)', padding: '2px' }}>
                 <button
@@ -210,14 +246,20 @@ export const NotificationBell: React.FC = () => {
               items.map((n) => (
                 <div
                   key={n.id}
-                  onClick={() => !n.is_read && markReadMutation.mutate(n.id)}
+                  onClick={() => {
+                    if (!n.is_read) markReadMutation.mutate(n.id);
+                    if (n.action_url) {
+                      setIsOpen(false);
+                      navigate(n.action_url);
+                    }
+                  }}
                   style={{
                     display: 'flex',
                     gap: '0.65rem',
                     padding: '0.75rem 1rem',
                     borderBottom: '1px solid var(--border-subtle)',
                     background: n.is_read ? 'transparent' : 'rgba(16, 185, 129, 0.04)',
-                    cursor: n.is_read ? 'default' : 'pointer',
+                    cursor: n.is_read && !n.action_url ? 'default' : 'pointer',
                   }}
                 >
                   <div style={{ flexShrink: 0, marginTop: '0.15rem' }}>{severityIcon(n.severity)}</div>

@@ -26,6 +26,22 @@ vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({ user: mockUser, isCompanyAdmin: mockIsCompanyAdmin, isAuthenticated: true }),
 }));
 
+let mockConnectionStatus: string;
+let mockSoundEnabled: boolean;
+const setSoundEnabledMock = vi.fn((v: boolean) => {
+  mockSoundEnabled = v;
+});
+
+vi.mock('../context/RealtimeNotificationContext', () => ({
+  useRealtimeNotifications: () => ({
+    connectionStatus: mockConnectionStatus,
+    toasts: [],
+    dismissToast: vi.fn(),
+    soundEnabled: mockSoundEnabled,
+    setSoundEnabled: setSoundEnabledMock,
+  }),
+}));
+
 const defaultPreferences: NotificationPreferences = {
   email_workload: true,
   email_scheduling: true,
@@ -62,6 +78,8 @@ describe('SettingsPage', () => {
     localStorage.clear();
     mockUser = companyUser;
     mockIsCompanyAdmin = false;
+    mockConnectionStatus = 'connected';
+    mockSoundEnabled = true;
     (sustainabilityApi.getDataSourcesStatus as any).mockResolvedValue({});
     (monitoringApi.getSystemHealth as any).mockResolvedValue({});
     (notificationsApi.getPreferences as any).mockResolvedValue({ ...defaultPreferences });
@@ -168,6 +186,34 @@ describe('SettingsPage', () => {
       await waitFor(() => expect(notificationsApi.getPreferences).toHaveBeenCalled());
       expect(screen.queryByLabelText(/Email me for System notifications/i)).not.toBeInTheDocument();
       expect(screen.queryByLabelText(/Email me for Security notifications/i)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Real-time notifications', () => {
+    it('shows the live connection status', async () => {
+      mockConnectionStatus = 'connected';
+      renderPage();
+      await waitFor(() => expect(screen.getByText('CONNECTED')).toBeInTheDocument());
+      expect(screen.getByText(/Live — new notifications arrive instantly/)).toBeInTheDocument();
+    });
+
+    it('shows a fallback message when real-time delivery is unavailable', async () => {
+      mockConnectionStatus = 'unavailable';
+      renderPage();
+      await waitFor(() => expect(screen.getByText('UNAVAILABLE')).toBeInTheDocument());
+      expect(screen.getByText(/falling back to periodic refresh/)).toBeInTheDocument();
+    });
+
+    it('reflects the current sound preference and toggling calls setSoundEnabled', async () => {
+      const user = userEvent.setup();
+      mockSoundEnabled = true;
+      renderPage();
+
+      const soundToggle = await screen.findByLabelText('Notification sound');
+      expect((soundToggle as HTMLInputElement).checked).toBe(true);
+
+      await user.click(soundToggle);
+      expect(setSoundEnabledMock).toHaveBeenCalledWith(false);
     });
   });
 });

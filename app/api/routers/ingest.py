@@ -395,6 +395,7 @@ def cancel_workload(
         )
 
     now = utcnow()
+    previous_status = job.status
     job.status = JobStatus.CANCELLED
     job.updated_at = now
     if job.kubernetes_execution:
@@ -420,9 +421,10 @@ def cancel_workload(
     except Exception as exc:
         logger.warning(f"Failed to record audit event for job cancellation: {exc}")
 
-    if job.submitted_by_user_id:
-        try:
-            from app.notify.service import create_notification
+    try:
+        from app.notify.service import create_notification, notify_users, resolve_tenant_admin_user_ids
+        cancel_message = f"Workload '{job.job_id}' was cancelled by {current_user.username}."
+        if job.submitted_by_user_id:
             create_notification(
                 db,
                 recipient_user_id=job.submitted_by_user_id,
@@ -430,13 +432,33 @@ def cancel_workload(
                 category="WORKLOAD",
                 severity="WARNING",
                 title=f"Workload {job.job_id} cancelled",
-                message=f"Workload '{job.job_id}' was cancelled by {current_user.username}.",
+                message=cancel_message,
                 tenant_id=job.tenant_id,
                 job_id=job.job_id,
-                email_required=False,
+                email_required=True,
             )
-        except Exception as exc:
-            logger.warning(f"Notification failed for job {job_id} cancellation: {exc}")
+        # Operationally significant: the workload had already engaged a
+        # human approver (PENDING_APPROVAL/APPROVED) before being cancelled —
+        # the responsible Company Admin(s) should know their review is moot.
+        if previous_status in (JobStatus.PENDING_APPROVAL, JobStatus.APPROVED, JobStatus.SCHEDULED):
+            admin_ids = set(resolve_tenant_admin_user_ids(db, job.tenant_id))
+            admin_ids.discard(job.submitted_by_user_id)
+            if admin_ids:
+                notify_users(
+                    db,
+                    recipient_user_ids=list(admin_ids),
+                    event_type=EventType.JOB_CANCELLED,
+                    category="WORKLOAD",
+                    severity="WARNING",
+                    title=f"Workload {job.job_id} cancelled",
+                    message=cancel_message,
+                    tenant_id=job.tenant_id,
+                    job_id=job.job_id,
+                    dedup_suffix="admin",
+                    email_required=True,
+                )
+    except Exception as exc:
+        logger.warning(f"Notification failed for job {job_id} cancellation: {exc}")
 
     logger.info("Job %s CANCELLED by %s (%s)", job_id, current_user.username, user_role)
     return {

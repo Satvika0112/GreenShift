@@ -112,7 +112,7 @@ def submit_job(
                 message=f"Workload '{job.job_id}' was submitted and is awaiting scheduling.",
                 tenant_id=job.tenant_id,
                 job_id=job.job_id,
-                email_required=False,
+                email_required=True,
             )
         except Exception as exc:
             logger.warning("Notification failed for job %s submission: %s", job.job_id, exc)

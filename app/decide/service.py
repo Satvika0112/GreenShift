@@ -196,7 +196,7 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
                     ),
                     tenant_id=job.tenant_id,
                     job_id=job.job_id,
-                    email_required=False,
+                    email_required=True,
                 )
 
             # Notify only the users actually authorized to approve/decline this
@@ -224,6 +224,30 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
                 )
         except Exception as exc:
             logger.warning("Notification failed for job %s schedule-proposed: %s", decision.job_id, exc)
+    elif job.status == JobStatus.APPROVED and job.submitted_by_user_id:
+        # Non-deferrable job: the scheduler already produced a final,
+        # ready-to-execute window with no human approval step required —
+        # this is the "Workload Scheduled" event (not "proposed").
+        try:
+            from app.notify.service import create_notification
+            from app.shared.models import EventType
+            create_notification(
+                db,
+                recipient_user_id=job.submitted_by_user_id,
+                event_type=EventType.JOB_SCHEDULED,
+                category="WORKLOAD",
+                severity="INFO",
+                title=f"Workload {job.job_id} scheduled",
+                message=(
+                    f"Workload '{job.job_id}' was scheduled and requires no approval "
+                    f"(carbon: {decision.carbon_emission:.4f} kg CO2, start: {decision.selected_start.isoformat()})."
+                ),
+                tenant_id=job.tenant_id,
+                job_id=job.job_id,
+                email_required=True,
+            )
+        except Exception as exc:
+            logger.warning("Notification failed for job %s auto-scheduled: %s", decision.job_id, exc)
 
     # Record audit events if requested
     if record_audit:
@@ -457,10 +481,15 @@ def process_pending_jobs(db: Session) -> int:
             logger.error("Failed to schedule job %s: %s", job.job_id, exc)
             job.status = JobStatus.FAILED
             db.commit()
-            if job.submitted_by_user_id:
-                try:
-                    from app.notify.service import create_notification
-                    from app.shared.models import EventType
+            try:
+                from app.notify.service import create_notification, notify_users, resolve_tenant_admin_user_ids
+                from app.shared.models import EventType
+                failure_message = (
+                    f"GreenShift could not find an execution window for workload "
+                    f"'{job.job_id}' that satisfies its deadline and constraints "
+                    f"(e.g. carbon budget). The workload was marked FAILED. Reason: {exc}"
+                )
+                if job.submitted_by_user_id:
                     create_notification(
                         db,
                         recipient_user_id=job.submitted_by_user_id,
@@ -468,17 +497,32 @@ def process_pending_jobs(db: Session) -> int:
                         category="SCHEDULING",
                         severity="CRITICAL",
                         title=f"No feasible schedule for {job.job_id}",
-                        message=(
-                            f"GreenShift could not find an execution window for workload "
-                            f"'{job.job_id}' that satisfies its deadline and constraints "
-                            f"(e.g. carbon budget). The workload was marked FAILED."
-                        ),
+                        message=failure_message,
                         tenant_id=job.tenant_id,
                         job_id=job.job_id,
                         email_required=True,
                     )
-                except Exception as notif_exc:
-                    logger.warning("Notification failed for job %s scheduling failure: %s", job.job_id, notif_exc)
+                # The responsible Company Admin(s) need to know too — a
+                # failed workload may need manual intervention (budget/region
+                # change) only they can authorize.
+                admin_ids = set(resolve_tenant_admin_user_ids(db, job.tenant_id))
+                admin_ids.discard(job.submitted_by_user_id)
+                if admin_ids:
+                    notify_users(
+                        db,
+                        recipient_user_ids=list(admin_ids),
+                        event_type=EventType.SCHEDULING_FAILED,
+                        category="SCHEDULING",
+                        severity="CRITICAL",
+                        title=f"No feasible schedule for {job.job_id}",
+                        message=failure_message,
+                        tenant_id=job.tenant_id,
+                        job_id=job.job_id,
+                        dedup_suffix="admin",
+                        email_required=True,
+                    )
+            except Exception as notif_exc:
+                logger.warning("Notification failed for job %s scheduling failure: %s", job.job_id, notif_exc)
 
     return count
 

@@ -4,6 +4,7 @@ GreenShift — Notification API Router.
 Endpoints:
 - GET   /notifications
 - GET   /notifications/unread-count
+- GET   /notifications/stream          (real-time, Server-Sent Events)
 - PATCH /notifications/{id}/read
 - PATCH /notifications/read-all
 - GET   /notifications/preferences
@@ -17,6 +18,7 @@ and their own preferences.
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.notify.service import (
@@ -38,6 +40,32 @@ from app.shared.models import (
 )
 
 router = APIRouter(tags=["Notifications"])
+
+
+@router.get("/notifications/stream")
+async def api_notifications_stream(
+    current_user: UserORM = Depends(get_current_user),
+):
+    """
+    Real-time notification delivery for the authenticated caller only —
+    see app.notify.realtime. Every event a caller receives on this stream
+    is one that app.notify.service.create_notification() already persisted
+    for their own recipient_user_id; this endpoint adds delivery latency,
+    not a second authorization path. Degrades to heartbeat-only frames
+    (realtime:false) if the real-time transport (Redis) is unavailable —
+    the existing polling endpoints above remain fully functional either way.
+    """
+    from app.notify.realtime import notification_event_stream
+
+    return StreamingResponse(
+        notification_event_stream(current_user.id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/notifications", response_model=List[NotificationResponse])

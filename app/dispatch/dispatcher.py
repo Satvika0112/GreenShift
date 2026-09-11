@@ -325,7 +325,7 @@ def dispatch_job(db: Session, job: JobORM, user: Optional[object] = None) -> Kub
                 message=f"Workload '{job.job_id}' was dispatched to Kubernetes and is now queued for execution.",
                 tenant_id=job.tenant_id,
                 job_id=job.job_id,
-                email_required=False,
+                email_required=True,
             )
         except Exception as exc:
             logger.warning("Notification failed for job %s dispatch: %s", job.job_id, exc)
@@ -461,36 +461,57 @@ def refresh_job_status(db: Session, execution: KubernetesExecutionORM) -> Kubern
             except Exception as exc:
                 logger.warning("Audit record failed for job %s transition to %s: %s", execution.job_id, gs_status, exc)
 
-            if job and job.submitted_by_user_id and gs_status in (JobStatus.COMPLETED, JobStatus.FAILED):
+            if job and gs_status in (JobStatus.COMPLETED, JobStatus.FAILED):
                 try:
-                    from app.notify.service import create_notification
+                    from app.notify.service import create_notification, notify_users, resolve_tenant_admin_user_ids
                     from app.shared.models import EventType
                     if gs_status == JobStatus.COMPLETED:
-                        create_notification(
-                            db,
-                            recipient_user_id=job.submitted_by_user_id,
-                            event_type=EventType.K8S_JOB_COMPLETED,
-                            category="EXECUTION",
-                            severity="INFO",
-                            title=f"Workload {job.job_id} completed",
-                            message=f"Workload '{job.job_id}' completed successfully. Impact/report data is now available.",
-                            tenant_id=job.tenant_id,
-                            job_id=job.job_id,
-                            email_required=True,
-                        )
+                        if job.submitted_by_user_id:
+                            create_notification(
+                                db,
+                                recipient_user_id=job.submitted_by_user_id,
+                                event_type=EventType.K8S_JOB_COMPLETED,
+                                category="EXECUTION",
+                                severity="INFO",
+                                title=f"Workload {job.job_id} completed",
+                                message=f"Workload '{job.job_id}' completed successfully. Impact/report data is now available.",
+                                tenant_id=job.tenant_id,
+                                job_id=job.job_id,
+                                email_required=True,
+                            )
                     else:
-                        create_notification(
-                            db,
-                            recipient_user_id=job.submitted_by_user_id,
-                            event_type=EventType.K8S_JOB_FAILED,
-                            category="EXECUTION",
-                            severity="CRITICAL",
-                            title=f"Workload {job.job_id} failed",
-                            message=f"Workload '{job.job_id}' failed during execution: {execution.error_message or 'unknown error'}",
-                            tenant_id=job.tenant_id,
-                            job_id=job.job_id,
-                            email_required=True,
-                        )
+                        failure_message = f"Workload '{job.job_id}' failed during execution: {execution.error_message or 'unknown error'}"
+                        if job.submitted_by_user_id:
+                            create_notification(
+                                db,
+                                recipient_user_id=job.submitted_by_user_id,
+                                event_type=EventType.K8S_JOB_FAILED,
+                                category="EXECUTION",
+                                severity="CRITICAL",
+                                title=f"Workload {job.job_id} failed",
+                                message=failure_message,
+                                tenant_id=job.tenant_id,
+                                job_id=job.job_id,
+                                email_required=True,
+                            )
+                        # Execution failure is CRITICAL and may need operator
+                        # intervention — notify the responsible Company Admin(s) too.
+                        admin_ids = set(resolve_tenant_admin_user_ids(db, job.tenant_id))
+                        admin_ids.discard(job.submitted_by_user_id)
+                        if admin_ids:
+                            notify_users(
+                                db,
+                                recipient_user_ids=list(admin_ids),
+                                event_type=EventType.K8S_JOB_FAILED,
+                                category="EXECUTION",
+                                severity="CRITICAL",
+                                title=f"Workload {job.job_id} failed",
+                                message=failure_message,
+                                tenant_id=job.tenant_id,
+                                job_id=job.job_id,
+                                dedup_suffix="admin",
+                                email_required=True,
+                            )
                 except Exception as exc:
                     logger.warning("Notification failed for job %s transition to %s: %s", execution.job_id, gs_status, exc)
 

@@ -18,6 +18,7 @@ import { InlineBanner } from '../components/common/InlineBanner';
 import { sustainabilityApi, monitoringApi, notificationsApi } from '../api/endpoints';
 import { NotificationPreferencesUpdate } from '../types/api';
 import { useAuth } from '../context/AuthContext';
+import { useRealtimeNotifications } from '../context/RealtimeNotificationContext';
 
 const PREFERENCE_TOGGLES: { field: keyof NotificationPreferencesUpdate; label: string; helper: string }[] = [
   { field: 'email_workload', label: 'Workload', helper: 'Submitted, cancelled' },
@@ -28,6 +29,7 @@ const PREFERENCE_TOGGLES: { field: keyof NotificationPreferencesUpdate; label: s
 
 export const SettingsPage: React.FC = () => {
   const { user, isCompanyAdmin, isAuthenticated } = useAuth();
+  const { connectionStatus, soundEnabled, setSoundEnabled } = useRealtimeNotifications();
   const queryClient = useQueryClient();
 
   const preferencesQ = useQuery({
@@ -242,6 +244,50 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
         )}
+      </GlassCard>
+
+      <GlassCard title="Real-Time Notifications">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Connection status</div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                {connectionStatus === 'connected' && 'Live — new notifications arrive instantly.'}
+                {connectionStatus === 'unavailable' && 'Live updates unavailable in this environment — falling back to periodic refresh.'}
+                {(connectionStatus === 'connecting' || connectionStatus === 'reconnecting') && 'Connecting…'}
+                {(connectionStatus === 'idle' || connectionStatus === 'disconnected') && 'Not connected.'}
+              </div>
+            </div>
+            <span
+              style={{
+                fontSize: '0.68rem',
+                fontWeight: 700,
+                padding: '0.2rem 0.55rem',
+                borderRadius: 'var(--radius-full)',
+                color: connectionStatus === 'connected' ? '#10b981' : 'var(--text-muted)',
+                background: connectionStatus === 'connected' ? 'rgba(16,185,129,0.12)' : 'rgba(148,163,184,0.12)',
+              }}
+            >
+              {connectionStatus.toUpperCase()}
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '0.6rem', borderTop: '1px solid var(--border-subtle)' }}>
+            <div>
+              <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Notification sound</div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                Play a sound for important/critical notifications as they arrive.
+              </div>
+            </div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={soundEnabled}
+                onChange={(e) => setSoundEnabled(e.target.checked)}
+                aria-label="Notification sound"
+              />
+            </label>
+          </div>
+        </div>
       </GlassCard>
 
       {/* Backend Operational Configuration — admin-tier diagnostic info, not relevant to a plain Company User's own settings */}

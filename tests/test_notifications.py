@@ -10,6 +10,7 @@ Validates:
 4. Email delivery failure never changes job/workload state.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -625,3 +626,438 @@ class TestNotificationsRBACDirectAPI:
         assert client.patch("/notifications/read-all").status_code == 401
         assert client.get("/notifications/preferences").status_code == 401
         assert client.put("/notifications/preferences", json={}).status_code == 401
+        assert client.get("/notifications/stream").status_code == 401
+
+    def test_forged_recipient_and_role_fields_in_preference_update_are_ignored(self, db, two_users):
+        """A crafted body carrying recipient_user_id/email/role/team_id must
+        have zero effect — PUT /notifications/preferences only ever accepts
+        the four editable boolean fields, and only ever writes the caller's
+        own row (current_user.id), never a client-supplied identity."""
+        alice, bob = two_users["alice"], two_users["bob"]
+        token = get_token(alice)
+        res = client.put(
+            "/notifications/preferences",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "email_approval": False,
+                "recipient_user_id": bob.id,
+                "user_id": bob.id,
+                "email": "attacker@example.com",
+                "role": "PLATFORM_ADMIN",
+                "team_id": "another-team",
+                "tenant_id": "another-tenant",
+            },
+        )
+        assert res.status_code == 200
+        assert res.json()["email_approval"] is False
+
+        # Bob's own preferences are completely untouched by Alice's forged payload.
+        bob_token = get_token(bob)
+        res_bob = client.get("/notifications/preferences", headers={"Authorization": f"Bearer {bob_token}"})
+        assert res_bob.json()["email_approval"] is True
+
+
+class TestRealtimePublish:
+    """create_notification() best-effort pushes a real-time event over
+    app.notify.realtime.publish_notification_event — never blocks, never
+    raises, and degrades silently when the transport is unavailable."""
+
+    def test_create_notification_publishes_a_realtime_event(self, db, two_users):
+        alice = two_users["alice"]
+        with patch("app.notify.realtime.publish_notification_event") as mock_publish:
+            notif = create_notification(
+                db, recipient_user_id=alice.id, event_type=EventType.APPROVAL_GRANTED,
+                category="APPROVAL", severity="INFO", title="Approved", message="m",
+                tenant_id=alice.tenant_id, job_id="JOB-RT-1",
+            )
+        assert notif is not None
+        mock_publish.assert_called_once()
+        called_user_id, called_payload = mock_publish.call_args[0]
+        assert called_user_id == alice.id
+        assert called_payload["id"] == notif.id
+        assert called_payload["title"] == "Approved"
+
+    def test_no_realtime_publish_for_a_deduplicated_notification(self, db, two_users):
+        alice = two_users["alice"]
+        kwargs = dict(
+            recipient_user_id=alice.id, event_type=EventType.K8S_JOB_FAILED,
+            category="EXECUTION", severity="CRITICAL", title="Failed", message="m",
+            tenant_id=alice.tenant_id, job_id="JOB-RT-DUP",
+        )
+        create_notification(db, **kwargs)
+        with patch("app.notify.realtime.publish_notification_event") as mock_publish:
+            second = create_notification(db, **kwargs)
+        assert second is None
+        mock_publish.assert_not_called()
+
+    def test_create_notification_succeeds_even_if_realtime_publish_raises(self, db, two_users):
+        """The publish step must never break the notification's own
+        creation/commit — a bug or outage in the realtime transport is
+        strictly additive-path, never a dependency."""
+        alice = two_users["alice"]
+        with patch("app.notify.realtime.publish_notification_event", side_effect=RuntimeError("redis down")):
+            notif = create_notification(
+                db, recipient_user_id=alice.id, event_type=EventType.APPROVAL_GRANTED,
+                category="APPROVAL", severity="INFO", title="Approved", message="m",
+                tenant_id=alice.tenant_id, job_id="JOB-RT-2",
+            )
+        assert notif is not None
+        assert notif.id is not None
+
+    def test_publish_notification_event_is_a_noop_when_redis_unavailable(self, db, two_users):
+        from app.notify.realtime import publish_notification_event
+        with patch("app.notify.realtime.get_redis_client", return_value=None):
+            # Must not raise even though there is nothing to publish to.
+            publish_notification_event(1, {"id": 1, "title": "x"})
+
+
+class TestActionUrlDefaults:
+    """action_url is always server-derived from real, existing frontend
+    routes — never invented, never a client-supplied value."""
+
+    def test_approval_category_gets_the_approvals_route(self, db, two_users):
+        alice = two_users["alice"]
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.SCHEDULE_PROPOSED,
+            category="APPROVAL", severity="INFO", title="Approval required", message="m",
+            tenant_id=alice.tenant_id, job_id="JOB-URL-1",
+        )
+        assert notif.action_url == "/approvals"
+
+    def test_job_scoped_category_gets_the_workload_detail_route(self, db, two_users):
+        alice = two_users["alice"]
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.K8S_JOB_COMPLETED,
+            category="EXECUTION", severity="INFO", title="Completed", message="m",
+            tenant_id=alice.tenant_id, job_id="JOB-URL-2",
+        )
+        assert notif.action_url == "/workloads/JOB-URL-2"
+
+    def test_no_job_id_and_non_approval_category_gets_no_action_url(self, db, two_users):
+        alice = two_users["alice"]
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.AUTH_USER_ACTIVATED,
+            category="ACCOUNT", severity="INFO", title="Account activated", message="m",
+            tenant_id=alice.tenant_id,
+        )
+        assert notif.action_url is None
+
+    def test_explicit_action_url_is_never_overridden(self, db, two_users):
+        alice = two_users["alice"]
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.K8S_JOB_COMPLETED,
+            category="EXECUTION", severity="INFO", title="Completed", message="m",
+            tenant_id=alice.tenant_id, job_id="JOB-URL-3", action_url="/custom/path",
+        )
+        assert notif.action_url == "/custom/path"
+
+    def test_resolved_approval_outcomes_route_to_the_workload_not_the_approvals_queue(self, db, two_users):
+        """Once a schedule is APPROVED or DECLINED it's no longer in the
+        approvals queue, and the submitter (often a plain COMPANY_USER) may
+        not even be an approver — the workload's own detail page is the
+        correct destination, not /approvals."""
+        alice = two_users["alice"]
+        granted = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.APPROVAL_GRANTED,
+            category="APPROVAL", severity="INFO", title="Approved", message="m",
+            tenant_id=alice.tenant_id, job_id="JOB-URL-4",
+        )
+        declined = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.APPROVAL_DECLINED,
+            category="APPROVAL", severity="WARNING", title="Declined", message="m",
+            tenant_id=alice.tenant_id, job_id="JOB-URL-5",
+        )
+        assert granted.action_url == "/workloads/JOB-URL-4"
+        assert declined.action_url == "/workloads/JOB-URL-5"
+
+
+class TestAdminFanoutOnFailureAndCancellation:
+    """Failures/cancellations that need operator attention must reach the
+    responsible Company Admin(s), not just the submitter — while staying
+    strictly scoped to the job's own tenant."""
+
+    @pytest.fixture
+    def tenant_with_admin(self, db):
+        admin = UserORM(
+            username="notif_fanout_admin", email="fanout_admin@greenshift.io",
+            hashed_password=hash_password("pass12345"), role=UserRole.COMPANY_ADMIN,
+            tenant_id="tenant-fanout", is_active=True,
+        )
+        other_tenant_admin = UserORM(
+            username="notif_fanout_other_admin", email="fanout_other@greenshift.io",
+            hashed_password=hash_password("pass12345"), role=UserRole.COMPANY_ADMIN,
+            tenant_id="tenant-fanout-other", is_active=True,
+        )
+        submitter = UserORM(
+            username="notif_fanout_user", email="fanout_user@greenshift.io",
+            hashed_password=hash_password("pass12345"), role=UserRole.COMPANY_USER,
+            tenant_id="tenant-fanout", is_active=True,
+        )
+        db.add_all([admin, other_tenant_admin, submitter])
+        db.commit()
+        for u in (admin, other_tenant_admin, submitter):
+            db.refresh(u)
+        return {"admin": admin, "other_tenant_admin": other_tenant_admin, "submitter": submitter}
+
+    def test_scheduling_failure_notifies_tenant_admin_not_other_tenant(self, db, tenant_with_admin):
+        from app.decide.service import process_pending_jobs
+        from app.shared.models import JobSubmitRequest
+        from app.ingest.jobs import submit_job
+
+        submitter = tenant_with_admin["submitter"]
+        req = JobSubmitRequest(
+            job_id="JOB-FANOUT-SCHEDFAIL-1", team_id="team-fanout",
+            deadline=utcnow() + timedelta(hours=12), runtime_minutes=60, power_kw=0.5,
+            region="IN-WE", container_image="greenshift/sample-workload:latest",
+            carbon_budget_kg=0.000001,
+        )
+        submit_job(db, req, tenant_id="tenant-fanout", submitted_by_user_id=submitter.id)
+        process_pending_jobs(db)
+
+        notifs = (
+            db.query(NotificationORM)
+            .filter(NotificationORM.job_id == "JOB-FANOUT-SCHEDFAIL-1", NotificationORM.event_type == EventType.SCHEDULING_FAILED)
+            .all()
+        )
+        recipient_ids = {n.recipient_user_id for n in notifs}
+        assert tenant_with_admin["admin"].id in recipient_ids
+        assert submitter.id in recipient_ids
+        assert tenant_with_admin["other_tenant_admin"].id not in recipient_ids
+
+    def test_execution_failure_notifies_tenant_admin(self, db, tenant_with_admin):
+        """Exercises the real app.dispatch.dispatcher.refresh_job_status()
+        FAILED-transition branch (mocked at the same k8s-client seam as
+        tests/test_dispatch_k8s.py::test_refresh_status_synchronizes_to_job_orm)
+        end-to-end, so this verifies the actual production fan-out code —
+        not a re-implementation of it in the test."""
+        from unittest.mock import MagicMock
+        from app.dispatch.dispatcher import refresh_job_status
+        from app.shared.models import KubernetesExecutionORM
+
+        submitter = tenant_with_admin["submitter"]
+        now = utcnow()
+        job = JobORM(
+            job_id="JOB-FANOUT-EXECFAIL-1", team_id="team-fanout", tenant_id="tenant-fanout",
+            submitted_by_user_id=submitter.id, submitted_at=now, deadline=now + timedelta(hours=12),
+            runtime_minutes=30, power_kw=1.0, region="IN-TG",
+            container_image="greenshift/sample-workload:latest", status=JobStatus.RUNNING,
+        )
+        execution = KubernetesExecutionORM(
+            job_id="JOB-FANOUT-EXECFAIL-1", kubernetes_job_name="gs-job-fanout-execfail-1",
+            kubernetes_namespace="greenshift", planned_start=now, planned_end=now + timedelta(minutes=30),
+            gs_status=JobStatus.RUNNING, pod_name="gs-job-fanout-execfail-1-pod", created_at=now,
+        )
+        job.kubernetes_execution = execution
+        db.add(job)
+        db.commit()
+
+        mock_batch = MagicMock()
+        mock_core = MagicMock()
+        with patch("app.dispatch.dispatcher.get_batch_v1", return_value=mock_batch), \
+             patch("app.dispatch.dispatcher.get_core_v1", return_value=mock_core), \
+             patch("app.dispatch.dispatcher.get_job_status", return_value=("Failed", JobStatus.FAILED)), \
+             patch("app.dispatch.dispatcher.get_pod_start_time", return_value=now), \
+             patch("app.dispatch.dispatcher.get_job_completion_time", return_value=now + timedelta(minutes=5)):
+            updated = refresh_job_status(db, execution)
+
+        assert updated.gs_status == JobStatus.FAILED
+
+        notifs = (
+            db.query(NotificationORM)
+            .filter(NotificationORM.job_id == "JOB-FANOUT-EXECFAIL-1", NotificationORM.event_type == EventType.K8S_JOB_FAILED)
+            .all()
+        )
+        recipient_ids = {n.recipient_user_id for n in notifs}
+        assert submitter.id in recipient_ids
+        assert tenant_with_admin["admin"].id in recipient_ids
+        assert tenant_with_admin["other_tenant_admin"].id not in recipient_ids
+
+    def test_cancellation_notifies_admin_only_when_operationally_significant(self, db, tenant_with_admin):
+        from app.shared.models import JobSubmitRequest
+        from app.ingest.jobs import submit_job
+
+        submitter = tenant_with_admin["submitter"]
+        token = get_token(submitter)
+
+        # SUBMITTED (not yet significant) -> cancel -> no admin fan-out expected.
+        req = JobSubmitRequest(
+            job_id="JOB-FANOUT-CANCEL-1", team_id="team-fanout",
+            deadline=utcnow() + timedelta(hours=12), runtime_minutes=30, power_kw=1.0,
+            region="IN-TG", container_image="greenshift/sample-workload:latest",
+        )
+        submit_job(db, req, tenant_id="tenant-fanout", submitted_by_user_id=submitter.id)
+        res = client.post("/jobs/JOB-FANOUT-CANCEL-1/cancel", headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 200
+
+        admin_notifs = (
+            db.query(NotificationORM)
+            .filter(NotificationORM.job_id == "JOB-FANOUT-CANCEL-1", NotificationORM.recipient_user_id == tenant_with_admin["admin"].id)
+            .all()
+        )
+        assert admin_notifs == []
+
+        # PENDING_APPROVAL (significant) -> cancel -> admin IS notified.
+        req2 = JobSubmitRequest(
+            job_id="JOB-FANOUT-CANCEL-2", team_id="team-fanout",
+            deadline=utcnow() + timedelta(hours=12), runtime_minutes=30, power_kw=1.0,
+            region="IN-TG", container_image="greenshift/sample-workload:latest", deferrable=True,
+        )
+        job2 = submit_job(db, req2, tenant_id="tenant-fanout", submitted_by_user_id=submitter.id)
+        job2.status = JobStatus.PENDING_APPROVAL
+        db.commit()
+        res2 = client.post("/jobs/JOB-FANOUT-CANCEL-2/cancel", headers={"Authorization": f"Bearer {token}"})
+        assert res2.status_code == 200
+
+        admin_notifs2 = (
+            db.query(NotificationORM)
+            .filter(NotificationORM.job_id == "JOB-FANOUT-CANCEL-2", NotificationORM.recipient_user_id == tenant_with_admin["admin"].id)
+            .all()
+        )
+        assert len(admin_notifs2) == 1
+        assert admin_notifs2[0].dedup_key.endswith(":admin")
+
+
+class TestEmailUrgencySubjects:
+    """Subject lines communicate urgency per spec: CRITICAL/HIGH failure
+    outcomes are bracketed, informational/call-to-action ones are not."""
+
+    def _job(self, db, tenant_id, job_id, status=JobStatus.FAILED):
+        job = JobORM(
+            job_id=job_id, team_id="team-x", tenant_id=tenant_id,
+            submitted_by_user_id=None, submitted_at=utcnow(), deadline=utcnow() + timedelta(hours=6),
+            runtime_minutes=30, power_kw=2.0, region="IN-TG",
+            container_image="greenshift/sample-workload:latest", status=status,
+            workload_name="urgency-test-workload",
+        )
+        db.add(job)
+        db.commit()
+        return job
+
+    def test_scheduling_failed_subject_is_bracketed_high(self, db, two_users):
+        from app.notify.templates import render_email
+        alice = two_users["alice"]
+        self._job(db, alice.tenant_id, "JOB-URGENCY-1")
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.SCHEDULING_FAILED,
+            category="SCHEDULING", severity="CRITICAL", title="fallback", message="fallback",
+            tenant_id=alice.tenant_id, job_id="JOB-URGENCY-1",
+        )
+        subject, _ = render_email(db, notif)
+        assert "[HIGH]" in subject
+        assert "Scheduling failed" in subject
+
+    def test_execution_failed_subject_is_bracketed_critical(self, db, two_users):
+        from app.notify.templates import render_email
+        alice = two_users["alice"]
+        self._job(db, alice.tenant_id, "JOB-URGENCY-2")
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.K8S_JOB_FAILED,
+            category="EXECUTION", severity="CRITICAL", title="fallback", message="fallback",
+            tenant_id=alice.tenant_id, job_id="JOB-URGENCY-2",
+        )
+        subject, _ = render_email(db, notif)
+        assert "[CRITICAL]" in subject
+
+    def test_approval_required_subject_is_not_bracketed(self, db, two_users):
+        from app.notify.templates import render_email
+        alice = two_users["alice"]
+        self._job(db, alice.tenant_id, "JOB-URGENCY-3", status=JobStatus.PENDING_APPROVAL)
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.SCHEDULE_PROPOSED,
+            category="APPROVAL", severity="INFO", title="fallback", message="fallback",
+            tenant_id=alice.tenant_id, job_id="JOB-URGENCY-3",
+        )
+        subject, _ = render_email(db, notif)
+        assert "[HIGH]" not in subject
+        assert "[CRITICAL]" not in subject
+        assert "Approval required" in subject
+
+    def test_workload_scheduled_subject_is_not_bracketed(self, db, two_users):
+        from app.notify.templates import render_email
+        alice = two_users["alice"]
+        self._job(db, alice.tenant_id, "JOB-URGENCY-4", status=JobStatus.APPROVED)
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.JOB_SCHEDULED,
+            category="WORKLOAD", severity="INFO", title="fallback", message="fallback",
+            tenant_id=alice.tenant_id, job_id="JOB-URGENCY-4",
+        )
+        subject, _ = render_email(db, notif)
+        assert "[HIGH]" not in subject
+        assert "[CRITICAL]" not in subject
+        assert "Workload scheduled" in subject
+
+    def test_schedule_declined_includes_real_reason_and_approver(self, db, two_users):
+        from app.notify.templates import render_email
+        from app.shared.models import ApprovalORM, ScheduleDecisionORM
+        alice = two_users["alice"]
+        job = self._job(db, alice.tenant_id, "JOB-URGENCY-5", status=JobStatus.DECLINED)
+        decision = ScheduleDecisionORM(
+            job_id=job.job_id, selected_start=utcnow(), selected_end=utcnow() + timedelta(minutes=30),
+            carbon_intensity=200.0, carbon_emission=0.1, electricity_cost=0.05, reason="test",
+            region_id=job.region, currency="INR", native_cost=4.0,
+        )
+        db.add(decision)
+        db.commit()
+        approval = ApprovalORM(
+            job_id=job.job_id, schedule_decision_id=decision.id, decision="DECLINED",
+            reason="Carbon budget exceeded for this window", approved_by="company_admin_x",
+        )
+        db.add(approval)
+        db.commit()
+
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.APPROVAL_DECLINED,
+            category="APPROVAL", severity="WARNING", title="fallback", message="fallback",
+            tenant_id=alice.tenant_id, job_id=job.job_id,
+        )
+        subject, body = render_email(db, notif)
+        assert "[HIGH]" in subject
+        assert "Carbon budget exceeded for this window" in body
+        assert "company_admin_x" in body
+
+
+class TestNotificationStreamEndpoint:
+    """GET /notifications/stream — authenticated SSE. The endpoint itself
+    only needs an auth smoke test over HTTP (its generator runs forever by
+    design, which a synchronous TestClient can't safely iterate); the
+    generator's actual framing/degradation logic is tested directly as an
+    async generator below, and per-user channel isolation is covered by
+    TestRealtimePublish (publish_notification_event only ever targets the
+    one recipient_user_id passed to it)."""
+
+    def test_stream_requires_authentication(self, db):
+        res = client.get("/notifications/stream")
+        assert res.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_generator_yields_connected_frame_with_realtime_true_when_redis_available(self, db):
+        from app.notify.realtime import notification_event_stream
+        gen = notification_event_stream(user_id=999999)
+        first = await gen.__anext__()
+        assert first == 'event: connected\ndata: {"realtime": true}\n\n'
+        await gen.aclose()
+
+    @pytest.mark.asyncio
+    async def test_generator_degrades_to_realtime_false_when_redis_unavailable(self, db):
+        from app.notify import realtime
+        with patch.object(realtime, "get_redis_client", return_value=None):
+            gen = realtime.notification_event_stream(user_id=999999)
+            first = await gen.__anext__()
+            assert first == 'event: connected\ndata: {"realtime": false}\n\n'
+            await gen.aclose()
+
+    @pytest.mark.asyncio
+    async def test_generator_delivers_a_published_event_to_only_its_own_channel(self, db, two_users):
+        from app.notify.realtime import notification_event_stream, publish_notification_event
+        alice, bob = two_users["alice"], two_users["bob"]
+
+        alice_gen = notification_event_stream(user_id=alice.id)
+        await alice_gen.__anext__()  # consume the "connected" frame
+
+        publish_notification_event(bob.id, {"id": 1, "title": "for bob"})
+        publish_notification_event(alice.id, {"id": 2, "title": "for alice"})
+
+        frame = await asyncio.wait_for(alice_gen.__anext__(), timeout=5.0)
+        assert "for alice" in frame
+        assert "for bob" not in frame
+        await alice_gen.aclose()

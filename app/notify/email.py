@@ -71,6 +71,18 @@ def _deliver_one(db: Session, notif: NotificationORM) -> None:
         notif.email_failed_at = now
         notif.last_error = "Recipient has no email address on file"
         db.commit()
+        try:
+            from app.shared.models import EventType
+            from app.trust.ledger import append_event
+            append_event(
+                db, EventType.EMAIL_DELIVERY_FAILED, job_id=notif.job_id,
+                payload={"notification_id": notif.id, "recipient_user_id": notif.recipient_user_id, "reason": "no_email_on_file"},
+            )
+        except Exception:
+            pass
+        # In-app delivery already happened at creation time (this module only
+        # ever touches the email channel) — the business event itself is
+        # unaffected by the recipient having no email on file.
         return
 
     notif.email_attempts = (notif.email_attempts or 0) + 1

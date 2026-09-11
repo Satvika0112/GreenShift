@@ -40,6 +40,31 @@ def _dedup_key(event_type: EventType, job_id: Optional[str], suffix: Optional[st
     return key
 
 
+_PENDING_APPROVAL_EVENT_TYPES = frozenset({EventType.SCHEDULE_PROPOSED})
+
+
+def _default_action_url(category: str, job_id: Optional[str], event_type: Optional[EventType] = None) -> Optional[str]:
+    """
+    Meaningful, always-real navigation target for a notification, built only
+    from existing frontend routes (see frontend/src/App.tsx):
+      - a still-pending approval request (SCHEDULE_PROPOSED, category
+        APPROVAL) -> the approvals queue, since that's where it can be
+        acted on (no per-job approval route exists to deep-link to)
+      - an already-resolved APPROVAL event (APPROVAL_GRANTED/DECLINED) or
+        any other category with a job_id -> that workload's detail page —
+        once resolved, the approvals queue no longer holds it, and a
+        COMPANY_USER submitter isn't an approver in the first place
+      - no job_id (account/security/system events) -> no destination
+    Never invents a route; a notification with nothing meaningful to link to
+    is left with action_url=None rather than a guessed/broken URL.
+    """
+    if category == "APPROVAL" and event_type in _PENDING_APPROVAL_EVENT_TYPES:
+        return "/approvals"
+    if job_id:
+        return f"/workloads/{job_id}"
+    return None
+
+
 def get_or_create_preferences(db: Session, user_id: int) -> NotificationPreferenceORM:
     """Lazily create an all-enabled preference row on first access."""
     prefs = db.query(NotificationPreferenceORM).filter(NotificationPreferenceORM.user_id == user_id).first()
@@ -121,7 +146,7 @@ def create_notification(
         severity=severity,
         title=title,
         message=message,
-        action_url=action_url,
+        action_url=action_url if action_url is not None else _default_action_url(category, job_id, event_type),
         created_at=utcnow(),
         dedup_key=_dedup_key(event_type, job_id, dedup_suffix),
         email_required=email_required,
@@ -160,6 +185,17 @@ def create_notification(
         )
         return None
     db.refresh(notif)
+
+    try:
+        from app.notify.realtime import publish_notification_event
+        from app.shared.models import NotificationResponse
+        publish_notification_event(
+            recipient_user_id,
+            NotificationResponse.model_validate(notif).model_dump(mode="json"),
+        )
+    except Exception:
+        logger.debug("Realtime publish failed for notification %s", notif.id, exc_info=True)
+
     return notif
 
 

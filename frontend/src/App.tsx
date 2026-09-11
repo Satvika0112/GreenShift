@@ -2,6 +2,8 @@ import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './context/AuthContext';
+import { RealtimeNotificationProvider } from './context/RealtimeNotificationContext';
+import { NotificationToastStack } from './components/notifications/NotificationToastStack';
 import { ProtectedRoute } from './routes/ProtectedRoute';
 import { AppShell } from './components/layout/AppShell';
 import { LoginPage } from './pages/LoginPage';
@@ -54,8 +56,10 @@ export const App: React.FC = () => {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <BrowserRouter>
-          <Suspense fallback={<RouteFallback />}>
-            <Routes>
+          <RealtimeNotificationProvider>
+            <NotificationToastStack />
+            <Suspense fallback={<RouteFallback />}>
+              <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RequestAccessPage />} />
 
@@ -90,6 +94,7 @@ export const App: React.FC = () => {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
+          </RealtimeNotificationProvider>
         </BrowserRouter>
       </AuthProvider>
     </QueryClientProvider>
