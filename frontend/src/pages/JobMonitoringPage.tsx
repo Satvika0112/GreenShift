@@ -10,11 +10,16 @@ import { StatusBadge } from '../components/common/StatusBadge';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
 import { InlineBanner } from '../components/common/InlineBanner';
-import { dispatchApi } from '../api/endpoints';
+import { dispatchApi, workloadsApi } from '../api/endpoints';
 import { KubernetesExecution, KubernetesClusterState } from '../types/api';
+import { useRegions } from '../hooks/useDashboard';
+import { formatRegionalDateTime, formatRegionalTime, resolveRegionTimezone } from '../utils/dateTime';
 
 export const JobMonitoringPage: React.FC = () => {
   const navigate = useNavigate();
+  const regionsQ = useRegions();
+  const regions = regionsQ.data || [];
+  const [jobRegions, setJobRegions] = useState<Record<string, string>>({});
   const [executions, setExecutions] = useState<KubernetesExecution[]>([]);
   const [clusterState, setClusterState] = useState<KubernetesClusterState | null>(null);
   const [k8sHealth, setK8sHealth] = useState<{ kubernetes_available: boolean; namespace: string } | null>(null);
@@ -33,10 +38,11 @@ export const JobMonitoringPage: React.FC = () => {
     }
     setErrorMsg(null);
     try {
-      const [execRes, stateRes, healthRes] = await Promise.allSettled([
+      const [execRes, stateRes, healthRes, jobsRes] = await Promise.allSettled([
         dispatchApi.getAllExecutions(),
         dispatchApi.getK8sState(),
         dispatchApi.getK8sHealth(),
+        workloadsApi.getJobs({ limit: 500 }),
       ]);
 
       if (execRes.status === 'fulfilled' && Array.isArray(execRes.value)) {
@@ -46,6 +52,16 @@ export const JobMonitoringPage: React.FC = () => {
         }
       } else if (execRes.status === 'rejected' && !silent) {
         setErrorMsg('Failed to poll Kubernetes execution telemetry.');
+      }
+      // Execution records don't carry a region themselves (region lives on
+      // the job) — join by job_id so timestamps can render in the
+      // execution's actual execution-region timezone instead of UTC-only.
+      if (jobsRes.status === 'fulfilled' && Array.isArray(jobsRes.value)) {
+        const map: Record<string, string> = {};
+        for (const j of jobsRes.value) {
+          if (j.region) map[j.job_id] = j.region;
+        }
+        setJobRegions(map);
       }
       if (stateRes.status === 'fulfilled') {
         setClusterState(stateRes.value);
@@ -74,6 +90,7 @@ export const JobMonitoringPage: React.FC = () => {
   }, []);
 
   const selectedExec = executions.find((e) => String(e.execution_id) === String(selectedExecId)) || executions[0];
+  const selectedExecTz = selectedExec ? resolveRegionTimezone(regions, jobRegions[selectedExec.job_id]) : undefined;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
@@ -176,7 +193,7 @@ export const JobMonitoringPage: React.FC = () => {
                     </div>
 
                     <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
-                      Started: {exec.actual_start ? new Date(exec.actual_start).toLocaleTimeString() : 'Pending'}
+                      Started: {exec.actual_start ? formatRegionalTime(exec.actual_start, resolveRegionTimezone(regions, jobRegions[exec.job_id])) : 'Pending'}
                     </div>
                   </div>
                 );
@@ -204,13 +221,13 @@ export const JobMonitoringPage: React.FC = () => {
                   <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Execution Planned</div>
                     <div style={{ fontFamily: 'var(--font-mono)', marginTop: '0.2rem' }}>
-                      {selectedExec.planned_start ? new Date(selectedExec.planned_start).toLocaleTimeString() : 'Immediate'}
+                      {selectedExec.planned_start ? formatRegionalTime(selectedExec.planned_start, selectedExecTz) : 'Immediate'}
                     </div>
                   </div>
                   <div style={{ background: 'var(--bg-surface-elevated)', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Execution Concluded</div>
                     <div style={{ fontFamily: 'var(--font-mono)', marginTop: '0.2rem' }}>
-                      {selectedExec.actual_end ? new Date(selectedExec.actual_end).toLocaleTimeString() : 'Active/Running'}
+                      {selectedExec.actual_end ? formatRegionalTime(selectedExec.actual_end, selectedExecTz) : 'Active/Running'}
                     </div>
                   </div>
                 </div>
@@ -232,11 +249,12 @@ export const JobMonitoringPage: React.FC = () => {
                   <DetailRow label="Namespace" value={selectedExec.kubernetes_namespace || selectedExec.namespace || '—'} mono />
                   <DetailRow label="Pod Name" value={selectedExec.pod_name || '—'} mono />
                   {selectedExec.actual_start && (
-                    <DetailRow label="Started" value={new Date(selectedExec.actual_start).toLocaleString()} />
+                    <DetailRow label="Started" value={formatRegionalDateTime(selectedExec.actual_start, selectedExecTz)} />
                   )}
                   {selectedExec.actual_end && (
-                    <DetailRow label="Completed" value={new Date(selectedExec.actual_end).toLocaleString()} />
+                    <DetailRow label="Completed" value={formatRegionalDateTime(selectedExec.actual_end, selectedExecTz)} />
                   )}
+                  <DetailRow label="Execution Region Timezone" value={selectedExecTz || 'DATA UNAVAILABLE'} />
                   {selectedExec.error_message && (
                     <div style={{ marginTop: '0.4rem', padding: '0.6rem 0.75rem', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-sm)', color: '#ef4444' }}>
                       <strong>Error:</strong> {selectedExec.error_message}

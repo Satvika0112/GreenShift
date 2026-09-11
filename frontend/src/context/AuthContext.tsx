@@ -47,9 +47,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(liveUser);
       sessionStorage.setItem('greenshift_user', JSON.stringify(liveUser));
     } catch (err: any) {
-      if (err.response?.status === 401 || err.response?.status === 403) {
-        logout();
-      }
+      // Fail closed on every failure, not just 401/403: the `user` object
+      // resolved on mount comes from client-editable sessionStorage, and
+      // role/tenant/team must only ever be trusted once a real backend
+      // response has confirmed it. A network/5xx hiccup leaving that
+      // unconfirmed value in place (with isLoading flipped to false) would
+      // let role-gated UI render off a value the backend never verified —
+      // logging out and requiring re-login is the safe default here.
+      logout();
     } finally {
       setIsLoading(false);
     }

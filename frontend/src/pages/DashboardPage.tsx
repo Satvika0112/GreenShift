@@ -28,6 +28,8 @@ import { PageHeader } from '../components/layout/PageHeader';
 import { LifecycleStrip } from '../components/dashboard/LifecycleStrip';
 import { JobStatus } from '../types/api';
 import { useAuth } from '../context/AuthContext';
+import { formatCurrency } from '../utils/currency';
+import { formatRegionalDateTime } from '../utils/dateTime';
 import {
   useDashboardSummary,
   useFleetHeadline,
@@ -134,7 +136,11 @@ export const DashboardPage: React.FC = () => {
   const activeDisplay = summaryLoading ? '—' : activeCount;
   const pendingApprovalDisplay = summaryLoading ? '—' : pendingApprovalCount;
   const carbonAvoidedDisplay = carbonAvoidedKg !== undefined ? `${carbonAvoidedKg.toFixed(1)} kg` : carbonCostLoading ? '—' : 'DATA UNAVAILABLE';
-  const costSavedDisplay = costSavedUsd !== undefined ? `$${costSavedUsd.toFixed(2)}` : carbonCostLoading ? '—' : 'DATA UNAVAILABLE';
+  // cost_difference / total_cost_saved_usd are both always USD by model
+  // contract (unlike native_cost) — this is a genuine cross-region USD
+  // aggregate, labeled explicitly since the fleet now spans multiple
+  // native currencies (INR/USD/AUD/SEK) and a bare "$" would be ambiguous.
+  const costSavedDisplay = costSavedUsd !== undefined ? `${formatCurrency(costSavedUsd, 'USD')} (USD)` : carbonCostLoading ? '—' : 'DATA UNAVAILABLE';
   const regionsDisplay = regionsQ.isLoading ? '—' : regions.length;
   const k8sReadyDisplay = k8sStateQ.isLoading ? '—' : k8sState ? `${k8sState.ready_nodes}/${k8sState.total_nodes}` : 'DATA UNAVAILABLE';
 
@@ -665,10 +671,14 @@ export const DashboardPage: React.FC = () => {
                       {a.carbon_emission_kg !== undefined ? `${a.carbon_emission_kg.toFixed(3)} kg` : '—'}
                     </td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: '#38bdf8' }}>
-                      {a.electricity_cost_usd !== undefined ? `$${a.electricity_cost_usd.toFixed(2)}` : '—'}
+                      {a.native_cost !== undefined && a.native_cost !== null && a.currency
+                        ? formatCurrency(a.native_cost, a.currency)
+                        : a.electricity_cost_usd !== undefined
+                        ? formatCurrency(a.electricity_cost_usd, 'USD')
+                        : '—'}
                     </td>
                     <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                      {a.deadline_local ? new Date(a.deadline_local).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                      {formatRegionalDateTime(a.deadline_utc, a.timezone)}
                     </td>
                   </tr>
                 ))}

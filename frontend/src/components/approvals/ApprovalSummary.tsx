@@ -24,9 +24,11 @@ export const ApprovalSummary: React.FC<ApprovalSummaryProps> = ({ item }) => {
         Summary
       </h4>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
-        <Row label="Recommended Region">{item.region}</Row>
-        <Row label="Recommended Start">{formatDateTime(item.selected_start_local)}</Row>
-        <Row label="Deadline">{formatDateTime(item.deadline_local)}</Row>
+        <Row label="Execution Region">{item.region}</Row>
+        <Row label="Timezone">{item.timezone || 'DATA UNAVAILABLE'}</Row>
+        <Row label="Recommended Start">{formatDateTime(item.selected_start_utc, item.timezone)}</Row>
+        <Row label="Recommended End">{formatDateTime(item.selected_end_utc, item.timezone)}</Row>
+        <Row label="Deadline">{formatDateTime(item.deadline_utc, item.timezone)}</Row>
         <Row label="Estimated Carbon" accent="#10b981">{estimatedCarbonDisplay(item)}</Row>
         <Row label="Estimated Cost" accent="#38bdf8">{estimatedCostDisplay(item)}</Row>
         <Row label="Carbon Budget" accent={budget.withinBudget === false ? '#ef4444' : undefined}>{budget.text}</Row>

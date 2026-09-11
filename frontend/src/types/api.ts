@@ -529,3 +529,35 @@ export interface CreateJobInput {
   timezone?: string;
   job_id?: string;
 }
+
+// Matches GET /api/v1/dataset/workloads exactly (app/api/routers/ingest.py
+// list_dataset_workloads). `team` and `dataset_submit_time` are deliberately
+// named apart from `team_id`/`submit_time` on CreateJobInput — they are
+// display-only provenance fields and must never be sent to POST /jobs as-is
+// (team ownership always comes from the authenticated user; the real
+// submission timestamp is always set at actual registration time).
+export interface DatasetWorkloadItem {
+  job_id: string;
+  job_type: string;
+  team: string;
+  priority: string;
+  region: string;
+  dataset_submit_time: string;
+  earliest_start_time: string;
+  deadline: string;
+  runtime_minutes: number;
+  runtime_hours: number;
+  power_kw: number;
+  energy_kwh: number;
+  deferrable: boolean;
+  container_image: string;
+  cpu_request: string;
+  memory_request: string;
+  carbon_budget_kg: number | null;
+}
+
+export interface DatasetWorkloadsResponse {
+  count: number;
+  source: string;
+  workloads: DatasetWorkloadItem[];
+}

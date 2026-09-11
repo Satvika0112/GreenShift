@@ -34,6 +34,14 @@ vi.mock('../hooks/useApprovals', () => ({
   useApprovalHistory: (...args: any[]) => useApprovalHistoryMock(...args),
 }));
 
+const regionsFixture = [
+  { region_id: 'IN-TG', country: 'India', region_name: 'Telangana', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-SO', default_plan: 'ToD', supported_tariff_plans: [], aliases: [], is_active: true },
+  { region_id: 'IN-GJ', country: 'India', region_name: 'Gujarat', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-WE', default_plan: 'ToD', supported_tariff_plans: [], aliases: [], is_active: true },
+];
+vi.mock('../hooks/useDashboard', () => ({
+  useRegions: () => makeQuery(regionsFixture),
+}));
+
 const adminUser: User = {
   id: 1,
   username: 'company_admin',
@@ -202,7 +210,7 @@ describe('ApprovalsPage', () => {
 
       expect(screen.getByRole('dialog')).toBeInTheDocument();
       expect(screen.getByText('Summary')).toBeInTheDocument();
-      expect(screen.getByText('Recommended Region')).toBeInTheDocument();
+      expect(screen.getByText('Execution Region')).toBeInTheDocument();
     });
 
     it('shows the Immediate vs GreenShift comparison using real baseline data', async () => {

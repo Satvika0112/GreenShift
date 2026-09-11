@@ -185,9 +185,6 @@ async def get_current_identity(
 
     Returns AuthenticatedIdentity or raises 401/403.
     """
-    if not settings.auth_enabled:
-        return None  # Dev mode: all endpoints open
-
     # 1. Try JWT Bearer token
     if credentials and credentials.credentials:
         try:
@@ -257,6 +254,10 @@ async def get_current_identity(
                 approval_status="APPROVED",
                 auth_method="api_key",
             )
+
+    # 3. Dev mode passthrough only when NO credentials were provided
+    if not settings.auth_enabled:
+        return None
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

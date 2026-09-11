@@ -23,7 +23,8 @@ import { workloadsApi, schedulingApi } from '../api/endpoints';
 import { Job, JobStatus } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 import { useWorkloads } from '../hooks/useWorkloads';
-import { useDashboardSummary } from '../hooks/useDashboard';
+import { useDashboardSummary, useRegions } from '../hooks/useDashboard';
+import { resolveRegionTimezone } from '../utils/dateTime';
 import {
   formatCarbonKg,
   formatCost,
@@ -72,6 +73,8 @@ export const WorkloadsPage: React.FC = () => {
   const summaryQ = useDashboardSummary();
   const workloadsQ = useWorkloads({ teamId: isPlatformAdmin && teamFilter !== 'ALL' ? teamFilter : undefined });
   const jobs = workloadsQ.data || [];
+  const regionsQ = useRegions();
+  const regions = regionsQ.data || [];
 
   const handleRefresh = () => {
     summaryQ.refetch();
@@ -306,6 +309,7 @@ export const WorkloadsPage: React.FC = () => {
                   <WorkloadRow
                     key={job.job_id}
                     job={job}
+                    timezoneName={resolveRegionTimezone(regions, job.region)}
                     isScheduling={schedulingJobId === job.job_id}
                     onOpen={() => navigate(`/workloads/${job.job_id}`)}
                     onFindSchedule={(e) => handleFindSchedule(job.job_id, e)}
@@ -345,13 +349,14 @@ const FilterSelect: React.FC<FilterSelectProps> = ({ label, value, onChange, opt
 
 interface WorkloadRowProps {
   job: Job;
+  timezoneName?: string;
   isScheduling: boolean;
   onOpen: () => void;
   onFindSchedule: (e: React.MouseEvent) => void;
   onCancel: (e: React.MouseEvent) => void;
 }
 
-const WorkloadRow: React.FC<WorkloadRowProps> = ({ job, isScheduling, onOpen, onFindSchedule, onCancel }) => {
+const WorkloadRow: React.FC<WorkloadRowProps> = ({ job, timezoneName, isScheduling, onOpen, onFindSchedule, onCancel }) => {
   const approval = deriveApprovalStatus(job);
   const action = contextualActionForStatus(job.status);
   const isCancellable = !['COMPLETED', 'CANCELLED', 'FAILED'].includes(job.status);
@@ -366,8 +371,8 @@ const WorkloadRow: React.FC<WorkloadRowProps> = ({ job, isScheduling, onOpen, on
       <td><span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{formatPriority(job.priority)}</span></td>
       <td><span style={{ fontSize: '0.78rem', color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>{job.team_id || '—'}</span></td>
       <td><span style={{ fontSize: '0.78rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{job.region || '—'}</span></td>
-      <td><span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{formatDateTime(job.deadline)}</span></td>
-      <td><span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{recommendedStartDisplay(job)}</span></td>
+      <td><span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{formatDateTime(job.deadline, timezoneName)}</span></td>
+      <td><span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{recommendedStartDisplay(job, timezoneName)}</span></td>
       <td><span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#10b981', fontFamily: 'var(--font-mono)' }}>{formatCarbonKg(job.carbon_emission, { estimated: true })}</span></td>
       <td><span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>{formatCost(job)}</span></td>
       <td><span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{APPROVAL_LABELS[approval]}</span></td>

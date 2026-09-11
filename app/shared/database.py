@@ -229,23 +229,21 @@ def run_schema_migrations() -> None:
         # Ensure SQLite jobs check constraint includes all lifecycle statuses
         if not is_pg:
             try:
-                with engine.connect() as jobs_conn:
-                    row = jobs_conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'")).fetchone()
-                    if row and row[0]:
-                        old_c = "CHECK (status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED'))"
-                        new_c = "CHECK (status IN ('SUBMITTED', 'VALIDATED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'REJECTED', 'QUEUED', 'DISPATCHING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'))"
-                        if old_c in row[0]:
-                            jobs_conn.execute(text("PRAGMA foreign_keys=OFF;"))
-                            new_sql = row[0].replace(old_c, new_c).replace('CREATE TABLE "jobs"', 'CREATE TABLE "jobs_new"')
-                            jobs_conn.execute(text(new_sql))
-                            jobs_conn.execute(text("INSERT INTO jobs_new SELECT * FROM jobs;"))
-                            jobs_conn.execute(text("DROP TABLE jobs;"))
-                            jobs_conn.execute(text("ALTER TABLE jobs_new RENAME TO jobs;"))
-                            jobs_conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_team_status ON jobs (team_id, status);"))
-                            jobs_conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_status_created ON jobs (status, created_at);"))
-                            jobs_conn.execute(text("PRAGMA foreign_keys=ON;"))
-                            jobs_conn.commit()
-                            logger.info("Schema migration: successfully updated SQLite jobs status check constraint")
+                row = conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'")).fetchone()
+                if row and row[0]:
+                    old_c = "CHECK (status IN ('SUBMITTED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED'))"
+                    new_c = "CHECK (status IN ('SUBMITTED', 'VALIDATED', 'SCHEDULED', 'PENDING_APPROVAL', 'APPROVED', 'DECLINED', 'REJECTED', 'QUEUED', 'DISPATCHING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'))"
+                    if old_c in row[0]:
+                        conn.execute(text("PRAGMA foreign_keys=OFF;"))
+                        new_sql = row[0].replace(old_c, new_c).replace('CREATE TABLE "jobs"', 'CREATE TABLE "jobs_new"')
+                        conn.execute(text(new_sql))
+                        conn.execute(text("INSERT INTO jobs_new SELECT * FROM jobs;"))
+                        conn.execute(text("DROP TABLE jobs;"))
+                        conn.execute(text("ALTER TABLE jobs_new RENAME TO jobs;"))
+                        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_team_status ON jobs (team_id, status);"))
+                        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_status_created ON jobs (status, created_at);"))
+                        conn.execute(text("PRAGMA foreign_keys=ON;"))
+                        logger.info("Schema migration: successfully updated SQLite jobs status check constraint")
             except Exception as exc:
                 logger.debug("SQLite check constraint migration skipped: %s", exc)
 

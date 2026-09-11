@@ -25,6 +25,13 @@ vi.mock('../hooks/useWorkloads', () => ({
   useWorkload: (...args: any[]) => useWorkloadMock(...args),
 }));
 
+const regionsFixture = [
+  { region_id: 'IN-TG', country: 'India', region_name: 'Telangana', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-SO', default_plan: 'ToD', supported_tariff_plans: [], aliases: [], is_active: true },
+];
+vi.mock('../hooks/useDashboard', () => ({
+  useRegions: () => makeQuery(regionsFixture),
+}));
+
 function detail(overrides: Partial<WorkloadDetail> = {}): WorkloadDetail {
   return {
     job_id: 'job-1',

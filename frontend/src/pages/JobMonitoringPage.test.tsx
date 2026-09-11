@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { JobMonitoringPage } from './JobMonitoringPage';
-import { dispatchApi } from '../api/endpoints';
+import { dispatchApi, workloadsApi, sustainabilityApi } from '../api/endpoints';
 import {
   runningExecution,
   failedExecution,
@@ -18,13 +19,24 @@ vi.mock('../api/endpoints', () => ({
     getK8sState: vi.fn(),
     getK8sHealth: vi.fn(),
   },
+  workloadsApi: {
+    getJobs: vi.fn().mockResolvedValue([]),
+  },
+  sustainabilityApi: {
+    getRegions: vi.fn().mockResolvedValue([
+      { region_id: 'IN-TG', country: 'India', region_name: 'Telangana', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-SO', default_plan: 'ToD', supported_tariff_plans: [], aliases: [], is_active: true },
+    ]),
+  },
 }));
 
 function renderPage() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter>
-      <JobMonitoringPage />
-    </MemoryRouter>
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <JobMonitoringPage />
+      </MemoryRouter>
+    </QueryClientProvider>
   );
 }
 

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.trust.ledger import verify_chain, get_job_audit, get_events
 from app.shared.database import get_db
 from app.shared.auth import get_current_user
-from app.shared.models import EventType, AuditVerifyResponse, UserORM
+from app.shared.models import EventType, AuditVerifyResponse, AuditEvent, UserORM
 from app.shared.utils import get_logger
 
 logger = get_logger(__name__)
@@ -56,7 +56,8 @@ def list_audit_events(
             query = db.query(AuditEventORM).filter(AuditEventORM.job_id.in_(company_job_ids))
             if event_type:
                 query = query.filter(AuditEventORM.event_type == event_type)
-            events = query.order_by(AuditEventORM.sequence_num.desc()).limit(limit).all()
+            rows = query.order_by(AuditEventORM.sequence.desc()).limit(limit).all()
+            events = [AuditEvent.model_validate(e) for e in rows]
         else:
             events = get_events(db, job_id=None, event_type=event_type, limit=limit)
 

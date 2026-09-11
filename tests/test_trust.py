@@ -250,3 +250,72 @@ class TestAuditLedgerConcurrency:
         finally:
             verify_db.close()
             engine.dispose()
+
+
+class TestAuditEventsRouterNonPlatformAdmin:
+    """Regression test for GET /api/v1/trust/events without a job_id filter,
+    as a non-platform-admin user. Found via live E2E on 2026-09-11: this
+    branch (app/api/routers/trust.py::list_audit_events) referenced a
+    nonexistent AuditEventORM.sequence_num column (the real column is
+    `sequence`), so it 500'd for every COMPANY_ADMIN/COMPANY_USER visiting
+    the Audit & Trust page — the platform-admin and single-job_id branches
+    use a different code path and never exercised this bug."""
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+        from app.api.main import app
+        return TestClient(app)
+
+    @pytest.fixture
+    def company_admin_headers(self, client, db):
+        from app.shared.database import SessionLocal
+        from app.shared.models import TenantORM, UserORM, UserRole, JobSubmitRequest
+        from app.shared.auth import hash_password
+        from app.ingest.jobs import submit_job
+        from app.trust.ledger import append_event
+        from app.shared.utils import utcnow
+        from datetime import timedelta
+
+        with SessionLocal() as setup_db:
+            if not setup_db.query(TenantORM).filter(TenantORM.id == "tenant-trust-evt").first():
+                setup_db.add(TenantORM(id="tenant-trust-evt", name="Trust Events Co", is_active=True))
+            if not setup_db.query(UserORM).filter(UserORM.username == "trust_evt_admin").first():
+                setup_db.add(UserORM(
+                    username="trust_evt_admin",
+                    email="trust_evt_admin@greenshift.io",
+                    hashed_password=hash_password("TrustEvt123!"),
+                    role=UserRole.COMPANY_ADMIN,
+                    tenant_id="tenant-trust-evt",
+                    team_id="team-trust-evt",
+                    is_active=True,
+                ))
+            setup_db.commit()
+
+            job = submit_job(
+                setup_db,
+                JobSubmitRequest(
+                    job_id="JOB-TRUST-EVT-001",
+                    team_id="team-trust-evt",
+                    deadline=utcnow() + timedelta(hours=8),
+                    runtime_minutes=30,
+                    power_kw=1.0,
+                    region="IN-TG",
+                    container_image="greenshift/sample-workload:latest",
+                ),
+                tenant_id="tenant-trust-evt",
+            )
+            append_event(setup_db, EventType.JOB_SUBMITTED, job_id=job.job_id, payload={})
+
+        token = client.post("/auth/login", json={
+            "username": "trust_evt_admin",
+            "password": "TrustEvt123!",
+        }).json()["access_token"]
+        return {"Authorization": f"Bearer {token}"}
+
+    def test_list_events_as_company_admin_without_job_filter_returns_200(self, client, company_admin_headers):
+        resp = client.get("/api/v1/trust/events", headers=company_admin_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "events" in body
+        assert any(e["job_id"] == "JOB-TRUST-EVT-001" for e in body["events"])

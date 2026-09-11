@@ -36,6 +36,7 @@ export const PendingApprovalCard: React.FC<PendingApprovalCardProps> = ({ item, 
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
               {formatPriority(item.priority)} • Team {item.team_id} • {item.region}
+              {item.timezone ? ` · ${item.timezone}` : ''}
             </div>
           </div>
 
@@ -45,8 +46,11 @@ export const PendingApprovalCard: React.FC<PendingApprovalCardProps> = ({ item, 
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.85rem', fontSize: '0.8rem' }}>
-          <Metric label="Deadline" value={formatDateTime(item.deadline_local)} />
-          <Metric label="Recommended Start" value={recommendedStartDisplay({ status: item.status, selected_start: item.selected_start_local, actual_start: undefined })} />
+          <Metric label="Deadline" value={formatDateTime(item.deadline_utc, item.timezone)} />
+          <Metric
+            label="Recommended Start"
+            value={recommendedStartDisplay({ status: item.status, selected_start: item.selected_start_utc, actual_start: undefined }, item.timezone)}
+          />
           <Metric label="Estimated Carbon" value={estimatedCarbonDisplay(item)} accent="#10b981" />
           <Metric label="Estimated Cost" value={estimatedCostDisplay(item)} accent="#38bdf8" />
           {reduction && <Metric label="vs Immediate Execution" value={reduction} accent="#10b981" />}

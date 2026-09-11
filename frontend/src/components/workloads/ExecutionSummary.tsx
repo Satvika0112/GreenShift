@@ -8,6 +8,7 @@ import { formatDateTime } from '../../utils/workloadDisplay';
 
 interface ExecutionSummaryProps {
   job: WorkloadDetail;
+  timezoneName?: string;
 }
 
 const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
@@ -26,7 +27,7 @@ function durationDisplay(startIso?: string | null, endIso?: string | null): stri
   return `${minutes} min`;
 }
 
-export const ExecutionSummary: React.FC<ExecutionSummaryProps> = ({ job }) => {
+export const ExecutionSummary: React.FC<ExecutionSummaryProps> = ({ job, timezoneName }) => {
   const navigate = useNavigate();
   const execution = job.kubernetes;
   const canDispatchSoon = ['APPROVED', 'READY', 'QUEUED', 'CLAIMING'].includes(job.status);
@@ -53,8 +54,8 @@ export const ExecutionSummary: React.FC<ExecutionSummaryProps> = ({ job }) => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
           <Row label="Execution Status">{execution.gs_status || execution.k8s_status || '—'}</Row>
           <Row label="Queue Time">{durationDisplay(execution.planned_start, execution.actual_start)}</Row>
-          <Row label="Start Time">{formatDateTime(execution.actual_start)}</Row>
-          <Row label="Completion Time">{formatDateTime(execution.actual_end)}</Row>
+          <Row label="Start Time">{formatDateTime(execution.actual_start, timezoneName)}</Row>
+          <Row label="Completion Time">{formatDateTime(execution.actual_end, timezoneName)}</Row>
           <Row label="Actual Runtime">{durationDisplay(execution.actual_start, execution.actual_end)}</Row>
           <Row label="Kubernetes Job">{execution.kubernetes_job_name || '—'}</Row>
           <Row label="Pod">{execution.pod_name || '—'}</Row>

@@ -23,8 +23,14 @@ vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({ user: mockUser, isPlatformAdmin: mockUser.role === 'PLATFORM_ADMIN' }),
 }));
 
+const regionsFixture = [
+  { region_id: 'IN-TG', country: 'India', region_name: 'Telangana', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-SO', default_plan: 'ToD', supported_tariff_plans: [], aliases: [], is_active: true },
+];
+let regionsQ: any;
+
 vi.mock('../hooks/useDashboard', () => ({
   useDashboardSummary: () => summaryQ,
+  useRegions: () => regionsQ,
 }));
 
 const useWorkloadsMock = vi.fn((..._args: any[]) => workloadsQ);
@@ -69,6 +75,7 @@ const summaryFixture = {
 
 function resetQueries() {
   summaryQ = makeQuery(summaryFixture);
+  regionsQ = makeQuery(regionsFixture);
   workloadsQ = makeQuery([
     job({ job_id: 'job-submitted', status: 'SUBMITTED', priority: 'LOW', selected_start: null }),
     job({ job_id: 'job-pending', status: 'PENDING_APPROVAL', priority: 'HIGH' }),

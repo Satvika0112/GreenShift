@@ -6,6 +6,7 @@ import { formatDateTime, formatPriority, workloadDisplayName } from '../../utils
 
 interface WorkloadOverviewProps {
   job: WorkloadDetail;
+  timezoneName?: string;
 }
 
 const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
@@ -15,7 +16,7 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
   </div>
 );
 
-export const WorkloadOverview: React.FC<WorkloadOverviewProps> = ({ job }) => (
+export const WorkloadOverview: React.FC<WorkloadOverviewProps> = ({ job, timezoneName }) => (
   <GlassCard title="Overview">
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
       <Row label="Workload">{workloadDisplayName(job)}</Row>
@@ -24,8 +25,8 @@ export const WorkloadOverview: React.FC<WorkloadOverviewProps> = ({ job }) => (
       <Row label="Priority">{formatPriority(job.priority)}</Row>
       <Row label="Team"><span style={{ color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>{job.team_id || '—'}</span></Row>
       <Row label="Job Type">{job.job_type || '—'}</Row>
-      <Row label="Submitted At">{formatDateTime(job.submitted_at)}</Row>
-      <Row label="Deadline">{formatDateTime(job.deadline)}</Row>
+      <Row label="Submitted At">{formatDateTime(job.submitted_at, timezoneName)}</Row>
+      <Row label="Deadline">{formatDateTime(job.deadline, timezoneName)}</Row>
       <Row label="Deferrable">{job.deferrable === undefined ? '—' : job.deferrable ? 'Yes' : 'No'}</Row>
     </div>
   </GlassCard>

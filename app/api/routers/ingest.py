@@ -132,6 +132,62 @@ def bulk_load_jobs_from_csv(
         raise HTTPException(status_code=500, detail="An error occurred while bulk-loading jobs.")
 
 
+@router.get("/dataset/workloads", response_model=dict)
+def list_dataset_workloads(
+    region: Optional[str] = Query(None, description="Filter to a single region_id"),
+    limit: int = Query(1000, ge=1, le=2000),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """
+    Read-only browse of the real workload dataset (data/greenshift_workloads_final.csv)
+    so a user can pick a row to prefill Submit Workload. This does NOT write to the
+    database — it wraps the existing CSV loader used by bulk-load/arrival-simulation.
+
+    Field names are deliberately distinct from the submission contract for the two
+    fields that must never be sent back to POST /jobs as-is:
+      - `team`               (dataset's simulated owner — display only; the real
+                               team_id always comes from the authenticated user)
+      - `dataset_submit_time` (dataset's original submit_time — display only; the
+                               real submitted_at is always set at actual API
+                               registration time, never overwritten from this)
+    `earliest_start_time`/`deadline` are already UTC-normalized and re-anchored to
+    the future by the loader and ARE safe to submit as-is.
+    """
+    from app.ingest.job_csv_loader import load_jobs_from_csv
+    from app.shared.config import settings
+
+    csv_path = settings.job_data_path
+    jobs, _errors = load_jobs_from_csv(csv_path, reanchor_historical=True, validate_regions=True)
+
+    if region:
+        jobs = [j for j in jobs if j["region"] == region]
+    jobs = jobs[:limit]
+
+    workloads = [
+        {
+            "job_id": j["job_id"],
+            "job_type": j["job_type"],
+            "team": j["team_id"],
+            "priority": j["priority"],
+            "region": j["region"],
+            "dataset_submit_time": j["submit_time"].isoformat(),
+            "earliest_start_time": j["earliest_start_time"].isoformat(),
+            "deadline": j["deadline"].isoformat(),
+            "runtime_minutes": j["runtime_minutes"],
+            "runtime_hours": round(j["runtime_minutes"] / 60.0, 2),
+            "power_kw": j["power_kw"],
+            "energy_kwh": j["energy_kwh"],
+            "deferrable": j["deferrable"],
+            "container_image": j["container_image"],
+            "cpu_request": j["cpu_request"],
+            "memory_request": j["memory_request"],
+            "carbon_budget_kg": j["carbon_budget_kg"],
+        }
+        for j in jobs
+    ]
+    return {"count": len(workloads), "source": csv_path, "workloads": workloads}
+
+
 @router.get("/jobs", response_model=List[dict])
 def list_all_jobs(
     team_id: Optional[str] = Query(None),

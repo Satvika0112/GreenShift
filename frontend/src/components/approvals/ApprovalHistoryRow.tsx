@@ -4,9 +4,10 @@ import { formatDateTime } from '../../utils/workloadDisplay';
 
 interface ApprovalHistoryRowProps {
   item: ApprovalHistoryItem;
+  timezoneName?: string;
 }
 
-export const ApprovalHistoryRow: React.FC<ApprovalHistoryRowProps> = ({ item }) => {
+export const ApprovalHistoryRow: React.FC<ApprovalHistoryRowProps> = ({ item, timezoneName }) => {
   const isApproved = item.decision === 'APPROVED';
   return (
     <tr>
@@ -23,9 +24,9 @@ export const ApprovalHistoryRow: React.FC<ApprovalHistoryRowProps> = ({ item }) 
         </span>
       </td>
       <td><span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{item.region || '—'}</span></td>
-      <td><span style={{ fontSize: '0.8rem' }}>{item.scheduled_start_utc ? formatDateTime(item.scheduled_start_utc) : '—'}</span></td>
+      <td><span style={{ fontSize: '0.8rem' }}>{item.scheduled_start_utc ? formatDateTime(item.scheduled_start_utc, timezoneName) : '—'}</span></td>
       <td><span style={{ color: '#38bdf8', fontSize: '0.8rem' }}>{item.decided_by || '—'}</span></td>
-      <td><span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{formatDateTime(item.decided_at)}</span></td>
+      <td><span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{formatDateTime(item.decided_at, timezoneName)}</span></td>
       <td><span style={{ fontSize: '0.8rem', color: isApproved ? 'var(--text-secondary)' : '#ef4444' }}>{item.reason || '—'}</span></td>
     </tr>
   );

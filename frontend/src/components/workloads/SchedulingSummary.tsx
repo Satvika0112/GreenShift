@@ -10,6 +10,7 @@ interface SchedulingSummaryProps {
   onFindSchedule: () => void;
   isScheduling: boolean;
   onViewFullAnalysis: () => void;
+  timezoneName?: string;
 }
 
 const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
@@ -19,7 +20,7 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
   </div>
 );
 
-export const SchedulingSummary: React.FC<SchedulingSummaryProps> = ({ job, onFindSchedule, isScheduling, onViewFullAnalysis }) => {
+export const SchedulingSummary: React.FC<SchedulingSummaryProps> = ({ job, onFindSchedule, isScheduling, onViewFullAnalysis, timezoneName }) => {
   const decision = job.schedule_decision;
   const approval = deriveApprovalStatus({ status: job.status, selected_start: decision?.selected_start });
 
@@ -45,11 +46,11 @@ export const SchedulingSummary: React.FC<SchedulingSummaryProps> = ({ job, onFin
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
           <Row label="Recommended Region"><span style={{ fontFamily: 'var(--font-mono)' }}>{decision.region_id || '—'}</span></Row>
-          <Row label="Recommended Start">{formatDateTime(decision.selected_start)}</Row>
+          <Row label="Recommended Start">{formatDateTime(decision.selected_start, timezoneName)}</Row>
           <Row label="Estimated Carbon">{formatCarbonKg(decision.carbon_emission, { estimated: true })}</Row>
           <Row label="Estimated Cost">{formatCost(decision)}</Row>
           <Row label="Carbon Budget">{job.carbon_budget_kg ? `${job.carbon_budget_kg} kg CO₂` : 'Unconstrained'}</Row>
-          <Row label="Deadline">{formatDateTime(job.deadline)}</Row>
+          <Row label="Deadline">{formatDateTime(job.deadline, timezoneName)}</Row>
           <Row label="Approval">{APPROVAL_LABELS[approval]}</Row>
         </div>
       )}

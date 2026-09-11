@@ -1,17 +1,18 @@
 import { Job, JobStatus, WorkloadDetail } from '../types/api';
+import { formatRegionalDateTime, formatRegionalDate } from './dateTime';
+import { formatCurrency } from './currency';
 
-export function formatDateTime(iso?: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+// Thin wrappers kept for call-site familiarity — both delegate to the one
+// shared timezone-aware formatter in utils/dateTime.ts so there is a single
+// place that ever does a UTC -> region-local conversion. `timezoneName` is
+// required (not optional) so a call site can't silently fall back to the
+// browser's local timezone by forgetting to resolve one.
+export function formatDateTime(iso?: string | null, timezoneName?: string | null): string {
+  return formatRegionalDateTime(iso, timezoneName);
 }
 
-export function formatDate(iso?: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+export function formatDate(iso?: string | null, timezoneName?: string | null): string {
+  return formatRegionalDate(iso, timezoneName);
 }
 
 export function formatPriority(priority?: string | number | null): string {
@@ -31,10 +32,10 @@ interface CostFields {
 // prefer the native figure so we never mislabel USD as a native amount.
 export function formatCost(fields: CostFields): string {
   if (fields.native_cost !== undefined && fields.native_cost !== null && fields.currency) {
-    return `${fields.native_cost.toFixed(2)} ${fields.currency}`;
+    return formatCurrency(fields.native_cost, fields.currency);
   }
   if (fields.electricity_cost !== undefined && fields.electricity_cost !== null) {
-    return `$${fields.electricity_cost.toFixed(2)}`;
+    return formatCurrency(fields.electricity_cost, 'USD');
   }
   return '—';
 }
@@ -46,9 +47,12 @@ export function formatCarbonKg(kg?: number | null, options?: { estimated?: boole
   return `${kg.toFixed(2)} kg CO₂${options?.estimated ? ' (est.)' : ''}`;
 }
 
-export function recommendedStartDisplay(job: Pick<Job, 'status' | 'selected_start' | 'actual_start'>): string {
-  if (job.actual_start) return `Executed · ${formatDateTime(job.actual_start)}`;
-  if (job.selected_start) return formatDateTime(job.selected_start);
+export function recommendedStartDisplay(
+  job: Pick<Job, 'status' | 'selected_start' | 'actual_start'>,
+  timezoneName?: string | null
+): string {
+  if (job.actual_start) return `Executed · ${formatDateTime(job.actual_start, timezoneName)}`;
+  if (job.selected_start) return formatDateTime(job.selected_start, timezoneName);
   return 'Not scheduled';
 }
 

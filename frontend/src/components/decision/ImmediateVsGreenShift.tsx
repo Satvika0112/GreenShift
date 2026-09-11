@@ -1,6 +1,7 @@
 import React from 'react';
 import { Zap, Leaf, ArrowRight } from 'lucide-react';
 import { GlassCard } from '../common/GlassCard';
+import { formatCurrency } from '../../utils/currency';
 
 interface ImmediateVsGreenShiftProps {
   decision: any;
@@ -12,8 +13,7 @@ function formatKg(n?: number | null): string {
 }
 
 function formatCost(n?: number | null, currency?: string): string {
-  if (n === undefined || n === null) return '—';
-  return currency && currency !== 'USD' ? `${n.toFixed(2)} ${currency}` : `$${n.toFixed(2)}`;
+  return formatCurrency(n, currency || 'USD');
 }
 
 /**

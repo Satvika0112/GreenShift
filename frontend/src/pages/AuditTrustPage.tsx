@@ -18,6 +18,7 @@ import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
 import { auditApi } from '../api/endpoints';
 import { AuditEvent, AnchorStatus } from '../types/api';
+import { formatRegionalDateTime } from '../utils/dateTime';
 
 export const AuditTrustPage: React.FC = () => {
   const [events, setEvents] = useState<AuditEvent[]>([]);
@@ -287,7 +288,7 @@ export const AuditTrustPage: React.FC = () => {
                     </td>
                     <td>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        {new Date(evt.timestamp).toLocaleString()}
+                        {formatRegionalDateTime(evt.timestamp, 'UTC')}
                       </span>
                     </td>
                     <td>

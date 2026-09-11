@@ -7,18 +7,22 @@ import { WorkloadInformationSection } from '../components/submit/WorkloadInforma
 import { ExecutionRequirementsSection } from '../components/submit/ExecutionRequirementsSection';
 import { SchedulingPolicySection } from '../components/submit/SchedulingPolicySection';
 import { SustainabilityConstraintsSection } from '../components/submit/SustainabilityConstraintsSection';
+import { DatasetWorkloadPicker } from '../components/submit/DatasetWorkloadPicker';
 import { WhatHappensNext } from '../components/submit/WhatHappensNext';
 import { SubmissionSuccess } from '../components/submit/SubmissionSuccess';
 import { workloadsApi } from '../api/endpoints';
-import { CreateJobInput, JobSubmitResult } from '../types/api';
+import { CreateJobInput, DatasetWorkloadItem, JobSubmitResult } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 import { useRegions } from '../hooks/useDashboard';
+import { toRegionalInputValue } from '../utils/dateTime';
 import {
   SubmitWorkloadFormState,
   validateSubmitWorkloadForm,
   mapSubmitWorkloadError,
   SubmitWorkloadErrorSummary,
 } from '../utils/submitWorkloadForm';
+
+type WorkloadSource = 'new' | 'dataset';
 
 const INITIAL_FORM: SubmitWorkloadFormState = {
   workloadName: '',
@@ -48,11 +52,60 @@ export const SubmitWorkloadPage: React.FC = () => {
   const [submitError, setSubmitError] = useState<SubmitWorkloadErrorSummary | null>(null);
   const [result, setResult] = useState<JobSubmitResult | null>(null);
 
+  const [workloadSource, setWorkloadSource] = useState<WorkloadSource>('new');
+  const [selectedDataset, setSelectedDataset] = useState<DatasetWorkloadItem | null>(null);
+  const [datasetTimingOverridden, setDatasetTimingOverridden] = useState(false);
+
   const updateField = <K extends keyof SubmitWorkloadFormState>(key: K, value: SubmitWorkloadFormState[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
   const selectedRegion = regions.find((r) => r.region_id === form.region);
+
+  const handleWorkloadSourceChange = (source: WorkloadSource) => {
+    setWorkloadSource(source);
+    setSelectedDataset(null);
+    setDatasetTimingOverridden(false);
+    if (source === 'new') {
+      setForm(INITIAL_FORM);
+    }
+  };
+
+  // Maps every dataset-sourced field into the same form state the manual
+  // form uses. `earliestStart`/`deadline` are set to the dataset's raw UTC
+  // ISO strings (not datetime-local strings) — normalize_to_utc passes an
+  // already-aware timestamp through unchanged, so this does not
+  // double-convert. Team is intentionally never populated here.
+  const handleDatasetSelect = (item: DatasetWorkloadItem) => {
+    setSelectedDataset(item);
+    setDatasetTimingOverridden(false);
+    setForm((prev) => ({
+      ...prev,
+      workloadName: prev.workloadName.trim() ? prev.workloadName : `${item.job_type} — ${item.job_id}`,
+      jobType: item.job_type,
+      priority: item.priority,
+      containerImage: item.container_image,
+      region: item.region,
+      runtimeMinutes: String(item.runtime_minutes),
+      powerKw: String(item.power_kw),
+      cpuRequest: item.cpu_request,
+      memoryRequest: item.memory_request,
+      earliestStart: item.earliest_start_time,
+      deadline: item.deadline,
+      deferrable: item.deferrable,
+      carbonBudgetKg: item.carbon_budget_kg !== null && item.carbon_budget_kg !== undefined ? String(item.carbon_budget_kg) : '',
+    }));
+  };
+
+  const handleOverrideDatasetTiming = () => {
+    const regionTz = selectedDataset ? regions.find((r) => r.region_id === selectedDataset.region)?.timezone : undefined;
+    setForm((prev) => ({
+      ...prev,
+      earliestStart: toRegionalInputValue(prev.earliestStart, regionTz),
+      deadline: toRegionalInputValue(prev.deadline, regionTz),
+    }));
+    setDatasetTimingOverridden(true);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,9 +135,11 @@ export const SubmitWorkloadPage: React.FC = () => {
         workload_name: form.workloadName.trim(),
         team_id: teamId,
         region: form.region,
-        // Sent as the raw local wall-clock value — the backend normalizes it
-        // to UTC using the selected region's timezone (app/shared/timezone.py
-        // normalize_to_utc), so this is not converted client-side.
+        // Create-new / overridden dataset timing: a raw local wall-clock
+        // value the backend normalizes to UTC using the region's timezone
+        // (app/shared/timezone.py normalize_to_utc). Unmodified dataset
+        // timing: already an aware UTC ISO string, which normalize_to_utc
+        // passes through unchanged. Either way, not converted client-side.
         deadline: form.deadline,
         earliest_start_time: form.earliestStart || undefined,
         runtime_minutes: Number(form.runtimeMinutes),
@@ -145,6 +200,36 @@ export const SubmitWorkloadPage: React.FC = () => {
           </InlineBanner>
         )}
 
+        <div className="glass-card" style={{ padding: '1rem 1.25rem' }}>
+          <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.6rem', color: 'var(--text-secondary)' }}>Workload Source</div>
+          <div role="radiogroup" aria-label="Workload source" style={{ display: 'flex', gap: '0.6rem' }}>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={workloadSource === 'new'}
+              className={workloadSource === 'new' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+              onClick={() => handleWorkloadSourceChange('new')}
+              disabled={isSubmitting}
+            >
+              Create New Workload
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={workloadSource === 'dataset'}
+              className={workloadSource === 'dataset' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+              onClick={() => handleWorkloadSourceChange('dataset')}
+              disabled={isSubmitting}
+            >
+              Use Existing Workload Dataset
+            </button>
+          </div>
+        </div>
+
+        {workloadSource === 'dataset' && (
+          <DatasetWorkloadPicker selected={selectedDataset} onSelect={handleDatasetSelect} disabled={isSubmitting} />
+        )}
+
         <WorkloadInformationSection form={form} errors={errors} disabled={isSubmitting} onChange={updateField} />
 
         <ExecutionRequirementsSection
@@ -158,7 +243,17 @@ export const SubmitWorkloadPage: React.FC = () => {
           onRetryRegions={() => regionsQ.refetch()}
         />
 
-        <SchedulingPolicySection form={form} errors={errors} disabled={isSubmitting} onChange={updateField} regionTimezone={selectedRegion?.timezone} />
+        <SchedulingPolicySection
+          form={form}
+          errors={errors}
+          disabled={isSubmitting}
+          onChange={updateField}
+          regionTimezone={selectedRegion?.timezone}
+          datasetLocked={workloadSource === 'dataset' && !!selectedDataset && !datasetTimingOverridden}
+          datasetJobId={selectedDataset?.job_id}
+          datasetSubmitTime={selectedDataset?.dataset_submit_time}
+          onOverrideDatasetTiming={handleOverrideDatasetTiming}
+        />
 
         <SustainabilityConstraintsSection form={form} errors={errors} disabled={isSubmitting} onChange={updateField} />
 

@@ -63,9 +63,9 @@ describe('ImmediateVsGreenShift', () => {
       // fullDecisionWithBaseline: currency="INR", but baseline_cost and electricity_cost
       // are both USD-normalized (0.0858 each in this fixture).
       render(<ImmediateVsGreenShift decision={fullDecisionWithBaseline} />);
-      const usdValues = screen.getAllByText('$0.09');
+      const usdValues = screen.getAllByText('$0.0858');
       expect(usdValues.length).toBe(2); // one for baseline, one for GreenShift
-      expect(screen.queryByText(/0\.09\s*INR/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/0\.0858\s*INR/)).not.toBeInTheDocument();
     });
 
     it('labels native-currency-only costs correctly when USD fields are absent', () => {
@@ -78,8 +78,8 @@ describe('ImmediateVsGreenShift', () => {
         // electricity_cost / baseline_cost intentionally absent
       };
       render(<ImmediateVsGreenShift decision={nativeOnlyBoth} />);
-      expect(screen.getByText('8.00 INR')).toBeInTheDocument();
-      expect(screen.getByText('7.15 INR')).toBeInTheDocument();
+      expect(screen.getByText('₹8.00')).toBeInTheDocument();
+      expect(screen.getByText('₹7.15')).toBeInTheDocument();
     });
 
     it('displays scheduling delay and SLA when provided', () => {

@@ -15,6 +15,7 @@ import { EmptyState } from '../components/common/EmptyState';
 import { InlineBanner } from '../components/common/InlineBanner';
 import { monitoringApi, reportsApi } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
+import { formatCurrency } from '../utils/currency';
 
 export const ImpactReportsPage: React.FC = () => {
   const { user, isAdmin } = useAuth();
@@ -146,9 +147,9 @@ export const ImpactReportsPage: React.FC = () => {
               color="cyan"
             />
             <KPICard
-              title="Energy Cost Savings"
-              value={totalCostSaved !== undefined ? `$${totalCostSaved.toFixed(2)}` : 'DATA UNAVAILABLE'}
-              subtitle="Time-of-Day tariff arbitrage"
+              title="Energy Cost Savings (USD)"
+              value={totalCostSaved !== undefined ? formatCurrency(totalCostSaved, 'USD') : 'DATA UNAVAILABLE'}
+              subtitle="Time-of-Day tariff arbitrage — fleet aggregate, always USD"
               icon={DollarSign}
               color="amber"
             />
@@ -191,7 +192,7 @@ export const ImpactReportsPage: React.FC = () => {
                         </td>
                         <td>
                           <span style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>
-                            {data.total_cost_saved_usd ? `$${data.total_cost_saved_usd.toFixed(2)}` : '$0.00'}
+                            {formatCurrency(data.total_cost_saved_usd || 0, 'USD')}
                           </span>
                         </td>
                         <td>
@@ -236,7 +237,7 @@ export const ImpactReportsPage: React.FC = () => {
                         </td>
                         <td>
                           <span style={{ fontFamily: 'var(--font-mono)', color: '#ffffff' }}>
-                            {data.total_cost_saved_usd ? `$${data.total_cost_saved_usd.toFixed(2)}` : '$0.00'}
+                            {formatCurrency(data.total_cost_saved_usd || 0, 'USD')}
                           </span>
                         </td>
                       </tr>

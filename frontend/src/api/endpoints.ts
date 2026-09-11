@@ -25,6 +25,7 @@ import {
   AuditVerifyResponse,
   AnchorStatus,
   AnchorCreateResult,
+  DatasetWorkloadsResponse,
 } from '../types/api';
 
 // ==========================================
@@ -184,6 +185,13 @@ export const workloadsApi = {
     const res = await apiClient.post('/api/v1/jobs/bulk-load', null, {
       params: { csv_path: csvPath },
     });
+    return res.data;
+  },
+
+  // Read-only browse of the real workload dataset for the Submit Workload
+  // "Use Existing Workload Dataset" picker — never writes to the database.
+  getDatasetWorkloads: async (params?: { region?: string }): Promise<DatasetWorkloadsResponse> => {
+    const res = await apiClient.get<DatasetWorkloadsResponse>('/api/v1/dataset/workloads', { params });
     return res.data;
   },
 };

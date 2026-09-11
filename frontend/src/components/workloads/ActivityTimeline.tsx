@@ -7,9 +7,10 @@ import { auditEventLabel, formatDateTime } from '../../utils/workloadDisplay';
 
 interface ActivityTimelineProps {
   events: AuditEvent[];
+  timezoneName?: string;
 }
 
-export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({ events }) => {
+export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({ events, timezoneName }) => {
   const navigate = useNavigate();
   const ordered = [...events].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
 
@@ -44,7 +45,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({ events }) =>
               }}
             >
               <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{auditEventLabel(evt.event_type)}</span>
-              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{formatDateTime(evt.timestamp)}</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{formatDateTime(evt.timestamp, timezoneName)}</span>
             </div>
           ))}
         </div>

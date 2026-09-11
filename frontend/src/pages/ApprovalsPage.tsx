@@ -8,6 +8,7 @@ import { InlineBanner } from '../components/common/InlineBanner';
 import { approvalsApi } from '../api/endpoints';
 import { PendingApprovalItem } from '../types/api';
 import { useAuth } from '../context/AuthContext';
+import { useRegions } from '../hooks/useDashboard';
 import { usePendingApprovals, useApprovalHistory } from '../hooks/useApprovals';
 import { PendingApprovalCard } from '../components/approvals/PendingApprovalCard';
 import { ApprovalReviewModal } from '../components/approvals/ApprovalReviewModal';
@@ -32,6 +33,8 @@ export const ApprovalsPage: React.FC = () => {
   const teamFilter = isAdmin ? undefined : user?.team_id;
   const pendingQ = usePendingApprovals(teamFilter);
   const historyQ = useApprovalHistory(teamFilter);
+  const regionsQ = useRegions();
+  const regions = regionsQ.data || [];
 
   const pendingItems = pendingQ.data || [];
   const historyItems = historyQ.data || [];
@@ -149,7 +152,7 @@ export const ApprovalsPage: React.FC = () => {
           </div>
         )
       ) : (
-        <ApprovalHistory items={historyItems} isLoading={historyQ.isLoading} isError={historyQ.isError} onRetry={() => historyQ.refetch()} />
+        <ApprovalHistory items={historyItems} regions={regions} isLoading={historyQ.isLoading} isError={historyQ.isError} onRetry={() => historyQ.refetch()} />
       )}
 
       {selectedItem && (

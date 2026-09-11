@@ -68,9 +68,9 @@ describe('GreenShiftRecommendation', () => {
     it('does NOT label the USD-normalized electricity_cost with the native currency', () => {
       // fullDecisionWithBaseline has currency="INR" but electricity_cost is USD-normalized.
       render(<GreenShiftRecommendation decision={fullDecisionWithBaseline} />);
-      // The real value is 0.0858 USD -> "$0.09". It must never render as "0.09 INR".
-      expect(screen.getByText('$0.09')).toBeInTheDocument();
-      expect(screen.queryByText(/0\.09\s*INR/)).not.toBeInTheDocument();
+      // The real value is 0.0858 USD -> "$0.0858". It must never render as "0.0858 INR".
+      expect(screen.getByText('$0.0858')).toBeInTheDocument();
+      expect(screen.queryByText(/0\.0858\s*INR/)).not.toBeInTheDocument();
     });
 
     it('DOES label native_cost with the native currency when electricity_cost is absent', () => {
@@ -83,12 +83,12 @@ describe('GreenShiftRecommendation', () => {
         // electricity_cost intentionally omitted
       };
       render(<GreenShiftRecommendation decision={nativeOnly} />);
-      expect(screen.getByText('7.15 INR')).toBeInTheDocument();
+      expect(screen.getByText('₹7.15')).toBeInTheDocument();
     });
 
     it('treats decisionWithoutBaseline (real POST /schedule/{id} shape) the same way', () => {
       render(<GreenShiftRecommendation decision={decisionWithoutBaseline} />);
-      expect(screen.getByText('$0.09')).toBeInTheDocument();
+      expect(screen.getByText('$0.0858')).toBeInTheDocument();
     });
   });
 });

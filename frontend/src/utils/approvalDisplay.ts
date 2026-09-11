@@ -17,8 +17,11 @@ export function baselineCostDisplay(item: Pick<PendingApprovalItem, 'baseline_na
   return formatCost({ native_cost: item.baseline_native_cost, currency: item.currency, electricity_cost: item.baseline_cost_usd });
 }
 
-export function baselineStartDisplay(item: Pick<PendingApprovalItem, 'baseline_start_local'>): string {
-  return item.baseline_start_local ? formatDateTime(item.baseline_start_local) : '—';
+// Converts from the UTC value + the item's own IANA timezone (rather than
+// trusting the precomputed `_local` field's embedded numeric offset) so this
+// goes through the one shared formatter like every other page.
+export function baselineStartDisplay(item: Pick<PendingApprovalItem, 'baseline_start_utc' | 'timezone'>): string {
+  return item.baseline_start_utc ? formatDateTime(item.baseline_start_utc, item.timezone) : '—';
 }
 
 // The backend already computes carbon_reduction_pct on the schedule

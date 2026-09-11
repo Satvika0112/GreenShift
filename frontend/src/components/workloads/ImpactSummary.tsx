@@ -6,6 +6,7 @@ import { GlassCard } from '../common/GlassCard';
 import { WorkloadDetail } from '../../types/api';
 import { monitoringApi } from '../../api/endpoints';
 import { formatCarbonKg } from '../../utils/workloadDisplay';
+import { formatCurrency } from '../../utils/currency';
 
 interface ImpactSummaryProps {
   job: WorkloadDetail;
@@ -58,7 +59,7 @@ export const ImpactSummary: React.FC<ImpactSummaryProps> = ({ job }) => {
         <Row label="Immediate Execution Baseline (est.)">{formatCarbonKg(decision.baseline_carbon_emission)}</Row>
         <Row label="GreenShift Execution (est.)">{formatCarbonKg(decision.carbon_emission)}</Row>
         <Row label="Carbon Avoided (est.)">{formatCarbonKg(decision.carbon_avoided)}</Row>
-        <Row label="Cost Saved (est.)">{decision.cost_difference !== undefined && decision.cost_difference !== null ? `$${decision.cost_difference.toFixed(2)}` : '—'}</Row>
+        <Row label="Cost Saved (est., USD)">{formatCurrency(decision.cost_difference, 'USD')}</Row>
         <Row label="Delay Introduced (est.)">{decision.scheduling_delay_hours !== undefined && decision.scheduling_delay_hours !== null ? `${decision.scheduling_delay_hours.toFixed(1)} h` : '—'}</Row>
         <Row label="SLA Compliance (est.)">{decision.sla_met === undefined ? '—' : decision.sla_met ? 'Met' : 'Missed'}</Row>
 
@@ -68,7 +69,7 @@ export const ImpactSummary: React.FC<ImpactSummaryProps> = ({ job }) => {
               Observed / Actual
             </div>
             <Row label="Actual Carbon Emission">{formatCarbonKg(actual.actual_carbon_emission_kg)}</Row>
-            <Row label="Actual Cost">{`$${actual.actual_cost_usd.toFixed(2)}`}</Row>
+            <Row label="Actual Cost (USD)">{formatCurrency(actual.actual_cost_usd, 'USD')}</Row>
             <Row label="Actual Carbon Saved vs. Baseline">{formatCarbonKg(actual.actual_vs_baseline_carbon_saved_kg)}</Row>
             <Row label="Estimation Quality">{actual.estimation_quality}</Row>
           </>

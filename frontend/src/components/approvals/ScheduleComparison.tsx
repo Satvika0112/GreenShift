@@ -46,7 +46,7 @@ export const ScheduleComparison: React.FC<ScheduleComparisonProps> = ({ item }) 
             <tr>
               <td>Start</td>
               <td>{baselineStartDisplay(item)}</td>
-              <td>{formatDateTime(item.selected_start_local)}</td>
+              <td>{formatDateTime(item.selected_start_utc, item.timezone)}</td>
             </tr>
           </tbody>
         </table>

@@ -78,6 +78,23 @@ describe('AuthContext', () => {
     expect(sessionStorage.getItem('greenshift_token')).toBeNull();
   });
 
+  it('clears the session on a non-401/403 refreshUser failure too (fail closed, never trust an unconfirmed stored identity)', async () => {
+    // A hand-edited sessionStorage identity claiming PLATFORM_ADMIN must
+    // never render role-gated UI off an unconfirmed value just because the
+    // confirming /auth/me call happened to fail with a network/5xx error
+    // rather than 401/403.
+    sessionStorage.setItem('greenshift_token', 'stored-jwt');
+    sessionStorage.setItem('greenshift_user', JSON.stringify({ ...companyUser, role: 'PLATFORM_ADMIN' }));
+    (authApi.getCurrentUser as any).mockRejectedValue(new Error('Network Error'));
+
+    renderProbe();
+
+    await waitFor(() => expect(screen.getByTestId('loading').textContent).toBe('false'));
+    expect(screen.getByTestId('authed').textContent).toBe('false');
+    expect(sessionStorage.getItem('greenshift_token')).toBeNull();
+    expect(sessionStorage.getItem('greenshift_user')).toBeNull();
+  });
+
   it('login stores the token and the backend-authenticated user', async () => {
     const user = userEvent.setup();
     (authApi.login as any).mockResolvedValue({

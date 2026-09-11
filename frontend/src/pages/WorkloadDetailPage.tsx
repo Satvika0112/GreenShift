@@ -8,7 +8,9 @@ import { EmptyState } from '../components/common/EmptyState';
 import { InlineBanner } from '../components/common/InlineBanner';
 import { schedulingApi, dispatchApi, workloadsApi } from '../api/endpoints';
 import { useWorkload } from '../hooks/useWorkloads';
+import { useRegions } from '../hooks/useDashboard';
 import { workloadDisplayName } from '../utils/workloadDisplay';
+import { formatRegionalDateTime, resolveRegionTimezone } from '../utils/dateTime';
 import { WorkloadOverview } from '../components/workloads/WorkloadOverview';
 import { WorkloadLifecycle } from '../components/workloads/WorkloadLifecycle';
 import { ComputeRequirements } from '../components/workloads/ComputeRequirements';
@@ -28,6 +30,8 @@ export const WorkloadDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const workloadQ = useWorkload(id);
   const job = workloadQ.data;
+  const regionsQ = useRegions();
+  const timezoneName = resolveRegionTimezone(regionsQ.data, job?.region);
 
   const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isScheduling, setIsScheduling] = useState(false);
@@ -119,7 +123,7 @@ export const WorkloadDetailPage: React.FC = () => {
 
         <PageHeader
           title={`${workloadDisplayName(job)}${job.name ? ` (${job.job_id})` : ''}`}
-          subtitle={`Team: ${job.team_id || '—'} • Region: ${job.region || '—'} • Submitted: ${job.submitted_at ? new Date(job.submitted_at).toLocaleString() : '—'}`}
+          subtitle={`Team: ${job.team_id || '—'} • Region: ${job.region || '—'} • Submitted: ${formatRegionalDateTime(job.submitted_at, timezoneName)}`}
           badge={<StatusBadge status={job.status} size="md" />}
           actions={
             <div style={{ display: 'flex', gap: '0.6rem' }}>
@@ -150,10 +154,10 @@ export const WorkloadDetailPage: React.FC = () => {
         </InlineBanner>
       )}
 
-      <WorkloadLifecycle job={job} auditEvents={auditEvents} />
+      <WorkloadLifecycle job={job} auditEvents={auditEvents} timezoneName={timezoneName} />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem' }}>
-        <WorkloadOverview job={job} />
+        <WorkloadOverview job={job} timezoneName={timezoneName} />
         <ComputeRequirements job={job} />
       </div>
 
@@ -163,13 +167,14 @@ export const WorkloadDetailPage: React.FC = () => {
           onFindSchedule={handleFindSchedule}
           isScheduling={isScheduling}
           onViewFullAnalysis={() => navigate(`/scheduling?jobId=${job.job_id}`)}
+          timezoneName={timezoneName}
         />
-        <ExecutionSummary job={job} />
+        <ExecutionSummary job={job} timezoneName={timezoneName} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem' }}>
         <ImpactSummary job={job} />
-        <ActivityTimeline events={auditEvents} />
+        <ActivityTimeline events={auditEvents} timezoneName={timezoneName} />
       </div>
     </div>
   );

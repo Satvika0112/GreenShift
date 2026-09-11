@@ -8,6 +8,7 @@ import { formatDateTime } from '../../utils/workloadDisplay';
 interface WorkloadLifecycleProps {
   job: WorkloadDetail;
   auditEvents: AuditEvent[];
+  timezoneName?: string;
 }
 
 const STAGE_LABELS = ['SUBMITTED', 'VALIDATED', 'SCHEDULED', 'PENDING APPROVAL', 'APPROVED', 'QUEUED', 'RUNNING', 'COMPLETED'];
@@ -38,7 +39,7 @@ function currentStageIndex(job: WorkloadDetail): number {
   return 0;
 }
 
-export const WorkloadLifecycle: React.FC<WorkloadLifecycleProps> = ({ job, auditEvents }) => {
+export const WorkloadLifecycle: React.FC<WorkloadLifecycleProps> = ({ job, auditEvents, timezoneName }) => {
   const currentIdx = currentStageIndex(job);
   const isTerminalProblem = TERMINAL_PROBLEM_STATUSES.includes(job.status);
 
@@ -105,7 +106,7 @@ export const WorkloadLifecycle: React.FC<WorkloadLifecycleProps> = ({ job, audit
               </span>
               {stageTimestamps[idx] && (
                 <span style={{ fontSize: '0.63rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                  {formatDateTime(stageTimestamps[idx])}
+                  {formatDateTime(stageTimestamps[idx], timezoneName)}
                 </span>
               )}
             </div>

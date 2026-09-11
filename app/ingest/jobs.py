@@ -10,7 +10,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from app.shared.models import JobORM, JobStatus, JobSubmitRequest
-from app.shared.timezone import normalize_to_utc
+from app.shared.timezone import normalize_to_utc, get_region_timezone_name
 from app.shared.utils import generate_job_id, utcnow
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,14 @@ def submit_job(
     effective_tenant_id = tenant_id or getattr(request, "tenant_id", None)
     effective_company_name = company_name or getattr(request, "company_name", None)
 
+    # Persist the job's real execution-region IANA timezone (an explicit
+    # request.timezone override wins; otherwise resolved from the region) —
+    # this is what every downstream regional-display consumer (Approvals'
+    # PendingApprovalItem.timezone, etc.) reads. Without this, the column's
+    # bare "UTC" default silently mislabels every job's display timezone
+    # regardless of its actual execution region.
+    resolved_timezone = req_tz or get_region_timezone_name(request.region, default_tz="UTC")
+
     job = JobORM(
         job_id               = job_id,
         workload_name        = request.workload_name,
@@ -73,6 +81,7 @@ def submit_job(
         runtime_minutes      = request.runtime_minutes,
         power_kw             = request.power_kw,
         region               = request.region,
+        timezone             = resolved_timezone,
         status               = JobStatus.SUBMITTED,
         container_image      = request.container_image,
         cpu_request          = request.cpu_request,

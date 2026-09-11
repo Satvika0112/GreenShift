@@ -7,7 +7,7 @@ import { workloadsApi } from '../api/endpoints';
 import { User } from '../types/api';
 
 vi.mock('../api/endpoints', () => ({
-  workloadsApi: { createJob: vi.fn() },
+  workloadsApi: { createJob: vi.fn(), getDatasetWorkloads: vi.fn() },
 }));
 
 function makeQuery(data: any, overrides: Partial<Record<string, any>> = {}) {
@@ -40,7 +40,35 @@ const regionsFixture = [
   { region_id: 'IN-TG', country: 'India', region_name: 'Telangana', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-TG', default_plan: 'ToD', supported_tariff_plans: [], aliases: [], is_active: true },
   { region_id: 'IN-GJ', country: 'India', region_name: 'Gujarat', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-GJ', default_plan: 'HTP-I', supported_tariff_plans: [], aliases: [], is_active: true },
   { region_id: 'IN-OLD', country: 'India', region_name: 'Retired Zone', timezone: 'Asia/Kolkata', currency: 'INR', electricity_maps_zone: 'IN-OLD', default_plan: 'Flat', supported_tariff_plans: [], aliases: [], is_active: false },
+  { region_id: 'AU-SA-Small', country: 'Australia', region_name: 'South Australia (Small)', timezone: 'Australia/Adelaide', currency: 'AUD', electricity_maps_zone: 'AU-SA', default_plan: 'ToD', supported_tariff_plans: [], aliases: [], is_active: true },
 ];
+
+// Matches GET /api/v1/dataset/workloads exactly — a real dataset row shape,
+// with its earliest_start_time/deadline already re-anchored to the future
+// by the backend (same as the real endpoint contract).
+function futureIso(hoursFromNow: number): string {
+  return new Date(Date.now() + hoursFromNow * 3600 * 1000).toISOString();
+}
+
+const datasetWorkloadFixture = {
+  job_id: 'GS-JOB-000042',
+  job_type: 'DATA_PROCESSING',
+  team: 'operations',
+  priority: 'MEDIUM',
+  region: 'AU-SA-Small',
+  dataset_submit_time: '2026-04-01T01:15:00+00:00',
+  earliest_start_time: futureIso(1),
+  deadline: futureIso(9),
+  runtime_minutes: 47,
+  runtime_hours: 0.78,
+  power_kw: 3.0,
+  energy_kwh: 2.34,
+  deferrable: true,
+  container_image: 'greenshift/sample-workload:latest',
+  cpu_request: '500m',
+  memory_request: '1Gi',
+  carbon_budget_kg: 2.17,
+};
 
 function renderPage() {
   return render(
@@ -79,6 +107,11 @@ describe('SubmitWorkloadPage', () => {
     vi.clearAllMocks();
     mockUser = companyUser;
     regionsQ = makeQuery(regionsFixture);
+    (workloadsApi.getDatasetWorkloads as any).mockResolvedValue({
+      count: 1,
+      source: 'data/greenshift_workloads_final.csv',
+      workloads: [datasetWorkloadFixture],
+    });
   });
 
   describe('header', () => {
@@ -364,6 +397,99 @@ describe('SubmitWorkloadPage', () => {
       await user.click(screen.getByRole('button', { name: /^submit workload$/i }));
 
       expect(await screen.findByText(/don't have permission to submit workloads/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('dataset mode', () => {
+    it('shows Create New Workload selected by default, with no dataset picker', () => {
+      renderPage();
+      expect(screen.getByRole('radio', { name: /create new workload/i })).toHaveAttribute('aria-checked', 'true');
+      expect(screen.queryByText(/select workload from dataset/i)).not.toBeInTheDocument();
+    });
+
+    it('shows the dataset picker using real backend data when switched to dataset mode', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await user.click(screen.getByRole('radio', { name: /use existing workload dataset/i }));
+      expect(await screen.findByText(/select workload from dataset/i)).toBeInTheDocument();
+      await waitFor(() => expect(workloadsApi.getDatasetWorkloads).toHaveBeenCalled());
+      expect(await screen.findByText(new RegExp(datasetWorkloadFixture.job_id))).toBeInTheDocument();
+    });
+
+    it('populates the form from the selected dataset row, without letting team be edited', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await user.click(screen.getByRole('radio', { name: /use existing workload dataset/i }));
+      await user.selectOptions(await screen.findByLabelText('Select workload'), datasetWorkloadFixture.job_id);
+
+      expect((screen.getByLabelText(/Container Image/i) as HTMLInputElement).value).toBe(datasetWorkloadFixture.container_image);
+      expect((screen.getByLabelText('Region *') as HTMLSelectElement).value).toBe(datasetWorkloadFixture.region);
+      expect((screen.getByLabelText(/Runtime Estimate/i) as HTMLInputElement).value).toBe(String(datasetWorkloadFixture.runtime_minutes));
+      expect((screen.getByLabelText(/Average Power Draw/i) as HTMLInputElement).value).toBe(String(datasetWorkloadFixture.power_kw));
+      expect((screen.getByLabelText(/CPU Request/i) as HTMLInputElement).value).toBe(datasetWorkloadFixture.cpu_request);
+      expect((screen.getByLabelText(/Memory Request/i) as HTMLInputElement).value).toBe(datasetWorkloadFixture.memory_request);
+      expect((screen.getByLabelText(/Carbon Budget/i) as HTMLInputElement).value).toBe(String(datasetWorkloadFixture.carbon_budget_kg));
+      // No team selector ever exists, dataset mode included.
+      expect(screen.queryByLabelText(/team/i)).not.toBeInTheDocument();
+    });
+
+    it('shows dataset timing read-only by default, with the dataset submit time and job id for reference', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await user.click(screen.getByRole('radio', { name: /use existing workload dataset/i }));
+      await user.selectOptions(await screen.findByLabelText('Select workload'), datasetWorkloadFixture.job_id);
+
+      expect(screen.getByText('Dataset Job ID')).toBeInTheDocument();
+      expect(screen.getByText(datasetWorkloadFixture.job_id)).toBeInTheDocument();
+      expect(screen.getByText('Dataset Submit Time')).toBeInTheDocument();
+      // Read-only mode: no editable datetime-local inputs for earliest start / deadline.
+      expect(screen.queryByLabelText(/^Earliest Start$/i)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/SLA Deadline/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /override dataset timing/i })).toBeInTheDocument();
+    });
+
+    it('switches to editable local-time inputs when the user overrides dataset timing', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await user.click(screen.getByRole('radio', { name: /use existing workload dataset/i }));
+      await user.selectOptions(await screen.findByLabelText('Select workload'), datasetWorkloadFixture.job_id);
+      await user.click(screen.getByRole('button', { name: /override dataset timing/i }));
+
+      expect(screen.getByLabelText(/SLA Deadline/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /override dataset timing/i })).not.toBeInTheDocument();
+    });
+
+    it('submits a dataset-backed workload without the dataset job_id or dataset_submit_time in the payload', async () => {
+      const user = userEvent.setup();
+      (workloadsApi.createJob as any).mockResolvedValue({ job_id: 'JOB-NEW-1', status: 'SUBMITTED', submitted_at: '2026-09-10T00:00:00Z', name: 'x' });
+      renderPage();
+      await user.click(screen.getByRole('radio', { name: /use existing workload dataset/i }));
+      await user.selectOptions(await screen.findByLabelText('Select workload'), datasetWorkloadFixture.job_id);
+      await user.click(screen.getByRole('button', { name: /^submit workload$/i }));
+
+      await waitFor(() => expect(workloadsApi.createJob).toHaveBeenCalledTimes(1));
+      const [payload] = (workloadsApi.createJob as any).mock.calls[0];
+      // The real submission contract (CreateJobInput) has no field the
+      // dataset's job_id/dataset_submit_time could even be smuggled into —
+      // this asserts submitted_at is never pre-set from the dataset value.
+      expect(payload).not.toHaveProperty('job_id');
+      expect(payload).not.toHaveProperty('submit_time');
+      expect(payload.team_id).toBe('team-a'); // still only from the authenticated user
+      expect(payload.region).toBe(datasetWorkloadFixture.region);
+      expect(payload.deadline).toBe(datasetWorkloadFixture.deadline);
+      expect(payload.earliest_start_time).toBe(datasetWorkloadFixture.earliest_start_time);
+    });
+
+    it('switching back to Create New Workload clears the dataset selection and resets the form', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await user.click(screen.getByRole('radio', { name: /use existing workload dataset/i }));
+      await user.selectOptions(await screen.findByLabelText('Select workload'), datasetWorkloadFixture.job_id);
+      expect((screen.getByLabelText('Region *') as HTMLSelectElement).value).toBe(datasetWorkloadFixture.region);
+
+      await user.click(screen.getByRole('radio', { name: /create new workload/i }));
+      expect(screen.queryByText(/select workload from dataset/i)).not.toBeInTheDocument();
+      expect((screen.getByLabelText('Region *') as HTMLSelectElement).value).toBe('');
     });
   });
 

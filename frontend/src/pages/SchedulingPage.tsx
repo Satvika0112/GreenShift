@@ -21,6 +21,8 @@ import { InlineBanner } from '../components/common/InlineBanner';
 import { schedulingApi, workloadsApi } from '../api/endpoints';
 import { Job, ScheduleDecision } from '../types/api';
 import { useAuth } from '../context/AuthContext';
+import { useRegions } from '../hooks/useDashboard';
+import { resolveRegionTimezone } from '../utils/dateTime';
 import { GreenShiftRecommendation } from '../components/decision/GreenShiftRecommendation';
 import { WhyThisWindow } from '../components/decision/WhyThisWindow';
 import { ImmediateVsGreenShift } from '../components/decision/ImmediateVsGreenShift';
@@ -39,6 +41,9 @@ export const SchedulingPage: React.FC = () => {
   const [isCalculating, setIsCalculating] = useState(false);
   const [commitSuccess, setCommitSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const regionsQ = useRegions();
+  const regions = regionsQ.data || [];
 
   const fetchJobs = async () => {
     setIsLoadingJobs(true);
@@ -110,6 +115,9 @@ export const SchedulingPage: React.FC = () => {
   };
 
   const selectedJob = jobs.find((j) => j.job_id === selectedJobId);
+  const decisionRegionId = decision?.region_id || selectedJob?.region;
+  const decisionRegion = regions.find((r) => r.region_id === decisionRegionId);
+  const decisionTimezone = resolveRegionTimezone(regions, decisionRegionId);
 
   if (isLoadingJobs) {
     return (
@@ -244,7 +252,12 @@ export const SchedulingPage: React.FC = () => {
       {/* Signature GreenShift decision components */}
       {decision ? (
         <>
-          <GreenShiftRecommendation decision={decision} fallbackRegion={selectedJob?.region} />
+          <GreenShiftRecommendation
+            decision={decision}
+            fallbackRegion={selectedJob?.region}
+            regionName={decisionRegion?.region_name}
+            timezoneName={decisionTimezone}
+          />
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button className="btn btn-secondary btn-sm" onClick={() => navigate(`/workloads/${selectedJobId}`)}>
               <span>Inspect Workload</span>
