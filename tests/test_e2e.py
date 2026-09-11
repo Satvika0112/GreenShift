@@ -26,6 +26,23 @@ from app.shared.models import (
 )
 
 
+def _anchor_schedule_decision_to_now(db, job) -> None:
+    """
+    Shift an already-computed schedule decision's window to start
+    deterministically in the immediate past, preserving its real duration.
+    Used only by dispatch-flow tests that need a dispatch-eligible decision
+    right now — never changes which window the scheduler picked or how it
+    picked it (schedule_and_store/schedule_job are untouched).
+    """
+    db.refresh(job)
+    decision = job.schedule_decision
+    duration = decision.selected_end - decision.selected_start
+    decision.selected_start = datetime.now(timezone.utc) - timedelta(minutes=1)
+    decision.selected_end = decision.selected_start + duration
+    db.commit()
+    db.refresh(job)
+
+
 @pytest.fixture()
 def job_request():
     return JobSubmitRequest(
@@ -133,6 +150,16 @@ class TestEndToEnd:
         """Test dispatch flow with Kubernetes API mocked."""
         job = submit_job(db, job_request)
         schedule_and_store(db, job)
+        # The real scheduler picks the lowest-carbon feasible window within
+        # the deadline, which can legitimately land hours in the future
+        # depending on the current time-of-day's fallback carbon curve —
+        # dispatcher.py correctly refuses to dispatch before that window
+        # starts. This test is about the mocked-Kubernetes dispatch path
+        # itself, not the scheduler's window choice, so make the
+        # already-computed decision's window deterministically "now" —
+        # preserving its real duration — rather than fighting wall-clock
+        # dependent carbon data.
+        _anchor_schedule_decision_to_now(db, job)
         from app.approval.service import approve_schedule
         approve_schedule(db, job.job_id, job.schedule_decision.id)
         db.refresh(job)
@@ -193,6 +220,11 @@ class TestEndToEnd:
         decision = schedule_and_store(db, job, record_audit=True)
         db.refresh(job)
         assert job.status == JobStatus.PENDING_APPROVAL
+        # See test_dispatch_mocked's comment: this test verifies the
+        # dispatch/status-transition flow, not the scheduler's window
+        # choice — anchor the real decision's window to now so dispatch
+        # below isn't dependent on the current time-of-day's carbon curve.
+        _anchor_schedule_decision_to_now(db, job)
 
         # 4. Approval
         approve_schedule(db, job.job_id, decision.id, approved_by="admin")

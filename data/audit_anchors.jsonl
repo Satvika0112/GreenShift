@@ -1,0 +1,2 @@
+{"timestamp": "2026-09-11T17:14:11.900965+00:00", "sequence": 68, "root_hash": "fa594f2e5b9579b435c2d57ef6a20764e15c841a3c2d8a8b33a97f3ff6e4be9a", "event_count": 68, "latest_event_id": "EVT-A6357E38", "latest_event_type": "AUTH_LOGIN_SUCCESS"}
+{"timestamp": "2026-09-11T17:40:20.555261+00:00", "sequence": 75, "root_hash": "49eb93c13c2c69c146c6c1fef46eb972de3c980822498ffe6de310b212ee632d", "event_count": 75, "latest_event_id": "EVT-EC23BECD", "latest_event_type": "AUTH_LOGIN_SUCCESS"}
