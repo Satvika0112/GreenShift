@@ -294,6 +294,9 @@ class TestSchedulerIntegrationWithNewTariffs:
         assert decision.electricity_cost > 0
         assert decision.native_cost is not None and decision.native_cost > 0
         assert decision.region_id == "IN-TG"
+        assert decision.currency == "INR"
+        # A genuinely INR region legitimately populates tariff_inr_per_kwh.
+        assert decision.tariff_inr_per_kwh is not None
 
     def test_scheduler_us_ca(self):
         now = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -325,3 +328,45 @@ class TestSchedulerIntegrationWithNewTariffs:
         assert decision.selected_start is not None
         assert decision.electricity_cost > 0
         assert decision.region_id == "US-CA"
+        assert decision.currency == "USD"
+        assert decision.native_cost is not None and decision.native_cost > 0
+        # Currency Consistency Hardening: a non-INR region must never get a
+        # fabricated INR-labeled rate (previously computed as
+        # decision.electricity_cost's per-kWh USD rate divided by the INR FX
+        # rate — an invented conversion for a currency this job never uses).
+        assert decision.tariff_inr_per_kwh is None
+
+    def test_scheduler_au_sa_no_fabricated_inr_rate(self):
+        """Currency Consistency Hardening — same invariant as US-CA, for
+        Australia (AUD)."""
+        now = datetime.now(timezone.utc) + timedelta(hours=1)
+        deadline = now + timedelta(hours=12)
+
+        carbon_curve = [
+            CarbonDataPoint(
+                region="AU-SA-Small",
+                timestamp=now + timedelta(hours=i),
+                carbon_gco2_kwh=250.0 + i * 5,
+                is_forecast=True,
+            )
+            for i in range(24)
+        ]
+        tariff_curve = get_tariff_data_points("AU-SA-Small", now, now + timedelta(hours=24))
+
+        decision = schedule_job(
+            job_id="test-job-ausa-1",
+            team_id="team-gamma",
+            deadline=deadline,
+            runtime_minutes=60,
+            power_kw=5.0,
+            region="AU-SA-Small",
+            carbon_curve=carbon_curve,
+            tariff_curve=tariff_curve,
+            earliest_start_time=now,
+        )
+
+        assert decision.selected_start is not None
+        assert decision.region_id == "AU-SA-Small"
+        assert decision.currency == "AUD"
+        assert decision.native_cost is not None
+        assert decision.tariff_inr_per_kwh is None

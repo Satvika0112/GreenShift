@@ -77,6 +77,28 @@ describe('ImpactReportsPage', () => {
     expect(screen.queryByText(/EPA/i)).not.toBeInTheDocument();
   });
 
+  it('displays the region breakdown cost in that region\'s real native currency, not a bare USD figure', async () => {
+    (monitoringApi.getFleetImpact as any).mockResolvedValue(fleetImpactReport);
+    (monitoringApi.getFleetHeadline as any).mockResolvedValue(fleetHeadline);
+    renderPage();
+
+    // fixture: by_region['US-CAL-CISO'] = { currency: 'USD', total_cost_saved_native: 74.5 }
+    // ($74.50 also appears in the team table, which shares the same fixture value.)
+    await waitFor(() => expect(screen.getByText('US-CAL-CISO')).toBeInTheDocument());
+    expect(screen.getAllByText('$74.50').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows currency-separated fleet savings, never a single figure combining currencies', async () => {
+    (monitoringApi.getFleetImpact as any).mockResolvedValue(fleetImpactReport);
+    (monitoringApi.getFleetHeadline as any).mockResolvedValue(fleetHeadline);
+    renderPage();
+
+    // fixture: cost_saved_by_currency = { INR: 6200.3, USD: 22.0 }
+    await waitFor(() => expect(screen.getByText('Cost Saved by Native Currency')).toBeInTheDocument());
+    expect(screen.getByText('₹6,200.30')).toBeInTheDocument();
+    expect(screen.getByText('$22.00')).toBeInTheDocument();
+  });
+
   it('scopes the fleet impact request to the caller team for a non-admin user', async () => {
     mockIsAdmin = false;
     mockUser = { ...adminUser, role: 'COMPANY_USER' as any, team_id: 'team-acme' };

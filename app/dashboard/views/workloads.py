@@ -347,7 +347,12 @@ def _render_scheduling_tab():
         c_avoided = float(fleet_impact.get("total_carbon_avoided_kg", 0.0))
         c_pct = float(fleet_impact.get("avg_carbon_reduction_pct", 0.0))
         cost_usd = float(fleet_impact.get("total_cost_saved_usd", 0.0))
-        cost_inr = float(fleet_impact.get("total_cost_saved_inr", 0.0))
+        # Currency-separated native savings (never a single cross-region sum —
+        # the fleet can span multiple currencies). Rendered as "amount CODE"
+        # pairs, the same "never fabricate a symbol" convention used in
+        # app.notify.templates._format_cost.
+        cost_by_currency = fleet_impact.get("cost_saved_by_currency") or {}
+        native_currency_str = " · ".join(f"{amt:,.2f} {cur}" for cur, amt in cost_by_currency.items()) or "—"
         cost_pct = float(fleet_impact.get("avg_cost_reduction_pct", 0.0))
         sla_pct = float(fleet_impact.get("sla_compliance_pct", 100.0))
         pos_jobs = int(fleet_impact.get("jobs_with_positive_carbon_savings", 0))
@@ -358,7 +363,7 @@ def _render_scheduling_tab():
         with f1:
             st.markdown(render_metric_card("Carbon Avoided", f"{c_avoided:,.1f} kg CO₂", f"-{c_pct:.1f}% mean reduction", accent=True), unsafe_allow_html=True)
         with f2:
-            st.markdown(render_metric_card("Cost Saved", f"${cost_usd:,.2f} / ₹{cost_inr:,.0f}", f"-{cost_pct:.1f}% mean savings"), unsafe_allow_html=True)
+            st.markdown(render_metric_card("Cost Saved", f"${cost_usd:,.2f} USD · {native_currency_str}", f"-{cost_pct:.1f}% mean savings"), unsafe_allow_html=True)
         with f3:
             st.markdown(render_metric_card("SLA Compliance", f"{sla_pct:.1f}%", f"{fleet_impact.get('sla_met_count', tot_jobs)} / {tot_jobs} met SLA"), unsafe_allow_html=True)
         with f4:

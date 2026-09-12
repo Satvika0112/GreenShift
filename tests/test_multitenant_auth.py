@@ -481,11 +481,12 @@ class TestTenantIsolation:
         from app.api.tenant_scope import get_tenant_jobs
 
         make_tenant(db, "tenant-same", "Same Tenant")
-        job = make_job(db, "tenant-same")
+        job = make_job(db, "tenant-same")  # team_id defaults to "team-a"
 
         identity = AuthenticatedIdentity(
             user_id="1",
             tenant_id="tenant-same",
+            team_id="team-a",  # matches job's team so this purely isolates the tenant check
             role=UserRole.COMPANY_USER,
             auth_method="jwt",
         )
@@ -559,11 +560,11 @@ class TestTenantIsolation:
 
         make_tenant(db, "tenant-list-a", "List A")
         make_tenant(db, "tenant-list-b", "List B")
-        job_a = make_job(db, "tenant-list-a")
+        job_a = make_job(db, "tenant-list-a")  # team_id defaults to "team-a"
         job_b = make_job(db, "tenant-list-b")
 
         identity_a = AuthenticatedIdentity(
-            user_id="1", tenant_id="tenant-list-a", role=UserRole.COMPANY_USER, auth_method="jwt"
+            user_id="1", tenant_id="tenant-list-a", team_id="team-a", role=UserRole.COMPANY_USER, auth_method="jwt"
         )
         results = get_tenant_jobs(db, identity_a)
         job_ids = [j.job_id for j in results]

@@ -399,3 +399,27 @@ def format_dual_time(
 
 # Convenience alias for regional timezone resolution
 resolve_region_timezone = get_region_timezone_name
+
+
+def ensure_utc(dt_value: Optional[datetime]) -> Optional[datetime]:
+    """
+    Guarantee a timezone-aware UTC datetime for API serialization.
+
+    Every datetime this project stores is UTC by convention (see module
+    docstring), but SQLite — used for local dev and the test suite, unlike
+    PostgreSQL in production — silently drops tzinfo on read even for a
+    `DateTime(timezone=True)` column: a value written as timezone-aware UTC
+    comes back naive. `dt.isoformat()` on that naive value then serializes
+    without a UTC offset/`Z` suffix, and `new Date(...)` in a browser
+    interprets an offset-less ISO string as *local* time — silently
+    reinterpreting the timestamp exactly as this project's timezone
+    architecture is designed to prevent (see app.shared.timezone module
+    docstring, principle 1). Call this at the API serialization boundary
+    for any datetime read back from the database, immediately before
+    `.isoformat()`.
+    """
+    if dt_value is None:
+        return None
+    if dt_value.tzinfo is None:
+        return dt_value.replace(tzinfo=timezone.utc)
+    return dt_value.astimezone(timezone.utc)

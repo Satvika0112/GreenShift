@@ -59,13 +59,14 @@ describe('ImmediateVsGreenShift', () => {
       expect(screen.getByText('0.406 kg')).toBeInTheDocument(); // carbon_emission
     });
 
-    it('labels the USD-normalized baseline_cost and electricity_cost as USD, not the native currency', () => {
-      // fullDecisionWithBaseline: currency="INR", but baseline_cost and electricity_cost
-      // are both USD-normalized (0.0858 each in this fixture).
+    it('prefers the region-native cost over the USD-normalized figure for both columns', () => {
+      // fullDecisionWithBaseline: currency="INR", native_cost=baseline_native_cost=7.15 —
+      // the execution region's native currency is the single source of truth,
+      // so both columns must show ₹7.15, never the USD-normalized 0.0858 figure.
       render(<ImmediateVsGreenShift decision={fullDecisionWithBaseline} />);
-      const usdValues = screen.getAllByText('$0.0858');
-      expect(usdValues.length).toBe(2); // one for baseline, one for GreenShift
-      expect(screen.queryByText(/0\.0858\s*INR/)).not.toBeInTheDocument();
+      const nativeValues = screen.getAllByText('₹7.15');
+      expect(nativeValues.length).toBe(2); // one for baseline, one for GreenShift
+      expect(screen.queryByText('$0.0858')).not.toBeInTheDocument();
     });
 
     it('labels native-currency-only costs correctly when USD fields are absent', () => {

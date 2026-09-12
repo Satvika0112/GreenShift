@@ -267,6 +267,7 @@ def get_job_detail(
 ):
     """Get full details for a specific job with strict tenant isolation."""
     from app.api.tenant_scope import get_tenant_jobs
+    from app.shared.timezone import ensure_utc
     job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
 
     result = {
@@ -278,9 +279,12 @@ def get_job_detail(
         "job_type": job.job_type,
         "priority": job.priority,
         "status": job.status,
-        "submitted_at": job.submitted_at.isoformat(),
-        "earliest_start_time": job.earliest_start_time.isoformat() if job.earliest_start_time else None,
-        "deadline": job.deadline.isoformat(),
+        # ensure_utc() guards against SQLite (dev/test) silently dropping
+        # tzinfo on read — without it a browser's `new Date(...)` would
+        # reinterpret an offset-less ISO string in its own local timezone.
+        "submitted_at": ensure_utc(job.submitted_at).isoformat(),
+        "earliest_start_time": ensure_utc(job.earliest_start_time).isoformat() if job.earliest_start_time else None,
+        "deadline": ensure_utc(job.deadline).isoformat(),
         "runtime_minutes": job.runtime_minutes,
         "power_kw": job.power_kw,
         "energy_kwh": job.energy_kwh,
@@ -295,8 +299,8 @@ def get_job_detail(
     if job.schedule_decision:
         sd = job.schedule_decision
         result["schedule_decision"] = {
-            "selected_start": sd.selected_start.isoformat(),
-            "selected_end": sd.selected_end.isoformat(),
+            "selected_start": ensure_utc(sd.selected_start).isoformat(),
+            "selected_end": ensure_utc(sd.selected_end).isoformat(),
             "carbon_intensity": sd.carbon_intensity,
             "electricity_cost": sd.electricity_cost,
             "carbon_emission": sd.carbon_emission,
@@ -317,8 +321,8 @@ def get_job_detail(
             "rejection_reasons": list((getattr(sd, "rejection_summary", {}) or {}).keys()),
             "deterministic_ranking": getattr(sd, "deterministic_rank", 1) or 1,
             "deterministic_rank": getattr(sd, "deterministic_rank", 1) or 1,
-            "baseline_start": sd.baseline_start.isoformat() if sd.baseline_start else None,
-            "baseline_end": sd.baseline_end.isoformat() if getattr(sd, "baseline_end", None) else None,
+            "baseline_start": ensure_utc(sd.baseline_start).isoformat() if sd.baseline_start else None,
+            "baseline_end": ensure_utc(getattr(sd, "baseline_end", None)).isoformat() if getattr(sd, "baseline_end", None) else None,
             "baseline_carbon_emission": sd.baseline_carbon_emission,
             "baseline_cost": sd.baseline_cost,
             "carbon_avoided": sd.carbon_avoided,

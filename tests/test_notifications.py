@@ -112,6 +112,41 @@ class TestRecipientAndTenantIsolation:
         assert "recipient_user_id" not in sig.parameters
         assert "user_id" not in sig.parameters
 
+    def test_cross_tenant_notification_recipient_injection_is_rejected(self, db, two_users):
+        """Consistency & Security Hardening pass, Section 11 item 14: a user
+        in tenant-b must never be able to receive, view, or act on a
+        notification that legitimately belongs to a user in tenant-a, even
+        with a spoofed tenant_id claim — recipient_user_id (not tenant_id)
+        is the sole authorization key, and it is always server-derived from
+        the authenticated caller, never accepted from the client."""
+        alice, bob = two_users["alice"], two_users["bob"]
+        assert alice.tenant_id != bob.tenant_id
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.APPROVAL_GRANTED,
+            category="APPROVAL", severity="INFO", title="Tenant A Approved", message="msg",
+            tenant_id=alice.tenant_id, job_id="JOB-CROSS-TENANT-1",
+        )
+
+        bob_token = get_token(bob)
+        bob_headers = {"Authorization": f"Bearer {bob_token}"}
+
+        # Bob (tenant-b) cannot see Alice's (tenant-a) notification in his own list.
+        res_list = client.get("/notifications", headers=bob_headers)
+        assert res_list.status_code == 200
+        assert all(n["id"] != notif.id for n in res_list.json())
+
+        # Bob cannot mark it read by guessing/forging its id.
+        res_read = client.patch(f"/notifications/{notif.id}/read", headers=bob_headers)
+        assert res_read.status_code == 404
+
+        # Bob's unread count is unaffected by Alice's cross-tenant notification.
+        res_count = client.get("/notifications/unread-count", headers=bob_headers)
+        assert res_count.status_code == 200
+        assert res_count.json()["unread_count"] == 0
+
+        db.refresh(notif)
+        assert notif.read_at is None
+
     def test_mark_all_read_only_affects_caller(self, db, two_users):
         alice, bob = two_users["alice"], two_users["bob"]
         for i in range(3):
@@ -820,7 +855,7 @@ class TestAdminFanoutOnFailureAndCancellation:
         submitter = UserORM(
             username="notif_fanout_user", email="fanout_user@greenshift.io",
             hashed_password=hash_password("pass12345"), role=UserRole.COMPANY_USER,
-            tenant_id="tenant-fanout", is_active=True,
+            tenant_id="tenant-fanout", team_id="team-fanout", is_active=True,
         )
         db.add_all([admin, other_tenant_admin, submitter])
         db.commit()

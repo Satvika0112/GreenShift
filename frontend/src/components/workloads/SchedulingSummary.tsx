@@ -50,7 +50,10 @@ export const SchedulingSummary: React.FC<SchedulingSummaryProps> = ({ job, onFin
           <Row label="Estimated Carbon">{formatCarbonKg(decision.carbon_emission, { estimated: true })}</Row>
           <Row label="Estimated Cost">{formatCost(decision)}</Row>
           <Row label="Carbon Budget">{job.carbon_budget_kg ? `${job.carbon_budget_kg} kg CO₂` : 'Unconstrained'}</Row>
-          <Row label="Deadline">{formatDateTime(job.deadline, timezoneName)}</Row>
+          {job.earliest_start_time && (
+            <Row label="Requested Earliest Start">{formatDateTime(job.earliest_start_time, timezoneName)}</Row>
+          )}
+          <Row label="Requested Deadline">{formatDateTime(job.deadline, timezoneName)}</Row>
           <Row label="Approval">{APPROVAL_LABELS[approval]}</Row>
         </div>
       )}

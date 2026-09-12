@@ -16,6 +16,33 @@ describe('GreenShiftRecommendation', () => {
     expect(screen.getByText(/Recommended Window/i)).toBeInTheDocument();
   });
 
+  describe('Requested Window (Time Consistency Hardening)', () => {
+    it('shows the requested window alongside the recommendation when the backend supplies it', () => {
+      const decision = {
+        ...fullDecisionWithBaseline,
+        requested_earliest_start: '2026-09-10T04:30:00Z',
+        requested_deadline: '2026-09-10T12:30:00Z',
+      };
+      render(<GreenShiftRecommendation decision={decision} />);
+      expect(screen.getByText(/Requested Window/i)).toBeInTheDocument();
+    });
+
+    it('shows "As soon as possible" when no earliest start was requested', () => {
+      const decision = {
+        ...fullDecisionWithBaseline,
+        requested_earliest_start: null,
+        requested_deadline: '2026-09-10T12:30:00Z',
+      };
+      render(<GreenShiftRecommendation decision={decision} />);
+      expect(screen.getByText(/As soon as possible/i)).toBeInTheDocument();
+    });
+
+    it('does not render a Requested Window section when the backend supplies neither field', () => {
+      render(<GreenShiftRecommendation decision={fullDecisionWithBaseline} />);
+      expect(screen.queryByText(/Requested Window/i)).not.toBeInTheDocument();
+    });
+  });
+
   it('displays the selected region', () => {
     render(<GreenShiftRecommendation decision={fullDecisionWithBaseline} />);
     expect(screen.getByText('IN-TG')).toBeInTheDocument();
@@ -64,31 +91,33 @@ describe('GreenShiftRecommendation', () => {
     expect(screen.queryByText(/SLA Outcome/)).not.toBeInTheDocument();
   });
 
-  describe('USD vs native currency labeling (regression)', () => {
-    it('does NOT label the USD-normalized electricity_cost with the native currency', () => {
-      // fullDecisionWithBaseline has currency="INR" but electricity_cost is USD-normalized.
+  describe('native currency labeling (Currency Consistency Hardening)', () => {
+    it('prefers the region-native cost over the USD-normalized figure when both are present', () => {
+      // fullDecisionWithBaseline has currency="INR", native_cost=7.15, AND a
+      // USD-normalized electricity_cost=0.0858 for internal scheduler
+      // comparisons — the execution region's native currency is the single
+      // source of truth for what the user sees, so this must render ₹7.15,
+      // never the USD-normalized figure.
       render(<GreenShiftRecommendation decision={fullDecisionWithBaseline} />);
-      // The real value is 0.0858 USD -> "$0.0858". It must never render as "0.0858 INR".
-      expect(screen.getByText('$0.0858')).toBeInTheDocument();
-      expect(screen.queryByText(/0\.0858\s*INR/)).not.toBeInTheDocument();
+      expect(screen.getByText('₹7.15')).toBeInTheDocument();
+      expect(screen.queryByText('$0.0858')).not.toBeInTheDocument();
     });
 
-    it('DOES label native_cost with the native currency when electricity_cost is absent', () => {
-      const nativeOnly = {
+    it('falls back to USD when no native cost/currency is available', () => {
+      const usdOnly = {
         selected_start: '2026-09-10T08:00:00Z',
         selected_end: '2026-09-10T08:30:00Z',
-        region_id: 'IN-TG',
-        currency: 'INR',
-        native_cost: 7.15,
-        // electricity_cost intentionally omitted
+        region_id: 'US-CA',
+        electricity_cost: 0.51,
+        // native_cost/currency intentionally omitted
       };
-      render(<GreenShiftRecommendation decision={nativeOnly} />);
-      expect(screen.getByText('₹7.15')).toBeInTheDocument();
+      render(<GreenShiftRecommendation decision={usdOnly} />);
+      expect(screen.getByText('$0.51')).toBeInTheDocument();
     });
 
     it('treats decisionWithoutBaseline (real POST /schedule/{id} shape) the same way', () => {
       render(<GreenShiftRecommendation decision={decisionWithoutBaseline} />);
-      expect(screen.getByText('$0.0858')).toBeInTheDocument();
+      expect(screen.getByText('₹7.15')).toBeInTheDocument();
     });
   });
 });

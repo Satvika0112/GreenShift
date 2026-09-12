@@ -228,6 +228,21 @@ def test_company_user_dispatches_own_team_job_successfully(db, auth_users):
         assert response.json()["status"] == "QUEUED"
 
 
+def test_company_user_cannot_dispatch_another_teams_job(db, auth_users):
+    """Unlike Company Admin, a plain COMPANY_USER remains strictly locked to
+    their own team — dispatching another team's job at the router layer is
+    blocked with 403 before dispatch is ever attempted."""
+    job = create_test_job_with_decision(db, "JOB-DISP-USR-CROSS-01", "team_beta", JobStatus.APPROVED)
+    token = get_token(auth_users["company_user"])  # team_alpha user trying team_beta's job
+
+    response = client.post(
+        f"/dispatch/{job.job_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert "belongs to another team" in response.json()["detail"]
+
+
 def test_company_admin_dispatches_own_team_job_successfully(db, auth_users):
     """Company Admin can dispatch jobs belonging to their own team."""
     job = create_test_job_with_decision(db, "JOB-DISP-LEAD-01", "team_alpha", JobStatus.APPROVED)
@@ -245,26 +260,24 @@ def test_company_admin_dispatches_own_team_job_successfully(db, auth_users):
         assert response.json()["status"] == "QUEUED"
 
 
-def test_company_admin_attempting_other_team_dispatch_is_forbidden_at_router_level(db, auth_users):
-    """A Company Admin with a team_id set is still blocked from dispatching
-    another team's job at the router layer — app.api.tenant_scope.get_tenant_jobs
-    scopes job lookup by team_id for any non-Platform-Admin identity, regardless
-    of the Company Admin/Company User tier, and runs before dispatch is ever
-    attempted."""
+def test_company_admin_can_dispatch_another_teams_job_in_same_company(db, auth_users):
+    """A Company Admin is company-wide, not team-scoped — app.api.tenant_scope
+    .get_tenant_jobs only applies its team filter to a plain Company User.
+    A Company Admin from team_alpha may dispatch a job belonging to
+    team_beta, as long as it is within the same company (tenant_id)."""
     job = create_test_job_with_decision(db, "JOB-DISP-CROSS-01", "team_beta", JobStatus.APPROVED)
-    token = get_token(auth_users["company_admin_alpha"])  # team_alpha admin trying team_beta's job
+    token = get_token(auth_users["company_admin_alpha"])  # team_alpha admin dispatching team_beta's job
 
-    response = client.post(
-        f"/dispatch/{job.job_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 403
-    assert "belongs to another team" in response.json()["detail"]
+    mock_batch = MagicMock()
+    mock_batch.read_namespaced_job.side_effect = ApiException(status=404)
 
-    # Verify DISPATCH_BLOCKED event is in audit ledger
-    events = get_job_audit(db, job.job_id)
-    event_types = [e.event_type for e in events]
-    assert EventType.DISPATCH_BLOCKED in event_types
+    with patch("app.dispatch.dispatcher.get_batch_v1", return_value=mock_batch):
+        response = client.post(
+            f"/dispatch/{job.job_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "QUEUED"
 
 
 def test_unauthenticated_dispatch_rejected(db):

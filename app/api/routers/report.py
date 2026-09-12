@@ -41,12 +41,19 @@ def get_report_summary(
     Generate a BRSR-style JSON sustainability report with tenant scoping.
     Includes per-job carbon, cost, SLA metrics and aggregate summary.
     """
-    from app.shared.auth import is_platform_admin
+    from app.shared.auth import is_company_admin, is_platform_admin
     if not is_platform_admin(current_user) and tenant_id and current_user.tenant_id and tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Cannot access reports for other tenants")
     effective_tenant = tenant_id if is_platform_admin(current_user) else current_user.tenant_id
+    # A plain Company User's team_id is never client-overridable — clamped to
+    # their own team regardless of what was requested, same fix as
+    # /impact/fleet. Company Admin/Platform Admin may still filter by any
+    # team_id, since tenant_id already bounds their real visibility.
+    effective_team = team_id
+    if not is_company_admin(current_user):
+        effective_team = current_user.team_id
     try:
-        return generate_report(db, team_id=team_id, start_date=start_date, end_date=end_date, tenant_id=effective_tenant)
+        return generate_report(db, team_id=effective_team, start_date=start_date, end_date=end_date, tenant_id=effective_tenant)
     except Exception as exc:
         logger.error(f"Error generating report summary: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while generating the sustainability report.")
@@ -63,12 +70,15 @@ def get_report_csv(
     Download BRSR report as CSV with tenant scoping.
     Suitable for BRSR annual report data submission.
     """
-    from app.shared.auth import is_platform_admin
+    from app.shared.auth import is_company_admin, is_platform_admin
     if not is_platform_admin(current_user) and tenant_id and current_user.tenant_id and tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Cannot access reports for other tenants")
     effective_tenant = tenant_id if is_platform_admin(current_user) else current_user.tenant_id
+    effective_team = team_id
+    if not is_company_admin(current_user):
+        effective_team = current_user.team_id
     try:
-        csv_content = generate_csv(db, team_id=team_id, tenant_id=effective_tenant)
+        csv_content = generate_csv(db, team_id=effective_team, tenant_id=effective_tenant)
         return PlainTextResponse(
             content=csv_content,
             media_type="text/csv",

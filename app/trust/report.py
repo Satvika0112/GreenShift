@@ -31,6 +31,7 @@ from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.analytics.fleet_impact import _resolve_currency
 from app.shared.models import (
     AuditEventORM,
     JobORM,
@@ -124,22 +125,32 @@ def _job_row(job: JobORM) -> dict:
         "selected_start":       sd.selected_start.isoformat() if sd else None,
         "selected_end":         sd.selected_end.isoformat() if sd else None,
         "carbon_intensity_gco2_kwh": sd.carbon_intensity if sd else None,
-        "electricity_cost_per_kwh":  sd.electricity_cost if sd else None,
+        # sd.electricity_cost is already a TOTAL (energy_kwh * price_per_kwh_usd
+        # — see app.shared.models.ScheduleDecision.electricity_cost), so the
+        # per-kWh rate is that total divided by energy, not the total itself.
+        "electricity_cost_per_kwh":  (sd.electricity_cost / energy_kwh) if sd and energy_kwh else None,
 
         # Emissions (Scope 2 — purchased electricity)
         "greenshift_carbon_kg": sd.carbon_emission if sd else None,
         "baseline_carbon_kg":   sd.baseline_carbon_emission if sd else None,
         "carbon_avoided_kg":    sd.carbon_avoided if sd else None,
 
-        # Cost
-        "greenshift_cost_usd":  sd.electricity_cost * energy_kwh if sd else None,
+        # Cost — sd.electricity_cost is already the total cost (see above);
+        # previously multiplied by energy_kwh a second time here, inflating
+        # every greenshift_cost_usd (and therefore every aggregate derived
+        # from it) by a factor of energy_kwh.
+        "greenshift_cost_usd":  sd.electricity_cost if sd else None,
         "baseline_cost_usd":    sd.baseline_cost if sd else None,
         "cost_difference_usd":  sd.cost_difference if sd else None,
         "budget_remaining_kg":  sd.budget_remaining if sd else None,
 
-        # Native currency cost (INR)
-        "greenshift_cost_inr":  sd.native_cost if sd else None,
-        "baseline_cost_inr":    sd.baseline_native_cost if sd else None,
+        # Native-currency cost — the execution region's real currency (see
+        # app.analytics.fleet_impact._resolve_currency), never assumed to be
+        # INR. Only meaningful together with `currency` below; never sum
+        # these across rows without grouping by it first.
+        "greenshift_cost_native":  sd.native_cost if sd else None,
+        "baseline_cost_native":    sd.baseline_native_cost if sd else None,
+        "currency":                _resolve_currency(job, sd) if sd else None,
 
         # Scheduling delay
         "scheduling_delay_hours": sd.scheduling_delay_hours if sd else None,
@@ -212,9 +223,19 @@ def _aggregate(rows: List[dict]) -> dict:
     total_baseline_cost   = sum(r["baseline_cost_usd"] or 0 for r in rows)
     total_cost_saved      = sum(r["cost_difference_usd"] or 0 for r in rows)
 
-    total_gs_cost_inr       = sum(r.get("greenshift_cost_inr") or 0 for r in rows)
-    total_baseline_cost_inr = sum(r.get("baseline_cost_inr") or 0 for r in rows)
-    total_cost_saved_inr    = total_baseline_cost_inr - total_gs_cost_inr
+    # Currency-separated native savings — a report can span multiple
+    # execution regions/currencies (INR/USD/AUD/...), so these are grouped
+    # by each row's actual `currency`, never blindly summed into a single
+    # figure mislabeled as one currency (see app.analytics.fleet_impact,
+    # which fixes the identical issue for /impact/fleet).
+    cost_saved_by_currency: Dict[str, float] = {}
+    for r in rows:
+        gs_native = r.get("greenshift_cost_native")
+        base_native = r.get("baseline_cost_native")
+        if gs_native is None or base_native is None:
+            continue
+        currency = r.get("currency") or "UNKNOWN"
+        cost_saved_by_currency[currency] = cost_saved_by_currency.get(currency, 0.0) + (base_native - gs_native)
 
     delays = [r["scheduling_delay_hours"] for r in scheduled_rows if r.get("scheduling_delay_hours") is not None]
     avg_delay = (sum(delays) / len(delays)) if delays else 0.0
@@ -260,10 +281,9 @@ def _aggregate(rows: List[dict]) -> dict:
         # Regional breakdown (BRSR requires geographic disclosure)
         "by_region": _aggregate_by_region(rows),
 
-        # Cost in native currency (INR) alongside USD
-        "total_greenshift_cost_inr": round(total_gs_cost_inr, 4),
-        "total_baseline_cost_inr": round(total_baseline_cost_inr, 4),
-        "total_cost_saved_inr": round(total_cost_saved_inr, 4),
+        # Native-currency cost saved, alongside USD — currency-separated,
+        # never a single cross-region sum (see comment at cost_saved_by_currency above).
+        "cost_saved_by_currency": {c: round(v, 4) for c, v in cost_saved_by_currency.items()},
 
         # Scheduling efficiency
         "avg_scheduling_delay_hours": round(avg_delay, 2),
@@ -397,11 +417,20 @@ def generate_markdown_summary(db: Session, tenant_id: Optional[str] = None) -> s
         f"| GHG Emissions Intensity | {s['ghg_intensity_kg_per_kwh']:.6f} kg CO₂/kWh |",
         f"",
         f"## Cost",
-        f"| Metric | Value (USD) | Value (INR) |",
-        f"|---|---|---|",
-        f"| GreenShift Cost | ${s['total_greenshift_cost_usd']:.4f} | ₹{s['total_greenshift_cost_inr']:.2f} |",
-        f"| Baseline Cost | ${s['total_baseline_cost_usd']:.4f} | ₹{s['total_baseline_cost_inr']:.2f} |",
-        f"| **Cost Saved** | **${s['total_cost_saved_usd']:.4f}** | **₹{s['total_cost_saved_inr']:.2f}** |",
+        f"| Metric | Value (USD) |",
+        f"|---|---|",
+        f"| GreenShift Cost | ${s['total_greenshift_cost_usd']:.4f} |",
+        f"| Baseline Cost | ${s['total_baseline_cost_usd']:.4f} |",
+        f"| **Cost Saved** | **${s['total_cost_saved_usd']:.4f}** |",
+        f"",
+        # Native-currency savings, currency-separated — never a single sum
+        # across regions with different currencies (see cost_saved_by_currency
+        # in app.trust.report._aggregate / app.analytics.fleet_impact).
+        f"**Cost Saved (native currency, by region currency):** "
+        + (
+            ", ".join(f"{amt:.2f} {cur}" for cur, amt in s.get("cost_saved_by_currency", {}).items())
+            or "Not available"
+        ),
         f"",
         f"## Regional Breakdown",
         f"| Region | Jobs | Energy (kWh) | Carbon Avoided (kg) | Cost Saved (USD) | SLA Met |",

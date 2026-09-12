@@ -1,7 +1,7 @@
 import React from 'react';
 import { Zap, Leaf, ArrowRight } from 'lucide-react';
 import { GlassCard } from '../common/GlassCard';
-import { formatCurrency } from '../../utils/currency';
+import { formatCost } from '../../utils/workloadDisplay';
 
 interface ImmediateVsGreenShiftProps {
   decision: any;
@@ -10,10 +10,6 @@ interface ImmediateVsGreenShiftProps {
 function formatKg(n?: number | null): string {
   if (n === undefined || n === null) return '—';
   return `${n.toFixed(3)} kg`;
-}
-
-function formatCost(n?: number | null, currency?: string): string {
-  return formatCurrency(n, currency || 'USD');
 }
 
 /**
@@ -32,15 +28,21 @@ export const ImmediateVsGreenShift: React.FC<ImmediateVsGreenShiftProps> = ({ de
   // Nothing to compare against — don't fabricate a baseline.
   if (!hasCarbonBaseline && !hasCostBaseline) return null;
 
-  // baseline_cost and electricity_cost are always USD-normalized; `currency`
-  // describes native_cost/baseline_native_cost's denomination and must only be
-  // applied when actually falling back to those native-currency fields.
-  const usingElectricityCost = decision.electricity_cost !== undefined && decision.electricity_cost !== null;
-  const optimizedCost = usingElectricityCost ? decision.electricity_cost : decision.native_cost;
-  const optimizedCurrency = usingElectricityCost ? 'USD' : decision.currency || '';
-  const hasBaselineCostUsd = decision.baseline_cost !== undefined && decision.baseline_cost !== null;
-  const baselineCostValue = hasBaselineCostUsd ? decision.baseline_cost : decision.baseline_native_cost;
-  const baselineCurrency = hasBaselineCostUsd ? 'USD' : decision.currency || '';
+  // Execution region native currency is the single source of truth for what
+  // the user sees (Currency Consistency Hardening) — prefer native_cost/
+  // baseline_native_cost + currency, same precedence as utils/workloadDisplay
+  // .formatCost, falling back to the USD-normalized figure only when no
+  // native figure is available.
+  const optimizedCostDisplay = formatCost({
+    native_cost: decision.native_cost,
+    currency: decision.currency,
+    electricity_cost: decision.electricity_cost,
+  });
+  const baselineCostDisplay = formatCost({
+    native_cost: decision.baseline_native_cost,
+    currency: decision.currency,
+    electricity_cost: decision.baseline_cost,
+  });
 
   return (
     <GlassCard
@@ -79,7 +81,7 @@ export const ImmediateVsGreenShift: React.FC<ImmediateVsGreenShiftProps> = ({ de
             <div>
               <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Electricity Cost</div>
               <div style={{ fontSize: '1.2rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
-                {formatCost(baselineCostValue, baselineCurrency)}
+                {baselineCostDisplay}
               </div>
             </div>
           )}
@@ -115,7 +117,7 @@ export const ImmediateVsGreenShift: React.FC<ImmediateVsGreenShiftProps> = ({ de
             <div>
               <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Electricity Cost</div>
               <div style={{ fontSize: '1.2rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: '#10b981' }}>
-                {formatCost(optimizedCost, optimizedCurrency)}
+                {optimizedCostDisplay}
               </div>
               {decision.cost_reduction_pct !== undefined && (
                 <div style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 600 }}>▼ {decision.cost_reduction_pct.toFixed(1)}%</div>

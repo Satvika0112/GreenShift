@@ -2,7 +2,7 @@ import React from 'react';
 import { Sparkles, Leaf, DollarSign, Clock, MapPin } from 'lucide-react';
 import { GlassCard } from '../common/GlassCard';
 import { formatRegionalDateTime, getTimezoneLabel } from '../../utils/dateTime';
-import { formatCurrency } from '../../utils/currency';
+import { formatCost } from '../../utils/workloadDisplay';
 
 interface GreenShiftRecommendationProps {
   decision: any;
@@ -20,11 +20,6 @@ export const GreenShiftRecommendation: React.FC<GreenShiftRecommendationProps> =
 
   const rank = decision.deterministic_rank ?? decision.deterministic_ranking;
   const region = decision.region_id || fallbackRegion || '—';
-  // electricity_cost is always USD-normalized; `currency` describes native_cost's
-  // denomination, so it must only be applied when actually falling back to native_cost.
-  const usingElectricityCost = decision.electricity_cost !== undefined && decision.electricity_cost !== null;
-  const cost = usingElectricityCost ? decision.electricity_cost : decision.native_cost;
-  const currency = usingElectricityCost ? 'USD' : decision.currency || '';
 
   return (
     <GlassCard
@@ -37,6 +32,30 @@ export const GreenShiftRecommendation: React.FC<GreenShiftRecommendationProps> =
       subtitle={`Objective: ${decision.scheduler_objective || decision.objective || 'CARBON_FIRST'} (carbon → cost → earliest start)${rank !== undefined ? ` · Rank #${rank}` : ''}`}
       badge={<span className="badge badge-success">OPTIMAL WINDOW</span>}
     >
+      {(decision.requested_earliest_start || decision.requested_deadline) && (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '0.5rem 1.5rem',
+            padding: '0.65rem 0.85rem',
+            marginBottom: '1rem',
+            background: 'var(--bg-surface-elevated)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-sm)',
+          }}
+        >
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700 }}>Requested Window</div>
+          <div style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+            {decision.requested_earliest_start
+              ? formatRegionalDateTime(decision.requested_earliest_start, timezoneName)
+              : 'As soon as possible'}
+            {' – '}
+            {decision.requested_deadline ? formatRegionalDateTime(decision.requested_deadline, timezoneName) : '—'}
+          </div>
+        </div>
+      )}
+
       <div
         style={{
           display: 'grid',
@@ -95,7 +114,7 @@ export const GreenShiftRecommendation: React.FC<GreenShiftRecommendationProps> =
             <span>Electricity Cost</span>
           </div>
           <div style={{ fontSize: '1.25rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: '#38bdf8', marginTop: '0.3rem' }}>
-            {cost !== undefined ? formatCurrency(cost, currency || undefined) : '—'}
+            {formatCost(decision)}
           </div>
           {decision.cost_reduction_pct !== undefined && (
             <div style={{ fontSize: '0.72rem', color: '#38bdf8' }}>▼ {decision.cost_reduction_pct.toFixed(1)}% vs baseline</div>

@@ -84,6 +84,22 @@ def schedule_and_store(
         scheduler_duration_seconds.observe(elapsed)
         if decision.carbon_avoided and decision.carbon_avoided > 0:
             scheduler_carbon_avoided_kg.labels(region=job.region).inc(decision.carbon_avoided)
+
+        # Time Consistency Hardening — structured debug context at the
+        # scheduling boundary. Manual vs dataset/system is inferred from
+        # submitted_by_user_id (server-derived, never client-set): a manual
+        # submission always has an authenticated submitter; CSV bulk-load
+        # and the arrival simulator never pass one. No secrets logged.
+        logger.debug(
+            "DECIDE schedule_and_store | job=%s | mode=%s | region=%s | timezone=%s | "
+            "requested_earliest_start=%s | requested_deadline=%s | selected_start=%s | selected_end=%s",
+            job.job_id,
+            "manual" if job.submitted_by_user_id else "dataset/system",
+            job.region, job.timezone,
+            job.earliest_start_time.isoformat() if job.earliest_start_time else None,
+            deadline.isoformat(),
+            decision.selected_start.isoformat(), decision.selected_end.isoformat(),
+        )
     except Exception as exc:
         scheduler_jobs_total.labels(region=job.region, status="failed").inc()
         # Always recorded (unlike the success-path audit below, which honors
@@ -320,6 +336,8 @@ def schedule_batch_and_store(
     jobs: List[JobORM],
     use_demand_forecast: bool = True,
     record_audit: bool = False,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
 ) -> List[ScheduleDecision]:
     """
     Batch-schedule multiple jobs with capacity enforcement and optional ML demand forecast.
@@ -463,6 +481,7 @@ def schedule_batch_and_store(
             if record_audit:
                 try:
                     from app.trust.service import record_job_scheduled
+                    job = job_map.get(decision.job_id)
                     record_job_scheduled(
                         db=db,
                         job_id=decision.job_id,
@@ -470,6 +489,10 @@ def schedule_batch_and_store(
                         carbon_emission=decision.carbon_emission,
                         carbon_avoided=decision.carbon_avoided,
                         budget_remaining=decision.budget_remaining,
+                        tenant_id=getattr(job, "tenant_id", None),
+                        team_id=getattr(job, "team_id", None),
+                        actor=actor,
+                        request_id=request_id,
                     )
                 except Exception as audit_exc:
                     logger.warning("Audit recording skipped for job %s: %s", decision.job_id, audit_exc)

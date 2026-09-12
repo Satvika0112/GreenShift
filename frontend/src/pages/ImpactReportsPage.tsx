@@ -162,6 +162,24 @@ export const ImpactReportsPage: React.FC = () => {
             />
           </div>
 
+          {/* Native-currency savings, currency-separated — a fleet can span
+              multiple execution regions/currencies, so this is never a
+              single combined number (see app.analytics.fleet_impact). */}
+          {fleetImpact?.cost_saved_by_currency && Object.keys(fleetImpact.cost_saved_by_currency).length > 0 && (
+            <GlassCard title="Cost Saved by Native Currency">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem' }}>
+                {Object.entries(fleetImpact.cost_saved_by_currency).map(([currency, amount]: [string, any]) => (
+                  <div key={currency}>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{currency}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '1.1rem', color: '#10b981' }}>
+                      {formatCurrency(amount, currency)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </GlassCard>
+          )}
+
           {/* Team Breakdown Table */}
           {fleetImpact?.by_team && Object.keys(fleetImpact.by_team).length > 0 && (
             <GlassCard title="Carbon Avoidance by Engineering Team">
@@ -218,7 +236,7 @@ export const ImpactReportsPage: React.FC = () => {
                       <th>Region Code</th>
                       <th>Jobs Dispatched</th>
                       <th>Avoided Emissions (kg CO₂e)</th>
-                      <th>Cost Saved (USD)</th>
+                      <th>Cost Saved (Native Currency)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -236,8 +254,12 @@ export const ImpactReportsPage: React.FC = () => {
                           </span>
                         </td>
                         <td>
+                          {/* A region has exactly one currency — always shown
+                              in that real currency, never forced to USD. */}
                           <span style={{ fontFamily: 'var(--font-mono)', color: '#ffffff' }}>
-                            {formatCurrency(data.total_cost_saved_usd || 0, 'USD')}
+                            {data.currency
+                              ? formatCurrency(data.total_cost_saved_native || 0, data.currency)
+                              : formatCurrency(data.total_cost_saved_usd || 0, 'USD')}
                           </span>
                         </td>
                       </tr>

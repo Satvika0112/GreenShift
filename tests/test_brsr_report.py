@@ -70,8 +70,10 @@ def test_aggregate_includes_ghg_intensity(db):
     assert summary["ghg_intensity_kg_per_kwh"] == round(2.5 / 5.0, 6)
 
 
-def test_aggregate_includes_inr_costs(db):
-    """INR totals present alongside USD."""
+def test_aggregate_includes_native_currency_costs(db):
+    """Native-currency cost saved is present alongside USD, currency-separated
+    (Currency Consistency Hardening — replaces the old always-INR-labeled
+    fields, which silently mislabeled every non-INR job's native cost)."""
     mock_rows = [
         {
             "greenshift_carbon_kg": 1.0,
@@ -85,17 +87,40 @@ def test_aggregate_includes_inr_costs(db):
             "carbon_intensity_gco2_kwh": 400.0,
             "greenshift_cost_usd": 0.2,
             "baseline_cost_usd": 0.3,
-            "greenshift_cost_inr": 16.5,
-            "baseline_cost_inr": 24.8,
+            "greenshift_cost_native": 16.5,
+            "baseline_cost_native": 24.8,
+            "currency": "INR",
         },
     ]
     summary = _aggregate(mock_rows)
-    assert "total_greenshift_cost_inr" in summary
-    assert "total_baseline_cost_inr" in summary
-    assert "total_cost_saved_inr" in summary
-    assert summary["total_greenshift_cost_inr"] == 16.5
-    assert summary["total_baseline_cost_inr"] == 24.8
-    assert summary["total_cost_saved_inr"] == round(24.8 - 16.5, 4)
+    assert "cost_saved_by_currency" in summary
+    assert summary["cost_saved_by_currency"] == {"INR": round(24.8 - 16.5, 4)}
+
+
+def test_aggregate_never_combines_different_currencies(db):
+    """A report spanning an INR job and a USD job must report two separate
+    currency entries, never a single summed figure."""
+    mock_rows = [
+        {
+            "greenshift_carbon_kg": 1.0, "energy_kwh": 2.0, "sla_met": True, "sla_miss": False,
+            "status": "COMPLETED", "cost_difference_usd": 0.1, "baseline_carbon_kg": 2.0,
+            "carbon_avoided_kg": 1.0, "carbon_intensity_gco2_kwh": 400.0,
+            "greenshift_cost_usd": 0.2, "baseline_cost_usd": 0.3,
+            "greenshift_cost_native": 16.5, "baseline_cost_native": 24.8, "currency": "INR",
+        },
+        {
+            "greenshift_carbon_kg": 1.0, "energy_kwh": 2.0, "sla_met": True, "sla_miss": False,
+            "status": "COMPLETED", "cost_difference_usd": 0.05, "baseline_carbon_kg": 2.0,
+            "carbon_avoided_kg": 1.0, "carbon_intensity_gco2_kwh": 400.0,
+            "greenshift_cost_usd": 0.1, "baseline_cost_usd": 0.15,
+            "greenshift_cost_native": 0.1, "baseline_cost_native": 0.15, "currency": "USD",
+        },
+    ]
+    summary = _aggregate(mock_rows)
+    assert summary["cost_saved_by_currency"] == {
+        "INR": round(24.8 - 16.5, 4),
+        "USD": round(0.15 - 0.1, 4),
+    }
 
 
 def test_methodology_in_metadata(db):

@@ -552,34 +552,39 @@ def multi_team_jobs():
 def test_team_lead_list_jobs_isolated_and_cannot_bypass_via_query_param(
     client, seed_users, multi_team_jobs
 ):
-    """B. COMPANY_ADMIN (lead_a) from team-a: GET /jobs only returns team-a jobs, even when passing team_id=team-b."""
+    """B. COMPANY_ADMIN (lead_a) sees every team's jobs within their company
+    (own team-a AND team-b) — Company Admin is company-wide, not team-scoped.
+    Per the Consistency & Security Hardening model: Company Admin -> own
+    company + ALL its teams. An explicit ?team_id filter narrows the view,
+    it does not restrict which teams a Company Admin is allowed to see."""
     headers_lead_a = {"Authorization": f"Bearer {seed_users['lead_a']}"}
 
-    # 1. Unfiltered query
+    # 1. Unfiltered query -> sees both teams
     r1 = client.get("/api/v1/jobs", headers=headers_lead_a)
     assert r1.status_code == 200
     jobs_1 = r1.json()
     job_ids_1 = [j["job_id"] for j in jobs_1]
     assert "JOB-TEAM-A-001" in job_ids_1
     assert "JOB-TEAM-A-002" in job_ids_1
-    assert "JOB-TEAM-B-001" not in job_ids_1
-    assert "JOB-TEAM-B-002" not in job_ids_1
+    assert "JOB-TEAM-B-001" in job_ids_1
+    assert "JOB-TEAM-B-002" in job_ids_1
 
-    # 2. Attempt to bypass by passing ?team_id=team-b
+    # 2. Explicit ?team_id=team-b filter -> narrows to team-b (Company Admin
+    # is authorized to filter by any team in their company)
     r2 = client.get("/api/v1/jobs?team_id=team-b", headers=headers_lead_a)
     assert r2.status_code == 200
     jobs_2 = r2.json()
     job_ids_2 = [j["job_id"] for j in jobs_2]
-    # Still only sees team-a!
-    assert "JOB-TEAM-A-001" in job_ids_2
-    assert "JOB-TEAM-B-001" not in job_ids_2
-    assert "JOB-TEAM-B-002" not in job_ids_2
+    assert "JOB-TEAM-A-001" not in job_ids_2
+    assert "JOB-TEAM-B-001" in job_ids_2
+    assert "JOB-TEAM-B-002" in job_ids_2
 
 
 def test_team_lead_get_job_detail_enforces_team_isolation(
     client, seed_users, multi_team_jobs
 ):
-    """C. COMPANY_ADMIN (lead_a) from team-a: GET /jobs/{own} succeeds, GET /jobs/{other} returns 403."""
+    """C. COMPANY_ADMIN (lead_a) can fetch job detail for any team in their
+    company, including a team other than their own (company-wide access)."""
     headers_lead_a = {"Authorization": f"Bearer {seed_users['lead_a']}"}
 
     # Own team job -> 200
@@ -587,55 +592,69 @@ def test_team_lead_get_job_detail_enforces_team_isolation(
     assert r_own.status_code == 200
     assert r_own.json()["job_id"] == "JOB-TEAM-A-001"
 
-    # Other team job -> 403 Forbidden
+    # Other team's job, same company -> 200 (Company Admin, not team-scoped)
     r_other = client.get("/api/v1/jobs/JOB-TEAM-B-001", headers=headers_lead_a)
-    assert r_other.status_code == 403
-    assert "access forbidden" in r_other.json()["detail"].lower()
+    assert r_other.status_code == 200
+    assert r_other.json()["job_id"] == "JOB-TEAM-B-001"
 
 
 def test_team_lead_get_job_history_enforces_team_isolation(
     client, seed_users, multi_team_jobs
 ):
-    """D. COMPANY_ADMIN (lead_a) from team-a: GET /jobs/{other}/history returns 403."""
+    """D. COMPANY_ADMIN (lead_a) can fetch job history for any team in their
+    company, including a team other than their own (company-wide access)."""
     headers_lead_a = {"Authorization": f"Bearer {seed_users['lead_a']}"}
 
     # Own team history -> 200
     r_own = client.get("/api/v1/jobs/JOB-TEAM-A-001/history", headers=headers_lead_a)
     assert r_own.status_code == 200
 
-    # Other team history -> 403 Forbidden
+    # Other team's history, same company -> 200
     r_other = client.get("/api/v1/jobs/JOB-TEAM-B-001/history", headers=headers_lead_a)
-    assert r_other.status_code == 403
+    assert r_other.status_code == 200
 
 
-def test_pending_approvals_enforces_team_isolation(
+def test_pending_approvals_company_admin_sees_every_team_in_company(
     client, seed_users, multi_team_jobs
 ):
-    """E. Non-admin pending approvals: Only sees approvals belonging to their team."""
+    """E. COMPANY_ADMIN (lead_a) sees pending approvals for every team in
+    their company (team-a AND team-b), not just their own team — Company
+    Admin is company-wide, not team-scoped."""
     headers_lead_a = {"Authorization": f"Bearer {seed_users['lead_a']}"}
 
-    # Team Lead A sees only team-a pending approval
     r_a = client.get("/api/v1/approvals/pending", headers=headers_lead_a)
+    assert r_a.status_code == 200
+    job_ids = {item["job_id"] for item in r_a.json()}
+    assert "JOB-TEAM-A-001" in job_ids
+    assert "JOB-TEAM-B-001" in job_ids
+
+    # An explicit ?team_id=team-b filter narrows the view (Company Admin may
+    # filter by any team in their company).
+    r_a_filtered = client.get("/api/v1/approvals/pending?team_id=team-b", headers=headers_lead_a)
+    assert r_a_filtered.status_code == 200
+    filtered_ids = {item["job_id"] for item in r_a_filtered.json()}
+    assert filtered_ids == {"JOB-TEAM-B-001"}
+
+
+def test_pending_approvals_company_user_restricted_to_own_team(
+    client, seed_users, multi_team_jobs
+):
+    """A plain COMPANY_USER (operator_a, team-a) remains strictly locked to
+    their own team's pending approvals, including against a ?team_id
+    override attempt."""
+    headers_op_a = {"Authorization": f"Bearer {seed_users['operator_a']}"}
+
+    r_a = client.get("/api/v1/approvals/pending", headers=headers_op_a)
     assert r_a.status_code == 200
     items_a = r_a.json()
     assert len(items_a) == 1
     assert items_a[0]["job_id"] == "JOB-TEAM-A-001"
     assert items_a[0]["team_id"] == "team-a"
 
-    # Query param ?team_id=team-b is ignored for non-admin
-    r_a_tamper = client.get("/api/v1/approvals/pending?team_id=team-b", headers=headers_lead_a)
+    r_a_tamper = client.get("/api/v1/approvals/pending?team_id=team-b", headers=headers_op_a)
     assert r_a_tamper.status_code == 200
     assert len(r_a_tamper.json()) == 1
     assert r_a_tamper.json()[0]["job_id"] == "JOB-TEAM-A-001"
-
-    # Team Lead B sees only team-b pending approval
-    headers_lead_b = {"Authorization": f"Bearer {seed_users['lead_b']}"}
-    r_b = client.get("/api/v1/approvals/pending", headers=headers_lead_b)
-    assert r_b.status_code == 200
-    items_b = r_b.json()
-    assert len(items_b) == 1
-    assert items_b[0]["job_id"] == "JOB-TEAM-B-001"
-    assert items_b[0]["team_id"] == "team-b"
 
 
 def test_admin_cross_team_access_and_filtering(

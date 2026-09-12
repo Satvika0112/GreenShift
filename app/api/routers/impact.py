@@ -79,7 +79,9 @@ def get_headline_impact(
         "total_carbon_avoided_kg": report.total_carbon_avoided_kg,
         "avg_carbon_reduction_pct": report.avg_carbon_reduction_pct,
         "total_cost_saved_usd": report.total_cost_saved_usd,
-        "total_cost_saved_inr": report.total_cost_saved_inr,
+        # Currency-separated native savings — never a single cross-region
+        # sum, since the fleet can span multiple currencies (INR/USD/AUD/...).
+        "cost_saved_by_currency": report.cost_saved_by_currency,
         "sla_compliance_pct": report.sla_compliance_pct,
         "total_jobs": report.total_jobs_with_decisions,
         "jobs_with_positive_savings": report.jobs_with_positive_carbon_savings,

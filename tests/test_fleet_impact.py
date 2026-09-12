@@ -60,6 +60,8 @@ def _create_dummy_job_and_decision(
     base_hour: int = 10,
     gs_hour: int = 14,
     tenant_id: "str | None" = None,
+    currency: str = "INR",
+    fx_rate_to_usd: float = 0.012,
 ):
     now = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
     base_start = now.replace(hour=base_hour)
@@ -108,8 +110,9 @@ def _create_dummy_job_and_decision(
         region_id=region,
         tariff_plan="HT-I(A)",
         reason="Carbon optimal slot",
-        native_cost=gs_cost / 0.012,
-        baseline_native_cost=base_cost / 0.012,
+        currency=currency,
+        native_cost=gs_cost / fx_rate_to_usd,
+        baseline_native_cost=base_cost / fx_rate_to_usd,
     )
     db.add(sd)
     db.commit()
@@ -169,6 +172,49 @@ def test_fleet_impact_regional_breakdown(db):
         assert reg in report.by_region
         assert report.by_region[reg].job_count == 1
         assert report.by_region[reg].total_carbon_avoided_kg == 2.0
+
+
+def test_fleet_impact_multi_region_currencies_never_combined(db):
+    """Currency Consistency Hardening: an India (INR), USA (USD), and
+    Australia (AUD) job in the same fleet must never have their native
+    costs summed into a single mislabeled figure — the fleet-level
+    breakdown must be currency-separated, and each region's own bucket
+    must report its own real currency."""
+    _create_dummy_job_and_decision(
+        db, job_id="JOB-CUR-IN", region="IN-TG", currency="INR", fx_rate_to_usd=0.012,
+        base_cost=100.0, gs_cost=80.0,
+    )
+    _create_dummy_job_and_decision(
+        db, job_id="JOB-CUR-US", region="US-CA", currency="USD", fx_rate_to_usd=1.0,
+        base_cost=10.0, gs_cost=8.0,
+    )
+    _create_dummy_job_and_decision(
+        db, job_id="JOB-CUR-AU", region="AU-SA-Small", currency="AUD", fx_rate_to_usd=0.65,
+        base_cost=5.0, gs_cost=4.0,
+    )
+
+    report = compute_fleet_impact(db)
+    assert report.total_jobs_with_decisions == 3
+
+    # Per-region buckets: each reports its OWN real currency and native total.
+    assert report.by_region["IN-TG"].currency == "INR"
+    assert report.by_region["IN-TG"].total_cost_saved_native == pytest.approx((100.0 - 80.0) / 0.012, abs=0.01)
+    assert report.by_region["US-CA"].currency == "USD"
+    assert report.by_region["US-CA"].total_cost_saved_native == pytest.approx((10.0 - 8.0) / 1.0, abs=0.01)
+    assert report.by_region["AU-SA-Small"].currency == "AUD"
+    assert report.by_region["AU-SA-Small"].total_cost_saved_native == pytest.approx((5.0 - 4.0) / 0.65, abs=0.01)
+
+    # Fleet level: currency-separated dict, one entry per real currency —
+    # never a single number combining INR + USD + AUD.
+    by_currency = report.cost_saved_by_currency
+    assert set(by_currency.keys()) == {"INR", "USD", "AUD"}
+    assert by_currency["INR"] == pytest.approx((100.0 - 80.0) / 0.012, abs=0.01)
+    assert by_currency["USD"] == pytest.approx((10.0 - 8.0) / 1.0, abs=0.01)
+    assert by_currency["AUD"] == pytest.approx((5.0 - 4.0) / 0.65, abs=0.01)
+
+    # total_cost_saved_usd remains the one legitimate cross-region metric —
+    # unaffected by this fix, still a genuine USD sum via the real FX path.
+    assert report.total_cost_saved_usd == pytest.approx(20.0 + 2.0 + 1.0, rel=1e-6)
 
 
 def test_fleet_impact_distribution_stats(db):
@@ -284,7 +330,7 @@ def test_headline_api_endpoint(client, db):
         "total_carbon_avoided_kg",
         "avg_carbon_reduction_pct",
         "total_cost_saved_usd",
-        "total_cost_saved_inr",
+        "cost_saved_by_currency",
         "sla_compliance_pct",
         "total_jobs",
         "jobs_with_positive_savings",

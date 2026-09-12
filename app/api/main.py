@@ -205,6 +205,17 @@ try:
 except ImportError:
     logger.warning("Ingest router not yet implemented")
 
+# Contention-Aware Batch Scheduler & ML Forecaster — registered BEFORE the
+# Agent 2 schedule_router below: its literal "/schedule/batch" path must be
+# matched before schedule_router's "/schedule/{job_id}" would otherwise treat
+# "batch" as a job_id (Starlette matches routes in registration order).
+try:
+    from app.api.routers import scheduler as scheduler_router
+    app.include_router(scheduler_router.router, prefix="/api/v1", tags=["Scheduler"])
+    app.include_router(scheduler_router.router, prefix="", tags=["Scheduler"])
+except ImportError:
+    logger.warning("Scheduler router not yet implemented")
+
 # Agent 2 — DECIDE
 try:
     from app.api.routers import schedule as schedule_router
@@ -275,14 +286,6 @@ try:
     app.include_router(impact_router.router, prefix="", tags=["Impact"])
 except ImportError:
     logger.warning("Impact router not yet implemented")
-
-# Contention-Aware Batch Scheduler & ML Forecaster
-try:
-    from app.api.routers import scheduler as scheduler_router
-    app.include_router(scheduler_router.router, prefix="/api/v1", tags=["Scheduler"])
-    app.include_router(scheduler_router.router, prefix="", tags=["Scheduler"])
-except ImportError:
-    logger.warning("Scheduler router not yet implemented")
 
 # Admin — User & API Key Management (Phase 1 Multi-Tenant)
 try:

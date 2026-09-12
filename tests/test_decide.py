@@ -217,30 +217,41 @@ class TestScheduler:
         Slot A: Carbon = 2.0 kg, Cost = $0.05
         Slot B: Carbon = 1.0 kg, Cost = $0.15
         Expected: Slot B selected (lower carbon).
+
+        Uses a future earliest_start_time (see test_b_cost_breaks_carbon_tie
+        for why exactly `now`, floored to the hour, is not used here): with
+        the Time Consistency Hardening clamp, `earliest_start_time=now`
+        (already technically in the past by the time the scheduler takes its
+        own `datetime.now()` snapshot) shifts the effective start bound to
+        that later, non-hour-aligned real time, inserting an extra raw
+        candidate that ties on nearest-neighbor-interpolated carbon/cost
+        with "Hour 1" and wins the earliest-start tie-break instead of it —
+        a real behavior change from the fix, not a test bug to paper over.
         """
         # Power = 10 kW, runtime = 60m -> 10 kWh energy
         # Hour 0: 200 gCO2/kWh -> 2.0 kg, price $0.005 -> $0.05
         # Hour 1: 100 gCO2/kWh -> 1.0 kg, price $0.015 -> $0.15
+        earliest = now + timedelta(hours=1)
         carbon_curve = [
-            CarbonDataPoint(timestamp=now, region="IN-TG", carbon_gco2_kwh=200.0),
-            CarbonDataPoint(timestamp=now + timedelta(hours=1), region="IN-TG", carbon_gco2_kwh=100.0),
+            CarbonDataPoint(timestamp=earliest, region="IN-TG", carbon_gco2_kwh=200.0),
+            CarbonDataPoint(timestamp=earliest + timedelta(hours=1), region="IN-TG", carbon_gco2_kwh=100.0),
         ]
         tariff_curve = [
-            TariffDataPoint(timestamp=now, region="IN-TG", price_per_kwh=0.005),
-            TariffDataPoint(timestamp=now + timedelta(hours=1), region="IN-TG", price_per_kwh=0.015),
+            TariffDataPoint(timestamp=earliest, region="IN-TG", price_per_kwh=0.005),
+            TariffDataPoint(timestamp=earliest + timedelta(hours=1), region="IN-TG", price_per_kwh=0.015),
         ]
         decision = schedule_job(
             job_id="JOB-CARBON-WINS",
             team_id="ml",
-            deadline=now + timedelta(hours=3),
+            deadline=earliest + timedelta(hours=3),
             runtime_minutes=60,
             power_kw=10.0,
             region="IN-TG",
             carbon_curve=carbon_curve,
             tariff_curve=tariff_curve,
-            earliest_start_time=now,
+            earliest_start_time=earliest,
         )
-        assert decision.selected_start == now + timedelta(hours=1)
+        assert decision.selected_start == earliest + timedelta(hours=1)
         assert decision.carbon_emission == pytest.approx(1.0)
         assert decision.electricity_cost == pytest.approx(0.15)
 
@@ -250,27 +261,39 @@ class TestScheduler:
         Slot A: Carbon = 1.0 kg, Cost = $0.05
         Slot B: Carbon = 1.0 kg, Cost = $0.10
         Expected: Slot A selected (equal carbon, cheaper cost).
+
+        earliest_start_time is set an hour into the future (rather than
+        exactly `now`) so this test exercises the tie-break logic itself,
+        not the Time Consistency Hardening clamp: `now` fixture is floored
+        to the top of the hour, which is technically already in the past by
+        the time the scheduler takes its own `datetime.now()` snapshot a
+        moment later — the scheduler correctly clamps its effective start
+        bound up to that real "now" in that case (see
+        tests/test_manual_scheduling_time_consistency.py, TestPastEarliestStartClampsToNow),
+        which would shift selected_start by a few seconds/minutes and make
+        this test's exact-equality assertion flaky for the wrong reason.
         """
+        earliest = now + timedelta(hours=1)
         carbon_curve = [
-            CarbonDataPoint(timestamp=now, region="IN-TG", carbon_gco2_kwh=100.0),
-            CarbonDataPoint(timestamp=now + timedelta(hours=1), region="IN-TG", carbon_gco2_kwh=100.0),
+            CarbonDataPoint(timestamp=earliest, region="IN-TG", carbon_gco2_kwh=100.0),
+            CarbonDataPoint(timestamp=earliest + timedelta(hours=1), region="IN-TG", carbon_gco2_kwh=100.0),
         ]
         tariff_curve = [
-            TariffDataPoint(timestamp=now, region="IN-TG", price_per_kwh=0.005),
-            TariffDataPoint(timestamp=now + timedelta(hours=1), region="IN-TG", price_per_kwh=0.010),
+            TariffDataPoint(timestamp=earliest, region="IN-TG", price_per_kwh=0.005),
+            TariffDataPoint(timestamp=earliest + timedelta(hours=1), region="IN-TG", price_per_kwh=0.010),
         ]
         decision = schedule_job(
             job_id="JOB-COST-TIE",
             team_id="ml",
-            deadline=now + timedelta(hours=3),
+            deadline=earliest + timedelta(hours=3),
             runtime_minutes=60,
             power_kw=10.0,
             region="IN-TG",
             carbon_curve=carbon_curve,
             tariff_curve=tariff_curve,
-            earliest_start_time=now,
+            earliest_start_time=earliest,
         )
-        assert decision.selected_start == now
+        assert decision.selected_start == earliest
         assert decision.electricity_cost == pytest.approx(0.05)
 
     def test_c_deterministic_start_time_tiebreak(self, now):
@@ -279,54 +302,62 @@ class TestScheduler:
         Slot A (10:00): Carbon = 1.0 kg, Cost = $0.10
         Slot B (11:00): Carbon = 1.0 kg, Cost = $0.10
         Expected: Slot A selected (earliest start time).
+
+        Uses a future earliest_start_time — see test_b_cost_breaks_carbon_tie
+        for why exactly `now` (floored to the hour) is not used here.
         """
+        earliest = now + timedelta(hours=1)
         carbon_curve = [
-            CarbonDataPoint(timestamp=now, region="IN-TG", carbon_gco2_kwh=100.0),
-            CarbonDataPoint(timestamp=now + timedelta(hours=1), region="IN-TG", carbon_gco2_kwh=100.0),
+            CarbonDataPoint(timestamp=earliest, region="IN-TG", carbon_gco2_kwh=100.0),
+            CarbonDataPoint(timestamp=earliest + timedelta(hours=1), region="IN-TG", carbon_gco2_kwh=100.0),
         ]
         tariff_curve = [
-            TariffDataPoint(timestamp=now, region="IN-TG", price_per_kwh=0.010),
-            TariffDataPoint(timestamp=now + timedelta(hours=1), region="IN-TG", price_per_kwh=0.010),
+            TariffDataPoint(timestamp=earliest, region="IN-TG", price_per_kwh=0.010),
+            TariffDataPoint(timestamp=earliest + timedelta(hours=1), region="IN-TG", price_per_kwh=0.010),
         ]
         decision = schedule_job(
             job_id="JOB-TIME-TIE",
             team_id="ml",
-            deadline=now + timedelta(hours=3),
+            deadline=earliest + timedelta(hours=3),
             runtime_minutes=60,
             power_kw=10.0,
             region="IN-TG",
             carbon_curve=carbon_curve,
             tariff_curve=tariff_curve,
-            earliest_start_time=now,
+            earliest_start_time=earliest,
         )
-        assert decision.selected_start == now
+        assert decision.selected_start == earliest
 
     def test_g_non_deferrable_workload(self, now):
         """
         TEST G — NON-DEFERRABLE WORKLOAD
         Should only consider the earliest start window even if future slots have lower carbon.
+
+        Uses a future earliest_start_time — see test_b_cost_breaks_carbon_tie
+        for why exactly `now` (floored to the hour) is not used here.
         """
+        earliest = now + timedelta(hours=1)
         carbon_curve = [
-            CarbonDataPoint(timestamp=now, region="IN-TG", carbon_gco2_kwh=300.0),
-            CarbonDataPoint(timestamp=now + timedelta(hours=1), region="IN-TG", carbon_gco2_kwh=50.0),
+            CarbonDataPoint(timestamp=earliest, region="IN-TG", carbon_gco2_kwh=300.0),
+            CarbonDataPoint(timestamp=earliest + timedelta(hours=1), region="IN-TG", carbon_gco2_kwh=50.0),
         ]
         tariff_curve = [
-            TariffDataPoint(timestamp=now, region="IN-TG", price_per_kwh=0.10),
-            TariffDataPoint(timestamp=now + timedelta(hours=1), region="IN-TG", price_per_kwh=0.05),
+            TariffDataPoint(timestamp=earliest, region="IN-TG", price_per_kwh=0.10),
+            TariffDataPoint(timestamp=earliest + timedelta(hours=1), region="IN-TG", price_per_kwh=0.05),
         ]
         decision = schedule_job(
             job_id="JOB-NON-DEFERRABLE",
             team_id="ops",
-            deadline=now + timedelta(hours=4),
+            deadline=earliest + timedelta(hours=4),
             runtime_minutes=60,
             power_kw=10.0,
             region="IN-TG",
             carbon_curve=carbon_curve,
             tariff_curve=tariff_curve,
             deferrable=False,
-            earliest_start_time=now,
+            earliest_start_time=earliest,
         )
-        assert decision.selected_start == now
+        assert decision.selected_start == earliest
         assert "Non-deferrable" in decision.reason
 
     def test_h_missing_carbon_data_raises_value_error(self, now):

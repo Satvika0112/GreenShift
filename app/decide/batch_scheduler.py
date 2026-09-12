@@ -12,7 +12,6 @@ Schedules batches of workloads with:
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple, Any
@@ -45,7 +44,6 @@ from app.ingest.regional_registry import (
     resolve_region_id,
     select_tariff_plan_for_job,
 )
-from app.shared.config import settings
 from app.shared.models import JobORM, ScheduleDecision
 from app.shared.utils import utcnow
 
@@ -344,14 +342,12 @@ def schedule_batch(
         if job.carbon_budget_kg is not None and chosen.carbon_emission_kg is not None:
             budget_remaining = round(job.carbon_budget_kg - chosen.carbon_emission_kg, 6)
 
-        # INR rate conversion for backward compatibility
-        inr_to_usd = float(os.environ.get("TARIFF_INR_TO_USD", str(settings.tariff_inr_to_usd)))
-        if cfg and cfg.currency == "INR":
-            tariff_inr = chosen_native_rate
-        elif inr_to_usd > 0:
-            tariff_inr = round(chosen_tariff_usd / inr_to_usd, 4)
-        else:
-            tariff_inr = None
+        # tariff_inr_per_kwh (legacy field, backwards compatibility): only
+        # ever populated for a genuinely INR-denominated region — never
+        # fabricate an INR-labeled rate for another currency (Currency
+        # Consistency Hardening; mirrors the identical fix in
+        # app.decide.scheduler._execute_schedule_job).
+        tariff_inr = chosen_native_rate if cfg and cfg.currency == "INR" else None
 
         method_str = "batch_contention_aware_ml" if ml_active else "batch_contention_aware"
 

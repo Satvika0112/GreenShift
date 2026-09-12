@@ -7,7 +7,6 @@ across all scheduled workloads.
 from __future__ import annotations
 
 import logging
-import os
 import statistics
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -15,10 +14,31 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.ingest.regional_registry import get_region_config, resolve_region_id
 from app.shared.models import JobORM, ScheduleDecisionORM
 from app.shared.utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_currency(job: JobORM, sd: ScheduleDecisionORM) -> str:
+    """
+    Currency Consistency Hardening: the execution region is the single
+    source of truth for a decision's native currency (per
+    app.ingest.regional_registry), not `ScheduleDecisionORM.currency`
+    (which defaults to "USD" whenever a caller never explicitly set it —
+    e.g. `ScheduleDecisionORM(region_id="IN-TG", ...)` with no `currency=`
+    kwarg silently reports USD despite genuinely being an India/INR
+    decision). Falls back to the stored column, then "USD", only when the
+    region itself can't be resolved.
+    """
+    region = getattr(sd, "region_id", None) or getattr(job, "region", None)
+    if region:
+        try:
+            return get_region_config(resolve_region_id(region)).currency
+        except Exception:
+            pass
+    return getattr(sd, "currency", None) or "USD"
 
 
 @dataclass
@@ -27,7 +47,11 @@ class RegionImpactSummary:
     total_carbon_avoided_kg: float = 0.0
     avg_carbon_reduction_pct: float = 0.0
     total_cost_saved_usd: float = 0.0
-    total_cost_saved_inr: float = 0.0
+    # The region's real native currency and the cost saved in it — always
+    # safe to report as a single number because one region has exactly one
+    # currency (unlike a fleet/team/job-type total, which can span several).
+    currency: str = ""
+    total_cost_saved_native: float = 0.0
     sla_compliance_pct: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -40,7 +64,11 @@ class TeamImpactSummary:
     total_carbon_avoided_kg: float = 0.0
     avg_carbon_reduction_pct: float = 0.0
     total_cost_saved_usd: float = 0.0
-    total_cost_saved_inr: float = 0.0
+    # A team can run jobs across multiple execution regions/currencies, so —
+    # unlike RegionImpactSummary — there is no single safe "native total"
+    # here. Currency-separated, never summed across currencies (Currency
+    # Consistency Hardening, replaces the old always-mislabeled-INR field).
+    cost_saved_by_currency: Dict[str, float] = field(default_factory=dict)
     sla_compliance_pct: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -53,7 +81,9 @@ class JobTypeImpactSummary:
     total_carbon_avoided_kg: float = 0.0
     avg_carbon_reduction_pct: float = 0.0
     total_cost_saved_usd: float = 0.0
-    total_cost_saved_inr: float = 0.0
+    # See TeamImpactSummary.cost_saved_by_currency — a job type can also
+    # span multiple execution regions/currencies.
+    cost_saved_by_currency: Dict[str, float] = field(default_factory=dict)
     sla_compliance_pct: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -81,9 +111,16 @@ class FleetImpactReport:
     avg_cost_reduction_pct: float = 0.0
     median_cost_reduction_pct: float = 0.0
 
-    total_baseline_cost_inr: float = 0.0         # Native INR totals
-    total_greenshift_cost_inr: float = 0.0
-    total_cost_saved_inr: float = 0.0
+    # Currency Consistency Hardening: a fleet can span multiple execution
+    # regions with different native currencies (INR/USD/AUD/...) — summing
+    # their native costs into one scalar would silently combine currencies
+    # (the previous `total_cost_saved_inr` did exactly this, mislabeling
+    # every non-INR job's native cost as INR). total_cost_saved_usd above
+    # remains a legitimate, already-existing cross-region comparison metric
+    # (uses the real FX mechanism in app.ingest.regional_registry); this
+    # dict is the currency-separated view for when the real native amounts
+    # matter, e.g. "India: ₹18,000, USA: $200, Australia: A$150".
+    cost_saved_by_currency: Dict[str, float] = field(default_factory=dict)
 
     avg_scheduling_delay_hours: float = 0.0
     sla_met_count: int = 0
@@ -194,10 +231,6 @@ def compute_fleet_impact(
             filters_applied=filters_applied,
         )
 
-    inr_to_usd = float(os.environ.get("TARIFF_INR_TO_USD", "0.012"))
-    if inr_to_usd <= 0:
-        inr_to_usd = 0.012
-
     total_energy_kwh = 0.0
     total_baseline_carbon_kg = 0.0
     total_greenshift_carbon_kg = 0.0
@@ -207,9 +240,7 @@ def compute_fleet_impact(
     total_greenshift_cost_usd = 0.0
     total_cost_saved_usd = 0.0
 
-    total_baseline_cost_inr = 0.0
-    total_greenshift_cost_inr = 0.0
-    total_cost_saved_inr = 0.0
+    cost_saved_by_currency: Dict[str, float] = {}
 
     total_delay_hours = 0.0
     sla_met_count = 0
@@ -266,14 +297,18 @@ def compute_fleet_impact(
         cost_red_pct = float(sd.cost_reduction_pct if sd.cost_reduction_pct is not None else ((cost_diff / b_cost * 100.0) if b_cost > 0 else 0.0))
         cost_reductions.append(round(cost_red_pct, 4))
 
-        # Cost metrics (INR)
-        b_inr = float(sd.baseline_native_cost if sd.baseline_native_cost is not None else (b_cost / inr_to_usd))
-        gs_inr = float(sd.native_cost if sd.native_cost is not None else (gs_cost / inr_to_usd))
-        saved_inr = b_inr - gs_inr
-
-        total_baseline_cost_inr += b_inr
-        total_greenshift_cost_inr += gs_inr
-        total_cost_saved_inr += saved_inr
+        # Native-currency cost saved — never fabricated via FX, and never
+        # combined across currencies. Only accumulated when both native
+        # figures are genuinely present; a job whose native_cost hasn't
+        # been computed contributes nothing here (no invented conversion),
+        # exactly like the "Not available" convention in
+        # app.notify.templates._format_cost.
+        row_currency = _resolve_currency(job, sd)
+        if sd.native_cost is not None and sd.baseline_native_cost is not None:
+            saved_native = float(sd.baseline_native_cost) - float(sd.native_cost)
+            cost_saved_by_currency[row_currency] = cost_saved_by_currency.get(row_currency, 0.0) + saved_native
+        else:
+            saved_native = None
 
         # Delay & SLA
         delay = float(sd.scheduling_delay_hours or 0.0)
@@ -307,14 +342,16 @@ def compute_fleet_impact(
                     "c_avoided": 0.0,
                     "c_red_list": [],
                     "cost_saved_usd": 0.0,
-                    "cost_saved_inr": 0.0,
+                    "cost_saved_by_currency": {},
                     "sla_met": 0,
                 }
             bucket[key]["count"] += 1
             bucket[key]["c_avoided"] += c_avoided
             bucket[key]["c_red_list"].append(c_red_pct)
             bucket[key]["cost_saved_usd"] += cost_diff
-            bucket[key]["cost_saved_inr"] += saved_inr
+            if saved_native is not None:
+                by_cur = bucket[key]["cost_saved_by_currency"]
+                by_cur[row_currency] = by_cur.get(row_currency, 0.0) + saved_native
             if sla:
                 bucket[key]["sla_met"] += 1
 
@@ -334,12 +371,20 @@ def compute_fleet_impact(
     by_region: Dict[str, RegionImpactSummary] = {}
     for r_k, r_v in region_groups.items():
         cnt = r_v["count"]
+        by_cur = r_v["cost_saved_by_currency"]
+        # A region bucket is single-currency by construction (one region ->
+        # one currency), so exactly one entry is expected here in practice.
+        # If a bucket somehow mixes currencies (e.g. a region code was
+        # reused with a different registry entry over time), report the
+        # largest-magnitude currency rather than silently summing them.
+        region_currency = max(by_cur, key=lambda c: abs(by_cur[c])) if by_cur else ""
         by_region[r_k] = RegionImpactSummary(
             job_count=cnt,
             total_carbon_avoided_kg=round(r_v["c_avoided"], 4),
             avg_carbon_reduction_pct=round(statistics.mean(r_v["c_red_list"]) if r_v["c_red_list"] else 0.0, 2),
             total_cost_saved_usd=round(r_v["cost_saved_usd"], 4),
-            total_cost_saved_inr=round(r_v["cost_saved_inr"], 2),
+            currency=region_currency,
+            total_cost_saved_native=round(by_cur.get(region_currency, 0.0), 2),
             sla_compliance_pct=round((r_v["sla_met"] / cnt * 100.0) if cnt else 100.0, 2),
         )
 
@@ -351,7 +396,7 @@ def compute_fleet_impact(
             total_carbon_avoided_kg=round(t_v["c_avoided"], 4),
             avg_carbon_reduction_pct=round(statistics.mean(t_v["c_red_list"]) if t_v["c_red_list"] else 0.0, 2),
             total_cost_saved_usd=round(t_v["cost_saved_usd"], 4),
-            total_cost_saved_inr=round(t_v["cost_saved_inr"], 2),
+            cost_saved_by_currency={c: round(v, 2) for c, v in t_v["cost_saved_by_currency"].items()},
             sla_compliance_pct=round((t_v["sla_met"] / cnt * 100.0) if cnt else 100.0, 2),
         )
 
@@ -363,7 +408,7 @@ def compute_fleet_impact(
             total_carbon_avoided_kg=round(j_v["c_avoided"], 4),
             avg_carbon_reduction_pct=round(statistics.mean(j_v["c_red_list"]) if j_v["c_red_list"] else 0.0, 2),
             total_cost_saved_usd=round(j_v["cost_saved_usd"], 4),
-            total_cost_saved_inr=round(j_v["cost_saved_inr"], 2),
+            cost_saved_by_currency={c: round(v, 2) for c, v in j_v["cost_saved_by_currency"].items()},
             sla_compliance_pct=round((j_v["sla_met"] / cnt * 100.0) if cnt else 100.0, 2),
         )
 
@@ -382,9 +427,7 @@ def compute_fleet_impact(
         total_cost_saved_usd=round(total_cost_saved_usd, 4),
         avg_cost_reduction_pct=round(avg_cost_red, 2),
         median_cost_reduction_pct=round(med_cost_red, 2),
-        total_baseline_cost_inr=round(total_baseline_cost_inr, 2),
-        total_greenshift_cost_inr=round(total_greenshift_cost_inr, 2),
-        total_cost_saved_inr=round(total_cost_saved_inr, 2),
+        cost_saved_by_currency={c: round(v, 2) for c, v in cost_saved_by_currency.items()},
         avg_scheduling_delay_hours=round(avg_delay, 2),
         sla_met_count=sla_met_count,
         sla_miss_count=sla_miss_count,

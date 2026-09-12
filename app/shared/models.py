@@ -439,15 +439,21 @@ class ScheduleDecisionORM(Base):
     budget_remaining  = Column(Float, nullable=True)
     created_at        = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
 
-    # Regional & Currency context
+    # Regional & Currency context. `currency` denominates native_cost /
+    # baseline_native_cost ONLY — it does NOT describe electricity_cost /
+    # baseline_cost / cost_difference below, which are always USD (see their
+    # own comments). The execution region is the real source of truth for
+    # this value (app.ingest.regional_registry.get_region_config), not this
+    # column's own "USD" default, which a caller can leave unset.
     region_id          = Column(String, nullable=True, default="IN-TG", index=True)
     tariff_plan        = Column(String, nullable=True)
     currency           = Column(String, nullable=True, default="USD")
     native_cost        = Column(Float, nullable=True)
     baseline_native_cost = Column(Float, nullable=True)
 
-    # Tariff audit: raw INR/native rate before currency conversion
-    tariff_inr_per_kwh = Column(Float, nullable=True)  # Legacy & INR rate at selected window
+    # Legacy field: only ever populated when `currency` is genuinely "INR" —
+    # never fabricated for another currency (Currency Consistency Hardening).
+    tariff_inr_per_kwh = Column(Float, nullable=True)
     tariff_category    = Column(String, nullable=True)  # "ht1a" / "ht2a" or plan identifier
 
     # Baseline comparison & Impact metrics
@@ -1315,6 +1321,47 @@ class JobSubmitRequest(BaseModel):
             raise ValueError("memory_request exceeds maximum limit (2048 GiB)")
         return v.strip()
 
+    @model_validator(mode="after")
+    def validate_manual_scheduling_window(self) -> "JobSubmitRequest":
+        """
+        Time Consistency Hardening: reject an impossible manual scheduling
+        window at submission time rather than letting it surface later as an
+        opaque "no feasible execution window" error from the scheduler.
+
+        Only runs when earliest_start_time is actually supplied — it remains
+        optional (no earliest bound = GreenShift may start as soon as
+        feasible). Both timestamps are compared exactly as submitted (before
+        app.shared.timezone.normalize_to_utc is applied in app.ingest.jobs
+        .submit_job) — a relative comparison is valid either way, since both
+        values share the same reference frame (the same request). If one is
+        timezone-aware and the other naive, skip this check rather than
+        raising a TypeError — normalize_to_utc will independently resolve
+        each afterward, and the scheduler's own infeasibility check remains
+        the final backstop.
+        """
+        est = self.earliest_start_time
+        if est is None:
+            return self
+        dl = self.deadline
+        if (est.tzinfo is None) != (dl.tzinfo is None):
+            return self
+        if est >= dl:
+            raise ValueError("earliest_start_time must be before deadline")
+        from datetime import timedelta
+        # 60s tolerance matches (and is deliberately slightly more generous
+        # than) app.ingest.job_csv_loader's own 0.01-hour (36s) window-fit
+        # tolerance, so a CSV row the loader already accepted is never
+        # double-rejected here — this validator's job is to catch genuinely
+        # broken windows, not to be a stricter second copy of that check.
+        window_tolerance = timedelta(seconds=60)
+        if est + timedelta(minutes=self.runtime_minutes) > dl + window_tolerance:
+            raise ValueError(
+                f"Requested window is too short: earliest_start_time + runtime_minutes "
+                f"({self.runtime_minutes}m) exceeds deadline. Extend the deadline, move "
+                f"earliest_start_time earlier, or reduce runtime_minutes."
+            )
+        return self
+
 
 class JobSubmitResponse(BaseModel):
     job_id:       str
@@ -1343,6 +1390,11 @@ class TariffDataPoint(BaseModel):
 
     timestamp:     datetime
     region:        str
+    # Always USD (set from RegionalTariffORM.price_per_kwh_usd — see
+    # app.ingest.regional_tariff_loader) — this is the curve the scheduler's
+    # `electricity_cost` is computed from. It is NOT the region's native
+    # tariff rate; see app.shared.tariff_service / CurrentTariffInfo for
+    # the real native-currency rate (`effective_price` + `currency`).
     price_per_kwh: float
 
 
@@ -1374,16 +1426,26 @@ class ScheduleDecision(BaseModel):
     candidates:                Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     rejected_candidates:       Optional[List[Dict[str, Any]]] = Field(default_factory=list)
 
-    # Regional & Currency context
+    # Regional & Currency context. `currency` denominates native_cost /
+    # baseline_native_cost ONLY (never electricity_cost / baseline_cost /
+    # cost_difference above/below, which are always USD) — the execution
+    # region is the real source of truth for this value, not this field's
+    # own "USD" default. Prefer native_cost + currency for user-facing
+    # display (see frontend utils/workloadDisplay.formatCost); the *_usd
+    # fields exist for cross-region comparison via the existing FX
+    # mechanism (app.ingest.regional_registry.get_fx_rate_to_usd).
     region_id:            Optional[str] = "IN-TG"
     tariff_plan:          Optional[str] = None
     currency:             Optional[str] = "USD"
     native_cost:          Optional[float] = None
     baseline_native_cost: Optional[float] = None
-    tariff_inr_per_kwh:   Optional[float] = None  # raw INR/native rate for backwards compatibility
+    # Legacy field: only ever populated when `currency` is genuinely "INR" —
+    # never fabricated for another currency (Currency Consistency Hardening).
+    tariff_inr_per_kwh:   Optional[float] = None
     tariff_category:      Optional[str]   = None  # plan identifier
 
-    # Baseline comparison & Impact metrics
+    # Baseline comparison & Impact metrics. baseline_cost/cost_difference are
+    # always USD (paired with baseline_native_cost above for the native figure).
     baseline_start:            Optional[datetime] = None
     baseline_end:              Optional[datetime] = None
     baseline_carbon_emission:  Optional[float]    = None

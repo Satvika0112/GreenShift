@@ -23,7 +23,7 @@ from app.approval.service import (
     get_pending_approvals,
     resubmit_workload,
 )
-from app.shared.auth import get_current_user, is_platform_admin
+from app.shared.auth import get_current_user, is_company_admin, is_platform_admin
 from app.shared.database import get_db
 from app.shared.rate_limiter import limiter
 from app.shared.models import (
@@ -215,7 +215,10 @@ def api_get_pending_approvals(
             effective_team_id = team_id
         else:
             effective_tenant_id = current_user.tenant_id
-            effective_team_id = current_user.team_id
+            # Company Admin sees every team in their company (may still
+            # filter by a specific team_id); a plain Company User is locked
+            # to their own team — same rule as app.api.tenant_scope.
+            effective_team_id = team_id if is_company_admin(current_user) else current_user.team_id
 
         return get_pending_approvals(db, team_id=effective_team_id, tenant_id=effective_tenant_id)
     except Exception as exc:
@@ -252,7 +255,12 @@ def api_get_declined_approvals(
         else:
             if current_user.tenant_id:
                 query = query.filter(JobORM.tenant_id == current_user.tenant_id)
-            if current_user.team_id:
+            # Company Admin sees every team in their company; a plain
+            # Company User is locked to their own team.
+            if is_company_admin(current_user):
+                if team_id:
+                    query = query.filter(JobORM.team_id == team_id)
+            elif current_user.team_id:
                 query = query.filter(JobORM.team_id == current_user.team_id)
 
         approvals = query.order_by(ApprovalORM.created_at.desc()).all()
@@ -297,7 +305,7 @@ def api_get_approval_history(
             effective_team_id = team_id
         else:
             effective_tenant_id = current_user.tenant_id
-            effective_team_id = current_user.team_id
+            effective_team_id = team_id if is_company_admin(current_user) else current_user.team_id
 
         return get_approval_history(db, team_id=effective_team_id, tenant_id=effective_tenant_id)
     except Exception as exc:

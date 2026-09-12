@@ -302,10 +302,11 @@ def test_company_user_cannot_submit_for_another_team(client, auth_tokens):
     assert "cannot submit jobs for team 'team_beta'" in res.json()["detail"].lower()
 
 
-def test_company_admin_cannot_schedule_another_teams_job_when_team_scoped(client, auth_tokens):
-    """A Company Admin with a team_id set is still team-scoped for job lookup/scheduling
-    (team_id-based scoping in app.api.tenant_scope.get_tenant_jobs applies to any
-    non-Platform-Admin identity, independent of the Company Admin/Company User tier)."""
+def test_company_admin_can_schedule_another_teams_job_in_same_company(client, auth_tokens):
+    """A Company Admin is company-wide, not team-scoped — the team filter in
+    app.api.tenant_scope.get_tenant_jobs only applies to a plain Company
+    User. A Company Admin of team_alpha may schedule a job belonging to
+    team_beta, as long as it is within the same company."""
     admin_token = auth_tokens["PLATFORM_ADMIN"]
     lead_alpha_token = auth_tokens["COMPANY_ADMIN_team_alpha"]
 
@@ -320,8 +321,28 @@ def test_company_admin_cannot_schedule_another_teams_job_when_team_scoped(client
         "container_image": "greenshift/workload:latest",
     }, headers={"Authorization": f"Bearer {admin_token}"})
 
-    # Company Admin of team_alpha attempts to schedule team_beta's job
+    # Company Admin of team_alpha schedules team_beta's job -> allowed
     res = client.post("/api/v1/schedule/JOB-BETA-001", headers={"Authorization": f"Bearer {lead_alpha_token}"})
+    assert res.status_code == 200
+
+
+def test_company_user_cannot_schedule_another_teams_job(client, auth_tokens):
+    """Unlike Company Admin, a plain COMPANY_USER remains strictly locked to
+    their own team for job scheduling."""
+    admin_token = auth_tokens["PLATFORM_ADMIN"]
+    user_alpha_token = auth_tokens["COMPANY_USER_team_alpha"]
+
+    client.post("/api/v1/jobs", json={
+        "job_id": "JOB-BETA-002",
+        "team_id": "team_beta",
+        "deadline": (utcnow() + timedelta(hours=6)).isoformat(),
+        "runtime_minutes": 30,
+        "power_kw": 2.0,
+        "region": "IN-TG",
+        "container_image": "greenshift/workload:latest",
+    }, headers={"Authorization": f"Bearer {admin_token}"})
+
+    res = client.post("/api/v1/schedule/JOB-BETA-002", headers={"Authorization": f"Bearer {user_alpha_token}"})
     assert res.status_code == 403
     assert "belongs to another team" in res.json()["detail"].lower()
 

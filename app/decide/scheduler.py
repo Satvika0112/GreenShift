@@ -32,7 +32,6 @@ Future capacity forecasting is outside the current MVP scope.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
@@ -55,7 +54,6 @@ from app.ingest.regional_tariff_loader import (
     load_raw_tariff_template,
 )
 from app.shared.tariff_service import get_tariff_for_region_and_time
-from app.shared.config import settings
 from app.shared.metrics import (
     record_scheduler_request,
     record_scheduler_success,
@@ -215,7 +213,23 @@ def _generate_candidate_slots(
     runtime_minutes: int,
     deferrable: bool = True,
 ) -> List[datetime]:
-    """Generate candidate start times at hourly resolution within deadline."""
+    """
+    Generate candidate start times within [start_bound, deadline - runtime].
+
+    Slot-alignment policy (explicit, single source of truth — do not
+    reintroduce a second alignment rule elsewhere):
+      - Non-deferrable: exactly one candidate, `start_bound` itself. No hour
+        alignment — the caller asked to run at that precise instant.
+      - Deferrable: hour-floor-aligned candidates (:00 past the hour) at
+        SLOT_RESOLUTION_MINUTES resolution, PLUS the raw `start_bound` itself
+        as an extra candidate if it doesn't already fall on an aligned slot
+        — so a mid-hour earliest_start_time is always itself evaluable, not
+        rounded away. Every candidate satisfies `start_bound <= start` and
+        `start + runtime_minutes <= deadline` by construction: the floor
+        loop only ever advances forward from `start_bound` (never before
+        it — see the `candidate < start_bound` correction below) and never
+        exceeds `latest_start = deadline - runtime`.
+    """
     runtime_delta = timedelta(minutes=runtime_minutes)
     latest_start = deadline - runtime_delta
 
@@ -229,6 +243,9 @@ def _generate_candidate_slots(
     slots = []
     candidate = start_bound.replace(minute=0, second=0, microsecond=0)
     if candidate < start_bound:
+        # Flooring moved the candidate before start_bound (e.g. 10:30 floors
+        # to 10:00) — advance to the next aligned slot so we never emit a
+        # candidate earlier than the requested bound.
         candidate += timedelta(hours=1)
 
     while candidate <= latest_start:
@@ -343,17 +360,31 @@ def _execute_schedule_job(
     if deadline.tzinfo is None:
         deadline = deadline.replace(tzinfo=timezone.utc)
 
-    start_bound = now
-    if earliest_start_time is not None:
-        if earliest_start_time.tzinfo is None:
-            earliest_start_time = earliest_start_time.replace(tzinfo=timezone.utc)
-        start_bound = earliest_start_time
+    # Time Consistency Hardening — single source of truth for the scheduler's
+    # temporal lower bound:
+    #   - No earliest_start_time requested -> start_bound is `now` (there is
+    #     no other sane floor for an unconstrained request).
+    #   - earliest_start_time requested and still in the future -> start_bound
+    #     is exactly that value. Never replaced, never brought forward.
+    #   - earliest_start_time requested but already in the past (e.g. the job
+    #     sat in the queue past its own requested start) -> clamped up to
+    #     `now`, since nothing can be dispatched into the past. This is a
+    #     deliberate, logged, tested decision (see
+    #     tests/test_manual_scheduling_time_consistency.py) — not a silent
+    #     substitution of a still-valid future request.
+    if earliest_start_time is not None and earliest_start_time.tzinfo is None:
+        earliest_start_time = earliest_start_time.replace(tzinfo=timezone.utc)
+    requested_start_bound = earliest_start_time  # None means "no explicit floor requested"
+    start_bound = max(now, earliest_start_time) if earliest_start_time is not None else now
 
     is_deferrable = True if deferrable is None else bool(deferrable)
 
     logger.info(
-        "DECIDE carbon-first scheduling job %s | region=%s | plan=%s | runtime=%dm | energy=%.4fkWh | bound=%s | deadline=%s",
-        job_id, region_id, plan, runtime_minutes, energy, start_bound.isoformat(), deadline.isoformat(),
+        "DECIDE scheduling boundary | job=%s | region=%s | plan=%s | requested_earliest_start=%s | "
+        "effective_start_bound=%s | requested_deadline=%s | runtime=%dm | energy=%.4fkWh",
+        job_id, region_id, plan,
+        requested_start_bound.isoformat() if requested_start_bound else "none (unbounded from now)",
+        start_bound.isoformat(), deadline.isoformat(), runtime_minutes, energy,
     )
 
     # 3. Hard Constraints: Cluster Resource Feasibility (CPU, RAM, GPU)
@@ -589,14 +620,12 @@ def _execute_schedule_job(
 
     budget_remaining = (carbon_budget_kg - best_carbon) if carbon_budget_kg is not None else None
 
-    # Determine INR rate for backwards compatibility
-    inr_to_usd = float(os.environ.get("TARIFF_INR_TO_USD", str(settings.tariff_inr_to_usd)))
-    if cfg and cfg.currency == "INR":
-        tariff_inr = best_native_rate
-    elif inr_to_usd > 0:
-        tariff_inr = round(best_tariff_usd / inr_to_usd, 4)
-    else:
-        tariff_inr = None
+    # tariff_inr_per_kwh (legacy field, backwards compatibility): only ever
+    # populated for a genuinely INR-denominated region. Previously fabricated
+    # an INR-labeled rate for every OTHER currency too (e.g. a US-CA job's
+    # USD rate divided by the INR FX rate) — never invent a currency a job
+    # doesn't actually use (Currency Consistency Hardening).
+    tariff_inr = best_native_rate if cfg and cfg.currency == "INR" else None
 
     logger.info(
         "DECIDE outcome: job=%s | selected=%s | carbon=%.4fkg | cost=$%.4f (%s %.2f) | avoided=%.4fkg (%.1f%%) | SLA=%s | evaluated=%d | feasible=%d",

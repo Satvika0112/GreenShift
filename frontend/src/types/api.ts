@@ -90,11 +90,22 @@ export interface ScheduleDecision {
   job_id: string;
   selected_start: string;
   selected_end: string;
+  // The requested window as stored on the job — GET/POST /schedule/{job_id}
+  // include these alongside selected_start/selected_end so a client never
+  // needs a second request to compare "requested" vs "recommended".
+  requested_earliest_start?: string | null;
+  requested_deadline?: string | null;
   carbon_intensity: number;
+  // Always USD (energy_kwh * price_per_kwh_usd) — used for cross-region
+  // comparison via the backend's existing FX mechanism. `currency` below
+  // does NOT describe this field; it describes native_cost. Prefer
+  // native_cost + currency for user-facing display — see
+  // utils/workloadDisplay.formatCost, the single shared helper for this.
   electricity_cost: number;
   carbon_emission: number;
   region_id: string;
   tariff_plan?: string | null;
+  // Denominates native_cost / baseline_native_cost ONLY (see above).
   currency: string;
   native_cost?: number | null;
   baseline_native_cost?: number | null;
@@ -111,6 +122,7 @@ export interface ScheduleDecision {
   baseline_start?: string | null;
   baseline_end?: string | null;
   baseline_carbon_emission?: number | null;
+  // Always USD — paired with baseline_native_cost above for the native figure.
   baseline_cost?: number | null;
   carbon_avoided?: number | null;
   cost_difference?: number | null;
@@ -385,7 +397,10 @@ export interface FleetHeadline {
   total_carbon_avoided_kg: number;
   avg_carbon_reduction_pct: number;
   total_cost_saved_usd: number;
-  total_cost_saved_inr?: number;
+  // Currency-separated native savings — a fleet can span multiple execution
+  // regions/currencies, so this is never a single combined figure (see
+  // app.analytics.fleet_impact.FleetImpactReport.cost_saved_by_currency).
+  cost_saved_by_currency?: Record<string, number>;
   sla_compliance_pct: number;
   total_jobs: number;
   jobs_with_positive_savings: number;

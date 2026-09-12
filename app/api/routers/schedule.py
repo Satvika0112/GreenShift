@@ -94,13 +94,13 @@ def trigger_schedule(
         logger.error(f"Error calculating schedule for job {job_id}: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while calculating the workload schedule.")
 
-    from app.shared.timezone import format_dual_time
+    from app.shared.timezone import ensure_utc, format_dual_time
 
     rec_cand = getattr(decision, "recommended_candidate", None) or getattr(decision, "recommended_candidate_json", None)
     if not rec_cand:
         rec_cand = {
-            "slot_start": decision.selected_start.isoformat(),
-            "slot_end": decision.selected_end.isoformat(),
+            "slot_start": ensure_utc(decision.selected_start).isoformat(),
+            "slot_end": ensure_utc(decision.selected_end).isoformat(),
             "carbon_intensity": decision.carbon_intensity,
             "carbon_emission": decision.carbon_emission,
             "electricity_cost": decision.electricity_cost,
@@ -112,8 +112,18 @@ def trigger_schedule(
         "id": decision.id,
         "schedule_id": decision.id,
         "job_id": decision.job_id,
-        "selected_start": decision.selected_start.isoformat(),
-        "selected_end": decision.selected_end.isoformat(),
+        "selected_start": ensure_utc(decision.selected_start).isoformat(),
+        "selected_end": ensure_utc(decision.selected_end).isoformat(),
+        # The requested window as stored on the job itself — the single
+        # source of truth for what the caller actually asked for, always
+        # alongside GreenShift's selected_start/selected_end above so a
+        # client never has to cross-reference a second endpoint to compare
+        # "requested" vs "recommended". ensure_utc() guards against SQLite
+        # silently dropping tzinfo on read (see app.shared.timezone.ensure_utc)
+        # — without it a browser would reinterpret an offset-less ISO string
+        # in its own local timezone instead of UTC.
+        "requested_earliest_start": ensure_utc(job.earliest_start_time).isoformat() if job.earliest_start_time else None,
+        "requested_deadline": ensure_utc(job.deadline).isoformat() if job.deadline else None,
         "carbon_intensity": decision.carbon_intensity,
         "electricity_cost": decision.electricity_cost,
         "carbon_emission": decision.carbon_emission,
@@ -165,13 +175,13 @@ def get_schedule_explainability(
     if decision is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} has not been scheduled yet")
 
-    from app.shared.timezone import format_dual_time
+    from app.shared.timezone import ensure_utc, format_dual_time
 
     rec_cand = getattr(decision, "recommended_candidate_json", None) or getattr(decision, "recommended_candidate", None)
     if not rec_cand:
         rec_cand = {
-            "slot_start": decision.selected_start.isoformat(),
-            "slot_end": decision.selected_end.isoformat(),
+            "slot_start": ensure_utc(decision.selected_start).isoformat(),
+            "slot_end": ensure_utc(decision.selected_end).isoformat(),
             "carbon_intensity": decision.carbon_intensity,
             "carbon_emission": decision.carbon_emission,
             "electricity_cost": decision.electricity_cost,
@@ -183,8 +193,10 @@ def get_schedule_explainability(
         "id": decision.id,
         "schedule_id": decision.id,
         "job_id": decision.job_id,
-        "selected_start": decision.selected_start.isoformat(),
-        "selected_end": decision.selected_end.isoformat(),
+        "selected_start": ensure_utc(decision.selected_start).isoformat(),
+        "selected_end": ensure_utc(decision.selected_end).isoformat(),
+        "requested_earliest_start": ensure_utc(job.earliest_start_time).isoformat() if job.earliest_start_time else None,
+        "requested_deadline": ensure_utc(job.deadline).isoformat() if job.deadline else None,
         "carbon_intensity": decision.carbon_intensity,
         "electricity_cost": decision.electricity_cost,
         "carbon_emission": decision.carbon_emission,
@@ -212,8 +224,8 @@ def get_schedule_explainability(
         "scheduling_delay_hours": decision.scheduling_delay_hours,
         "sla_met": decision.sla_met,
         "time_details": {
-            "selected_start": format_dual_time(decision.selected_start, region=decision.region_id),
-            "selected_end": format_dual_time(decision.selected_end, region=decision.region_id),
+            "selected_start": format_dual_time(ensure_utc(decision.selected_start), region=decision.region_id),
+            "selected_end": format_dual_time(ensure_utc(decision.selected_end), region=decision.region_id),
         },
         "recommended_candidate": rec_cand,
         "candidates": getattr(decision, "candidates_json", None) or getattr(decision, "candidates", None) or [rec_cand],
