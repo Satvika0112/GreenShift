@@ -8,6 +8,7 @@ import { ProtectedRoute } from './routes/ProtectedRoute';
 import { AppShell } from './components/layout/AppShell';
 import { LoginPage } from './pages/LoginPage';
 import { RequestAccessPage } from './pages/RequestAccessPage';
+import { RegisterCompanyPage } from './pages/RegisterCompanyPage';
 
 // Pages other than Login are code-split — each route's chunk loads on demand.
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })));
@@ -65,6 +66,7 @@ export const App: React.FC = () => {
               <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RequestAccessPage />} />
+              <Route path="/register-company" element={<RegisterCompanyPage />} />
 
               {/* Authenticated Workspace */}
               <Route element={<ProtectedRoute />}>

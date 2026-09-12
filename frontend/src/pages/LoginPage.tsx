@@ -201,6 +201,12 @@ export const LoginPage: React.FC = () => {
           Request access
         </Link>
       </p>
+      <p style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem', marginBottom: 0 }}>
+        New company?{' '}
+        <Link to="/register-company" style={{ color: '#10b981', fontWeight: 600, textDecoration: 'none' }}>
+          Register your organization
+        </Link>
+      </p>
     </AuthLayout>
   );
 };

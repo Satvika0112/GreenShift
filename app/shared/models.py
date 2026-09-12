@@ -116,6 +116,9 @@ class EventType(str, enum.Enum):
     BRSR_REPORT_EXPORTED      = "BRSR_REPORT_EXPORTED"
     # ── Trust/Audit ledger events ──
     AUDIT_ANCHOR_CREATED      = "AUDIT_ANCHOR_CREATED"
+    # ── Company / Organization onboarding events ──
+    COMPANY_CREATED           = "COMPANY_CREATED"
+    COMPANY_ADMIN_CREATED     = "COMPANY_ADMIN_CREATED"
 
 
 class ActorType(str, enum.Enum):
@@ -156,7 +159,15 @@ class UserRole(str, enum.Enum):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TenantORM(Base):
-    """Multi-tenant organisation / Company."""
+    """Multi-tenant organisation / Company.
+
+    This IS the Company entity — GreenShift's Company/Organization onboarding
+    (see app/companies/) deliberately extends this existing tenant table with
+    richer profile fields rather than introducing a second, parallel
+    `companies` table. Company.id and tenant_id are the same value everywhere
+    (users.tenant_id, jobs.tenant_id, audit_events.tenant_id, BRSR tenant_id),
+    so there is exactly one multi-tenancy architecture, not two.
+    """
 
     __tablename__ = "tenants"
 
@@ -165,9 +176,54 @@ class TenantORM(Base):
     is_active  = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
+    # ── Company profile fields (Company/Organization onboarding) ──
+    # All nullable: every pre-existing tenant row predates these columns and
+    # must keep working with them unset — never backfilled with invented data.
+    legal_name     = Column(String, nullable=True)
+    company_email  = Column(String, nullable=True, unique=True)
+    website        = Column(String, nullable=True)
+    industry       = Column(String, nullable=True)
+    sector         = Column(String, nullable=True)
+    country        = Column(String, nullable=True)
+    address        = Column(Text, nullable=True)
+    status         = Column(String, nullable=False, default="ACTIVE")  # ACTIVE / SUSPENDED / INACTIVE
+    cin            = Column(String(21), nullable=True)
+    gstin          = Column(String(15), nullable=True)
+    employee_count = Column(Integer, nullable=True)
+    contact_phone  = Column(String, nullable=True)
+    updated_at     = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
+
     users    = relationship("UserORM", back_populates="tenant", foreign_keys="UserORM.tenant_id")
     api_keys = relationship("APIKeyORM", back_populates="tenant")
     jobs     = relationship("JobORM", back_populates="tenant", foreign_keys="JobORM.tenant_id")
+    teams    = relationship("TeamORM", back_populates="tenant")
+
+
+class TeamORM(Base):
+    """A named team within a Company/tenant.
+
+    Additive, bookkeeping-only entity: UserORM.team_id and JobORM.team_id
+    remain plain, unconstrained string columns exactly as before (no FK added
+    here) — every existing team_id value (including ones with no matching
+    TeamORM row, e.g. pre-existing free-text values like "operations")
+    continues to work unchanged, since all existing team-scoped authorization
+    is plain string equality against team_id, not a join against this table.
+    This table exists so a Company can have a real, named "default team" at
+    registration time and so Company Admins can create/list additional named
+    teams (see app/companies/).
+    """
+
+    __tablename__ = "teams"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_teams_tenant_name"),
+    )
+
+    id         = Column(String, primary_key=True)   # e.g. "team-tenant-acme-default"
+    tenant_id  = Column(String, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    name       = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    tenant = relationship("TenantORM", back_populates="teams")
 
 
 # RULE 3: API keys can NEVER have an administrative role (PLATFORM_ADMIN / COMPANY_ADMIN)
@@ -216,6 +272,14 @@ class UserORM(Base):
     @company_name.setter
     def company_name(self, value: Optional[str]) -> None:
         self._company_name = value
+
+    @property
+    def company(self) -> Optional["CompanyBrief"]:
+        """Minimal {id, name} view of this user's company, for /auth/me.
+        None when the user has no tenant_id (e.g. Platform Admin)."""
+        if self.tenant_id and self.tenant:
+            return CompanyBrief(id=self.tenant_id, name=self.tenant.name)
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1558,6 +1622,13 @@ class UserLoginRequest(BaseModel):
         return data
 
 
+class CompanyBrief(BaseModel):
+    """Minimal company identity — used to enrich /auth/me without exposing
+    the full company profile in every user-facing response."""
+    id: str
+    name: str
+
+
 class UserResponse(BaseModel):
     """User profile response without exposing password hash."""
 
@@ -1570,6 +1641,7 @@ class UserResponse(BaseModel):
     team_id: Optional[str] = None
     tenant_id: Optional[str] = None
     company_name: Optional[str] = None
+    company: Optional[CompanyBrief] = None
     approval_status: Optional[str] = "APPROVED"
     is_active: bool
     created_at: datetime
@@ -1607,6 +1679,201 @@ class CompanyUpdateRequest(BaseModel):
     """Update company details."""
     name: Optional[str] = Field(None, min_length=2, max_length=100)
     is_active: Optional[bool] = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Company / Organization Onboarding (public self-service registration)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import re as _re
+
+_EMAIL_RE = _re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _validate_email_format(value: str, field_label: str) -> str:
+    if not _EMAIL_RE.match(value.strip()):
+        raise ValueError(f"{field_label} must be a valid email address")
+    return value.strip().lower()
+
+
+def _validate_strong_password(value: str) -> str:
+    if len(value) < 8:
+        raise ValueError("Password must be at least 8 characters long")
+    if not _re.search(r"[A-Z]", value):
+        raise ValueError("Password must contain at least one uppercase letter")
+    if not _re.search(r"[a-z]", value):
+        raise ValueError("Password must contain at least one lowercase letter")
+    if not _re.search(r"\d", value):
+        raise ValueError("Password must contain at least one digit")
+    return value
+
+
+class CompanyRegisterRequest(BaseModel):
+    """
+    Public POST /companies/register request body.
+
+    Deliberately has NO role/tenant_id/team_id/company_id field — Pydantic
+    silently drops any such keys a client includes, and the backend always
+    determines role=COMPANY_ADMIN, a freshly generated tenant_id, and a
+    freshly created default team_id (see app.companies.service.register_company).
+    """
+
+    # Company details
+    company_name: str = Field(..., min_length=2, max_length=200)
+    legal_name: Optional[str] = Field(None, max_length=200)
+    company_email: str = Field(..., max_length=255)
+    website: Optional[str] = Field(None, max_length=255)
+    industry: str = Field(..., min_length=2, max_length=100)
+    sector: Optional[str] = Field(None, max_length=100)
+    country: str = Field(..., min_length=2, max_length=100)
+    address: Optional[str] = Field(None, max_length=1000)
+
+    # Administrator details
+    admin_name: str = Field(..., min_length=2, max_length=150)
+    admin_email: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("company_email")
+    @classmethod
+    def _check_company_email(cls, v: str) -> str:
+        return _validate_email_format(v, "Company email")
+
+    @field_validator("admin_email")
+    @classmethod
+    def _check_admin_email(cls, v: str) -> str:
+        return _validate_email_format(v, "Administrator email")
+
+    @field_validator("password")
+    @classmethod
+    def _check_password_strength(cls, v: str) -> str:
+        return _validate_strong_password(v)
+
+    @field_validator("company_name", "admin_name")
+    @classmethod
+    def _check_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("This field cannot be blank")
+        return v.strip()
+
+    @model_validator(mode="after")
+    def _check_passwords_match(self) -> "CompanyRegisterRequest":
+        if self.password != self.confirm_password:
+            raise ValueError("Password and confirm_password do not match")
+        return self
+
+
+class CompanyRegisteredAdmin(BaseModel):
+    """Administrator summary returned after successful company registration."""
+    id: int
+    username: str
+    email: str
+    role: UserRole
+
+
+class CompanyRegisterResponse(BaseModel):
+    """Response for a successful POST /companies/register."""
+    company_id: str
+    company_name: str
+    team_id: str
+    team_name: str
+    admin: CompanyRegisteredAdmin
+    message: str = "Company registered successfully"
+
+
+class CompanyProfileResponse(BaseModel):
+    """Rich company profile — GET /companies/me, GET/PUT /admin/companies/{id} (future)."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    legal_name: Optional[str] = None
+    company_email: Optional[str] = None
+    website: Optional[str] = None
+    industry: Optional[str] = None
+    sector: Optional[str] = None
+    country: Optional[str] = None
+    address: Optional[str] = None
+    status: str = "ACTIVE"
+    cin: Optional[str] = None
+    gstin: Optional[str] = None
+    employee_count: Optional[int] = None
+    contact_phone: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    user_count: Optional[int] = 0
+    workload_count: Optional[int] = 0
+
+
+class CompanyProfileUpdateRequest(BaseModel):
+    """PATCH /companies/me — Company Admin editing their own company's profile.
+    No id/tenant_id/status field: identity/activation are never client-settable here."""
+    name: Optional[str] = Field(None, min_length=2, max_length=200)
+    legal_name: Optional[str] = Field(None, max_length=200)
+    website: Optional[str] = Field(None, max_length=255)
+    industry: Optional[str] = Field(None, max_length=100)
+    sector: Optional[str] = Field(None, max_length=100)
+    country: Optional[str] = Field(None, max_length=100)
+    address: Optional[str] = Field(None, max_length=1000)
+    company_email: Optional[str] = Field(None, max_length=255)
+    cin: Optional[str] = Field(None, max_length=21)
+    gstin: Optional[str] = Field(None, max_length=15)
+    employee_count: Optional[int] = Field(None, ge=0)
+    contact_phone: Optional[str] = Field(None, max_length=50)
+
+    @field_validator("company_email")
+    @classmethod
+    def _check_company_email(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return _validate_email_format(v, "Company email")
+
+
+class TeamResponse(BaseModel):
+    """A team within the caller's company."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    tenant_id: str
+    name: str
+    created_at: datetime
+    member_count: Optional[int] = 0
+
+
+class TeamCreateRequest(BaseModel):
+    """POST /companies/me/teams — Company Admin creates an additional team.
+    No tenant_id field: the team always belongs to the caller's own company."""
+    name: str = Field(..., min_length=2, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def _check_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Team name cannot be blank")
+        return v.strip()
+
+
+class CompanyUserCreateRequest(BaseModel):
+    """POST /companies/me/users — Company Admin creates a user within their
+    own company. No tenant_id/company_id field: always the caller's own
+    company. role defaults to COMPANY_USER and PLATFORM_ADMIN is rejected
+    at the service layer regardless of what is supplied here."""
+    email: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+    username: Optional[str] = Field(None, max_length=50)
+    role: UserRole = Field(default=UserRole.COMPANY_USER)
+    team_id: Optional[str] = Field(None, max_length=100)
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, v: str) -> str:
+        return _validate_email_format(v, "Email")
+
+    @field_validator("password")
+    @classmethod
+    def _check_password_strength(cls, v: str) -> str:
+        return _validate_strong_password(v)
 
 
 class UserStatusUpdateRequest(BaseModel):

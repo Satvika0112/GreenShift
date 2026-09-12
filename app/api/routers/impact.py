@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.analytics.fleet_impact import compute_fleet_impact
 from app.analytics.actual_impact import compute_actual_impact, compute_fleet_actual_impact
-from app.shared.auth import AuthenticatedIdentity, get_current_identity, is_platform_admin
+from app.shared.auth import AuthenticatedIdentity, get_current_identity, is_company_admin, is_platform_admin
 from app.shared.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -35,15 +35,25 @@ def get_fleet_impact(
     """
     Returns full fleet impact analysis including totals, mean/median/p90 reductions,
     regional breakdowns, team breakdowns, job type breakdowns, and distribution arrays.
-    Enforces company/tenant isolation.
+    Enforces company/tenant isolation, and team isolation for a plain Company
+    User (a Company Admin/Platform Admin may still see any team within the
+    tenant(s) they're already authorized for).
     """
     if identity and not is_platform_admin(identity) and tenant_id and tenant_id != identity.tenant_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot view fleet impact for other tenants")
     effective_tenant_id = tenant_id if (identity and is_platform_admin(identity)) else (identity.tenant_id if identity else tenant_id)
 
+    # A plain Company User's team_id is never client-overridable — clamped to
+    # their own team regardless of what was requested. Company Admin/Platform
+    # Admin (is_company_admin covers both) may still filter by any team_id,
+    # same as before, since tenant_id already bounds their real visibility.
+    effective_team_id = team_id
+    if identity and not is_company_admin(identity):
+        effective_team_id = identity.team_id
+
     report = compute_fleet_impact(
         db=db,
-        team_id=team_id,
+        team_id=effective_team_id,
         tenant_id=effective_tenant_id,
         region_id=region_id,
         job_type=job_type,
@@ -99,10 +109,20 @@ def get_actual_impact(
 
 @router.get("/impact/fleet/actual", summary="Fleet-Wide Actual vs Estimated Variance")
 def get_fleet_actual_impact(
+    tenant_id: Optional[str] = Query(None, description="Filter by tenant (Platform Admin only)"),
     db: Session = Depends(get_db),
+    identity: Optional[AuthenticatedIdentity] = Depends(get_current_identity),
 ) -> Dict[str, Any]:
     """
-    Fleet-wide estimation accuracy analysis across all executed jobs.
+    Fleet-wide estimation accuracy analysis across executed jobs. Enforces the
+    same tenant/team isolation as /impact/fleet — this previously had no
+    identity dependency at all and returned unscoped, cross-tenant data to
+    any caller regardless of authentication.
     """
-    summary = compute_fleet_actual_impact(db)
+    if identity and not is_platform_admin(identity) and tenant_id and tenant_id != identity.tenant_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot view fleet impact for other tenants")
+    effective_tenant_id = tenant_id if (identity and is_platform_admin(identity)) else (identity.tenant_id if identity else tenant_id)
+    effective_team_id = identity.team_id if (identity and not is_company_admin(identity)) else None
+
+    summary = compute_fleet_actual_impact(db, tenant_id=effective_tenant_id, team_id=effective_team_id)
     return summary.to_dict()

@@ -171,13 +171,23 @@ def compute_actual_impact(db: Session, job_id: str) -> Optional[ActualImpactResu
     )
 
 
-def compute_fleet_actual_impact(db: Session) -> FleetActualImpactSummary:
-    """Compute actual vs estimated across all jobs with recorded actual execution times."""
-    executions = (
+def compute_fleet_actual_impact(
+    db: Session, tenant_id: Optional[str] = None, team_id: Optional[str] = None,
+) -> FleetActualImpactSummary:
+    """Compute actual vs estimated across all jobs with recorded actual execution
+    times. `tenant_id`/`team_id` scope the fleet to one company/team — the
+    caller (see app.api.routers.impact) is responsible for deriving these
+    from the authenticated identity, never from unauthenticated client input."""
+    query = (
         db.query(KubernetesExecutionORM)
+        .join(JobORM, JobORM.job_id == KubernetesExecutionORM.job_id)
         .filter(KubernetesExecutionORM.actual_start.isnot(None))
-        .all()
     )
+    if tenant_id:
+        query = query.filter(JobORM.tenant_id == tenant_id)
+    if team_id:
+        query = query.filter(JobORM.team_id == team_id)
+    executions = query.all()
 
     results: List[ActualImpactResult] = []
     quality_dist = {"ACCURATE": 0, "ACCEPTABLE": 0, "POOR": 0}

@@ -136,7 +136,10 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           {!isNarrow && (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <span style={{ fontSize: '0.82rem', fontWeight: 700 }}>{user?.username}</span>
+              {user?.company_name && (
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)' }}>{user.company_name}</span>
+              )}
+              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{user?.username}</span>
               <span style={{ fontSize: '0.68rem', color: '#10b981', fontWeight: 600 }}>{user?.role}</span>
             </div>
           )}

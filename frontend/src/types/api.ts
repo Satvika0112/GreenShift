@@ -32,6 +32,7 @@ export interface User {
   team_id: string;
   tenant_id?: string | null;
   company_name?: string | null;
+  company?: { id: string; name: string } | null;
   approval_status?: string;
   is_active: boolean;
   created_at?: string;
@@ -803,4 +804,102 @@ export interface BrsrAuditEvent {
   actor_type?: string | null;
   request_id?: string | null;
   source_service?: string | null;
+}
+
+// ==========================================
+// COMPANY / ORGANIZATION ONBOARDING
+// ==========================================
+
+// Matches app.shared.models.CompanyRegisterRequest exactly — deliberately
+// has no role/tenant_id/team_id/company_id field; the backend always
+// determines those. Never add such a field here.
+export interface CompanyRegisterRequest {
+  company_name: string;
+  legal_name?: string;
+  company_email: string;
+  website?: string;
+  industry: string;
+  sector?: string;
+  country: string;
+  address?: string;
+  admin_name: string;
+  admin_email: string;
+  password: string;
+  confirm_password: string;
+}
+
+export interface CompanyRegisteredAdmin {
+  id: number;
+  username: string;
+  email: string;
+  role: string;
+}
+
+export interface CompanyRegisterResponse {
+  company_id: string;
+  company_name: string;
+  team_id: string;
+  team_name: string;
+  admin: CompanyRegisteredAdmin;
+  message: string;
+}
+
+// Matches app.shared.models.CompanyProfileResponse (GET/PATCH /companies/me).
+export interface CompanyProfile {
+  id: string;
+  name: string;
+  legal_name?: string | null;
+  company_email?: string | null;
+  website?: string | null;
+  industry?: string | null;
+  sector?: string | null;
+  country?: string | null;
+  address?: string | null;
+  status: string;
+  cin?: string | null;
+  gstin?: string | null;
+  employee_count?: number | null;
+  contact_phone?: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at?: string | null;
+  user_count?: number;
+  workload_count?: number;
+}
+
+// PATCH /companies/me — every field optional, no id/tenant_id/status field.
+export type CompanyProfileUpdate = Partial<{
+  name: string;
+  legal_name: string;
+  website: string;
+  industry: string;
+  sector: string;
+  country: string;
+  address: string;
+  company_email: string;
+  cin: string;
+  gstin: string;
+  employee_count: number;
+  contact_phone: string;
+}>;
+
+export interface CompanyTeam {
+  id: string;
+  tenant_id: string;
+  name: string;
+  created_at: string;
+  member_count?: number;
+}
+
+export interface CompanyTeamCreate {
+  name: string;
+}
+
+// POST /companies/me/users — no tenant_id/company_id field.
+export interface CompanyUserCreate {
+  email: string;
+  password: string;
+  username?: string;
+  role?: 'COMPANY_ADMIN' | 'COMPANY_USER';
+  team_id?: string;
 }

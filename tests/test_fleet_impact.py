@@ -20,12 +20,17 @@ from app.analytics.fleet_impact import (
     compute_fleet_impact,
 )
 from app.api.main import app
+from app.shared.auth import create_access_token, hash_password
+from app.shared.config import settings
 from app.shared.database import SessionLocal
 from app.shared.models import (
     JobORM,
     JobStatus,
     KubernetesExecutionORM,
     ScheduleDecisionORM,
+    TenantORM,
+    UserORM,
+    UserRole,
 )
 
 
@@ -54,6 +59,7 @@ def _create_dummy_job_and_decision(
     delay_hours: float = 2.0,
     base_hour: int = 10,
     gs_hour: int = 14,
+    tenant_id: "str | None" = None,
 ):
     now = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
     base_start = now.replace(hour=base_hour)
@@ -62,6 +68,7 @@ def _create_dummy_job_and_decision(
     job = JobORM(
         job_id=job_id,
         team_id=team_id,
+        tenant_id=tenant_id,
         region=region,
         job_type=job_type,
         status=JobStatus.SCHEDULED,
@@ -320,4 +327,107 @@ def test_actual_impact_endpoints(client, db):
     fleet_act = rfleet.json()
     assert fleet_act["total_completed_jobs_analyzed"] >= 1
     assert "estimation_quality_distribution" in fleet_act
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Consistency audit: /impact/fleet/actual previously had NO identity
+# dependency at all (unlike its siblings /impact/fleet and
+# /impact/fleet/headline) and returned unscoped, cross-tenant data to any
+# caller regardless of authentication. Also: a plain Company User's
+# `team_id` query param on /impact/fleet was never validated against their
+# own identity, letting them view another team's numbers within their own
+# tenant. Both fixed in app/api/routers/impact.py + app/shared/auth.py
+# (AuthenticatedIdentity gained a real team_id field).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_user(db, username, email, role, tenant_id=None, team_id=None):
+    u = UserORM(
+        username=username, email=email, hashed_password=hash_password("Pass123!"),
+        role=role, tenant_id=tenant_id, team_id=team_id, is_active=True, approval_status="APPROVED",
+    )
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    token = create_access_token(
+        user_id=u.id, username=u.username,
+        role=u.role.value if hasattr(u.role, "value") else str(u.role),
+        tenant_id=u.tenant_id, team_id=u.team_id,
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_fleet_actual_impact_requires_authentication_when_auth_enabled(client, db, monkeypatch):
+    """Consistency fix: previously this endpoint had no identity dependency
+    at all and was reachable with zero credentials even when AUTH_ENABLED=true."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    r = client.get("/api/v1/impact/fleet/actual")
+    assert r.status_code == 401
+
+
+def test_fleet_actual_impact_scoped_to_callers_own_tenant(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    db.add(TenantORM(id="tenant-fleet-actual-a", name="Fleet Actual Co A", is_active=True))
+    db.add(TenantORM(id="tenant-fleet-actual-b", name="Fleet Actual Co B", is_active=True))
+    db.commit()
+
+    job_a, sd_a = _create_dummy_job_and_decision(db, "JOB-FLEET-ACT-A", tenant_id="tenant-fleet-actual-a")
+    job_b, sd_b = _create_dummy_job_and_decision(db, "JOB-FLEET-ACT-B", tenant_id="tenant-fleet-actual-b")
+    now = datetime(2026, 4, 1, 14, 0, tzinfo=timezone.utc)
+    for job, sd in ((job_a, sd_a), (job_b, sd_b)):
+        db.add(KubernetesExecutionORM(
+            job_id=job.job_id, kubernetes_job_name=f"gs-{job.job_id.lower()}",
+            kubernetes_namespace="greenshift", planned_start=sd.selected_start,
+            actual_start=now, actual_end=now + timedelta(minutes=60), gs_status=JobStatus.COMPLETED,
+        ))
+    db.commit()
+
+    headers_a = _make_user(db, "fleet_act_admin_a", "a@fleetactual.example.com", UserRole.COMPANY_ADMIN, "tenant-fleet-actual-a")
+    r = client.get("/api/v1/impact/fleet/actual", headers=headers_a)
+    assert r.status_code == 200
+    # Scoped to tenant A only: exactly the 1 job we created for tenant A.
+    assert r.json()["total_completed_jobs_analyzed"] == 1
+
+
+def test_company_user_cannot_override_team_id_on_fleet_impact(client, db, monkeypatch):
+    """A plain Company User's team_id is always their own — a query param
+    requesting a different team must not widen their visibility."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    db.add(TenantORM(id="tenant-fleet-team-scope", name="Fleet Team Scope Co", is_active=True))
+    db.commit()
+
+    _create_dummy_job_and_decision(db, "JOB-FLEET-TEAM-OWN", team_id="team-own", tenant_id="tenant-fleet-team-scope")
+    _create_dummy_job_and_decision(db, "JOB-FLEET-TEAM-OTHER", team_id="team-other", tenant_id="tenant-fleet-team-scope")
+
+    headers = _make_user(
+        db, "fleet_team_user", "user@fleetteamscope.example.com", UserRole.COMPANY_USER,
+        "tenant-fleet-team-scope", "team-own",
+    )
+
+    # Requesting their own team: sees their own job.
+    r_own = client.get("/api/v1/impact/fleet?team_id=team-own", headers=headers)
+    assert r_own.status_code == 200
+    assert r_own.json()["total_jobs_with_decisions"] == 1
+
+    # Attempting to view another team within the SAME tenant: clamped back
+    # to their own team, never the requested one.
+    r_spoofed = client.get("/api/v1/impact/fleet?team_id=team-other", headers=headers)
+    assert r_spoofed.status_code == 200
+    assert r_spoofed.json()["total_jobs_with_decisions"] == 1  # still only their own job, not team-other's
+
+
+def test_company_admin_may_still_filter_fleet_impact_by_any_team(client, db, monkeypatch):
+    """Company Admin/Platform Admin retain the pre-existing ability to filter
+    by any team_id — only a plain Company User is clamped."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    db.add(TenantORM(id="tenant-fleet-admin-scope", name="Fleet Admin Scope Co", is_active=True))
+    db.commit()
+    _create_dummy_job_and_decision(db, "JOB-FLEET-ADMIN-OTHER", team_id="team-other-2", tenant_id="tenant-fleet-admin-scope")
+
+    headers = _make_user(
+        db, "fleet_team_admin", "admin@fleetadminscope.example.com", UserRole.COMPANY_ADMIN,
+        "tenant-fleet-admin-scope", "team-own-2",
+    )
+    r = client.get("/api/v1/impact/fleet?team_id=team-other-2", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["total_jobs_with_decisions"] == 1
 

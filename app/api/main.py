@@ -307,3 +307,11 @@ try:
     app.include_router(brsr_router.router, prefix="", tags=["BRSR"])
 except ImportError:
     logger.warning("BRSR router not yet implemented")
+
+# Companies (Company / Organization onboarding)
+try:
+    from app.api.routers import companies as companies_router
+    app.include_router(companies_router.router, prefix="/api/v1", tags=["Companies"])
+    app.include_router(companies_router.router, prefix="", tags=["Companies"])
+except ImportError:
+    logger.warning("Companies router not yet implemented")

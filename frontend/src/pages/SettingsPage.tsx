@@ -15,8 +15,8 @@ import {
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { InlineBanner } from '../components/common/InlineBanner';
-import { sustainabilityApi, monitoringApi, notificationsApi } from '../api/endpoints';
-import { NotificationPreferencesUpdate } from '../types/api';
+import { sustainabilityApi, monitoringApi, notificationsApi, companiesApi } from '../api/endpoints';
+import { NotificationPreferencesUpdate, CompanyProfile, CompanyProfileUpdate } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 import { useRealtimeNotifications } from '../context/RealtimeNotificationContext';
 
@@ -43,6 +43,33 @@ export const SettingsPage: React.FC = () => {
       queryClient.setQueryData(['notificationPreferences'], data);
     },
   });
+
+  // Company profile — only meaningful for a user who actually belongs to a
+  // company (Platform Admin has no tenant_id and manages companies via the
+  // existing /admin/companies endpoints instead, not this page).
+  const isCompanyAdminRole = user?.role === 'COMPANY_ADMIN';
+  const companyQ = useQuery({
+    queryKey: ['myCompany'],
+    queryFn: () => companiesApi.getMyCompany(),
+    enabled: isAuthenticated && !!user?.tenant_id,
+  });
+  const [companyDraft, setCompanyDraft] = useState<CompanyProfileUpdate | null>(null);
+  const [companySaved, setCompanySaved] = useState(false);
+  const companyMutation = useMutation({
+    mutationFn: (update: CompanyProfileUpdate) => companiesApi.updateMyCompany(update),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['myCompany'], data);
+      setCompanyDraft(null);
+      setCompanySaved(true);
+      setTimeout(() => setCompanySaved(false), 3000);
+    },
+  });
+  const company: CompanyProfile | undefined = companyQ.data;
+  const companyField = (key: keyof CompanyProfileUpdate): string =>
+    (companyDraft && key in companyDraft ? (companyDraft[key] as string) : (company?.[key as keyof CompanyProfile] as string)) || '';
+  const setCompanyField = (key: keyof CompanyProfileUpdate) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setCompanyDraft((d) => ({ ...d, [key]: e.target.value }));
+  };
 
   const [dataSources, setDataSources] = useState<any | null>(null);
   const [healthStatus, setHealthStatus] = useState<any | null>(null);
@@ -172,8 +199,102 @@ export const SettingsPage: React.FC = () => {
         </div>
       </GlassCard>
 
-      {/* Role change / company / tenant are never editable from Settings — the
-          backend derives and owns those; only an authorized admin flow can change them. */}
+      {/* Role/tenant/team identity itself is never editable from Settings —
+          the backend derives and owns those. The company PROFILE below
+          (name, industry, address, etc.) is editable only by a Company
+          Admin of that same company, via PATCH /companies/me — never by
+          supplying a different tenant_id/company_id. */}
+      {!!user?.tenant_id && (
+        <GlassCard title="Company Profile">
+          {companyQ.isLoading ? (
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading company profile…</div>
+          ) : companyQ.isError || !company ? (
+            <InlineBanner variant="error">Couldn't load company profile.</InlineBanner>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              {companySaved && (
+                <InlineBanner variant="success">Company profile saved.</InlineBanner>
+              )}
+              {companyMutation.isError && (
+                <InlineBanner variant="error">
+                  {(companyMutation.error as any)?.response?.data?.detail || 'Failed to save company profile.'}
+                </InlineBanner>
+              )}
+
+              {isCompanyAdminRole ? (
+                <>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Company Name</label>
+                    <input className="input" value={companyField('name')} onChange={setCompanyField('name')} maxLength={200} />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Legal Name</label>
+                    <input className="input" value={companyField('legal_name')} onChange={setCompanyField('legal_name')} maxLength={200} />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Company Email</label>
+                    <input className="input" type="email" value={companyField('company_email')} onChange={setCompanyField('company_email')} />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label">Industry</label>
+                      <input className="input" value={companyField('industry')} onChange={setCompanyField('industry')} />
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label">Sector</label>
+                      <input className="input" value={companyField('sector')} onChange={setCompanyField('sector')} />
+                    </div>
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Website</label>
+                    <input className="input" value={companyField('website')} onChange={setCompanyField('website')} />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Country</label>
+                    <input className="input" value={companyField('country')} onChange={setCompanyField('country')} />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Address</label>
+                    <textarea className="input" rows={2} value={companyField('address')} onChange={setCompanyField('address')} />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      disabled={!companyDraft || companyMutation.isPending}
+                      onClick={() => companyDraft && companyMutation.mutate(companyDraft)}
+                    >
+                      <Save size={13} />
+                      <span>{companyMutation.isPending ? 'Saving…' : 'Save Company Profile'}</span>
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', fontSize: '0.85rem' }}>
+                  {[
+                    ['Company Name', company.name],
+                    ['Legal Name', company.legal_name],
+                    ['Company Email', company.company_email],
+                    ['Industry', company.industry],
+                    ['Sector', company.sector],
+                    ['Website', company.website],
+                    ['Country', company.country],
+                    ['Address', company.address],
+                  ].map(([label, value]) => (
+                    <div key={label} style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
+                      <span style={{ color: 'var(--text-primary)', textAlign: 'right' }}>{value || '—'}</span>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    Read-only — only a Company Admin can edit these details.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </GlassCard>
+      )}
 
       {/* Notification email preferences — real backend-persisted per-user
           settings (GET/PUT /api/v1/notifications/preferences). In-app

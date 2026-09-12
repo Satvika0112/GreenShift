@@ -20,6 +20,7 @@ function renderLoginFlow() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<div data-testid="register-landing">Register</div>} />
+          <Route path="/register-company" element={<div data-testid="register-company-landing">Register Company</div>} />
           <Route path="/" element={<div data-testid="dashboard-landing">Dashboard</div>} />
         </Routes>
       </MemoryRouter>
@@ -254,5 +255,12 @@ describe('LoginPage', () => {
     renderLoginFlow();
     await user.click(screen.getByRole('link', { name: /Request access/i }));
     expect(screen.getByTestId('register-landing')).toBeInTheDocument();
+  });
+
+  it('links "Register your organization" to the company onboarding flow', async () => {
+    const user = userEvent.setup();
+    renderLoginFlow();
+    await user.click(screen.getByRole('link', { name: /Register your organization/i }));
+    expect(screen.getByTestId('register-company-landing')).toBeInTheDocument();
   });
 });

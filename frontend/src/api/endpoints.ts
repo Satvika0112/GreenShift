@@ -43,6 +43,13 @@ import {
   BrsrAssessmentUpdate,
   BrsrAuditEvent,
   BrsrExportFormat,
+  CompanyRegisterRequest,
+  CompanyRegisterResponse,
+  CompanyProfile,
+  CompanyProfileUpdate,
+  CompanyTeam,
+  CompanyTeamCreate,
+  CompanyUserCreate,
 } from '../types/api';
 
 // ==========================================
@@ -642,6 +649,46 @@ export const brsrApi = {
       params: { format: exportFormat },
       responseType: 'blob',
     });
+    return res.data;
+  },
+};
+
+// ==========================================
+// COMPANY / ORGANIZATION ONBOARDING
+// ==========================================
+export const companiesApi = {
+  register: async (body: CompanyRegisterRequest): Promise<CompanyRegisterResponse> => {
+    const res = await apiClient.post<CompanyRegisterResponse>('/api/v1/companies/register', body);
+    return res.data;
+  },
+
+  getMyCompany: async (): Promise<CompanyProfile> => {
+    const res = await apiClient.get<CompanyProfile>('/api/v1/companies/me');
+    return res.data;
+  },
+
+  updateMyCompany: async (update: CompanyProfileUpdate): Promise<CompanyProfile> => {
+    const res = await apiClient.patch<CompanyProfile>('/api/v1/companies/me', update);
+    return res.data;
+  },
+
+  getMyCompanyUsers: async (): Promise<User[]> => {
+    const res = await apiClient.get<User[]>('/api/v1/companies/me/users');
+    return res.data;
+  },
+
+  createMyCompanyUser: async (body: CompanyUserCreate): Promise<User> => {
+    const res = await apiClient.post<User>('/api/v1/companies/me/users', body);
+    return res.data;
+  },
+
+  getMyCompanyTeams: async (): Promise<CompanyTeam[]> => {
+    const res = await apiClient.get<CompanyTeam[]>('/api/v1/companies/me/teams');
+    return res.data;
+  },
+
+  createMyCompanyTeam: async (body: CompanyTeamCreate): Promise<CompanyTeam> => {
+    const res = await apiClient.post<CompanyTeam>('/api/v1/companies/me/teams', body);
     return res.data;
   },
 };

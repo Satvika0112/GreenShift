@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SettingsPage } from './SettingsPage';
-import { sustainabilityApi, monitoringApi, notificationsApi } from '../api/endpoints';
-import { User, NotificationPreferences } from '../types/api';
+import { sustainabilityApi, monitoringApi, notificationsApi, companiesApi } from '../api/endpoints';
+import { User, NotificationPreferences, CompanyProfile } from '../types/api';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('../api/endpoints', () => ({
@@ -16,6 +16,10 @@ vi.mock('../api/endpoints', () => ({
   notificationsApi: {
     getPreferences: vi.fn(),
     updatePreferences: vi.fn(),
+  },
+  companiesApi: {
+    getMyCompany: vi.fn(),
+    updateMyCompany: vi.fn(),
   },
 }));
 
@@ -61,6 +65,30 @@ const companyUser: User = {
   is_active: true,
 };
 
+const companyAdminUser: User = {
+  ...companyUser,
+  id: 2,
+  username: 'company_admin',
+  role: 'COMPANY_ADMIN' as any,
+};
+
+const companyProfile: CompanyProfile = {
+  id: 'acme',
+  name: 'Acme Corp',
+  legal_name: 'Acme Corporation Pvt Ltd',
+  company_email: 'hq@acme.example',
+  website: 'https://acme.example',
+  industry: 'Technology',
+  sector: 'B2B SaaS',
+  country: 'India',
+  address: '1 Acme Street',
+  status: 'ACTIVE',
+  is_active: true,
+  created_at: '2026-01-01T00:00:00Z',
+  user_count: 5,
+  workload_count: 12,
+};
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -84,6 +112,8 @@ describe('SettingsPage', () => {
     (monitoringApi.getSystemHealth as any).mockResolvedValue({});
     (notificationsApi.getPreferences as any).mockResolvedValue({ ...defaultPreferences });
     (notificationsApi.updatePreferences as any).mockResolvedValue({ ...defaultPreferences });
+    (companiesApi.getMyCompany as any).mockResolvedValue({ ...companyProfile });
+    (companiesApi.updateMyCompany as any).mockResolvedValue({ ...companyProfile });
   });
 
   it('renders the real authenticated identity fields, not placeholder text', async () => {
@@ -91,7 +121,11 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(screen.getByText(companyUser.username)).toBeInTheDocument());
     expect(screen.getByText(companyUser.email)).toBeInTheDocument();
     expect(screen.getByText(companyUser.role)).toBeInTheDocument();
-    expect(screen.getByText(companyUser.company_name!)).toBeInTheDocument();
+    // The company name now legitimately appears twice — once in the Profile
+    // card (from the JWT-derived identity) and once in the Company Profile
+    // card below it (from GET /companies/me) — both real, not duplicated by
+    // accident.
+    expect(screen.getAllByText(companyUser.company_name!).length).toBeGreaterThanOrEqual(1);
   });
 
   it('hides the admin-only backend runtime section for a non-admin user', async () => {
@@ -240,6 +274,55 @@ describe('SettingsPage', () => {
 
       await user.click(soundToggle);
       expect(setSoundEnabledMock).toHaveBeenCalledWith(false);
+    });
+  });
+
+  describe('Company Profile', () => {
+    it('renders the company profile read-only for a Company User', async () => {
+      mockUser = companyUser;
+      renderPage();
+      await waitFor(() => expect(companiesApi.getMyCompany).toHaveBeenCalled());
+      expect(await screen.findByText('Acme Corporation Pvt Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Technology')).toBeInTheDocument();
+      expect(screen.getByText(/only a Company Admin can edit/i)).toBeInTheDocument();
+      // No editable input for company fields when read-only.
+      expect(screen.queryByDisplayValue('Acme Corp')).not.toBeInTheDocument();
+    });
+
+    it('renders editable fields and allows a Company Admin to save changes', async () => {
+      mockUser = companyAdminUser;
+      renderPage();
+      await waitFor(() => expect(companiesApi.getMyCompany).toHaveBeenCalled());
+
+      const websiteInput = await screen.findByDisplayValue('https://acme.example');
+      const user = userEvent.setup();
+      await user.clear(websiteInput);
+      await user.type(websiteInput, 'https://new-acme.example');
+
+      const saveButton = screen.getByText('Save Company Profile');
+      await user.click(saveButton);
+
+      await waitFor(() => {
+        expect(companiesApi.updateMyCompany).toHaveBeenCalledWith(
+          expect.objectContaining({ website: 'https://new-acme.example' }),
+        );
+      });
+      await waitFor(() => expect(screen.getByText('Company profile saved.')).toBeInTheDocument());
+    });
+
+    it('does not render the company profile card for a user with no company (e.g. Platform Admin)', async () => {
+      mockUser = { ...companyUser, tenant_id: null };
+      renderPage();
+      await waitFor(() => expect(screen.getByText(companyUser.username)).toBeInTheDocument());
+      expect(screen.queryByText('Company Profile')).not.toBeInTheDocument();
+      expect(companiesApi.getMyCompany).not.toHaveBeenCalled();
+    });
+
+    it('shows an error banner when the company profile fails to load', async () => {
+      (companiesApi.getMyCompany as any).mockRejectedValue(new Error('network error'));
+      mockUser = companyUser;
+      renderPage();
+      await waitFor(() => expect(screen.getByText("Couldn't load company profile.")).toBeInTheDocument());
     });
   });
 });

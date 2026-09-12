@@ -132,6 +132,7 @@ class AuthenticatedIdentity:
     user_id: str
     username: str = ""
     tenant_id: Optional[str] = None
+    team_id: Optional[str] = None
     company_name: Optional[str] = None
     role: UserRole = UserRole.COMPANY_USER
     approval_status: str = "APPROVED"
@@ -220,6 +221,7 @@ async def get_current_identity(
                         user_id=str(user.id),
                         username=user.username,
                         tenant_id=getattr(user, "tenant_id", None),
+                        team_id=getattr(user, "team_id", None),
                         company_name=user.company_name if hasattr(user, "company_name") else None,
                         role=role_enum,
                         approval_status=appr_status,
