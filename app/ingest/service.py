@@ -131,6 +131,8 @@ def ingest_job(
     tenant_id: Optional[str] = None,
     company_name: Optional[str] = None,
     submitted_by_user_id: Optional[int] = None,
+    actor: Optional[object] = None,
+    request_id: Optional[str] = None,
 ) -> JobORM:
     """
     Full ingest pipeline for a new job:
@@ -145,7 +147,10 @@ def ingest_job(
     # 2. Record audit event
     try:
         from app.trust.service import record_job_submitted
-        record_job_submitted(db, job.job_id, job.team_id, job.region)
+        record_job_submitted(
+            db, job.job_id, job.team_id, job.region,
+            tenant_id=job.tenant_id, actor=actor, request_id=request_id,
+        )
     except Exception as exc:
         logger.warning("Audit record failed for job %s submission: %s", job.job_id, exc)
 

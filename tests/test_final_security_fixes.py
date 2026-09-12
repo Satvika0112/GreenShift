@@ -34,7 +34,10 @@ def clean_security_db():
     with SessionLocal() as db:
         db.query(KubernetesExecutionORM).delete()
         db.query(ApprovalORM).delete()
-        db.query(AuditEventORM).delete()
+        # audit_events is append-only at the DB level (Trust/Audit P0) — never
+        # deleted, including in test cleanup. Tests below filter by unique
+        # job_id/username/event_type, so accumulated rows across the shared
+        # file-backed test DB do not affect their assertions.
         db.query(ScheduleDecisionORM).delete()
         db.query(JobORM).delete()
         db.query(UserORM).delete()
@@ -46,7 +49,10 @@ def clean_security_db():
     with SessionLocal() as db:
         db.query(KubernetesExecutionORM).delete()
         db.query(ApprovalORM).delete()
-        db.query(AuditEventORM).delete()
+        # audit_events is append-only at the DB level (Trust/Audit P0) — never
+        # deleted, including in test cleanup. Tests below filter by unique
+        # job_id/username/event_type, so accumulated rows across the shared
+        # file-backed test DB do not affect their assertions.
         db.query(ScheduleDecisionORM).delete()
         db.query(JobORM).delete()
         db.query(UserORM).delete()

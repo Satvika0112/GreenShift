@@ -327,6 +327,38 @@ export interface AuditEvent {
   payload_hash: string;
   previous_hash: string;
   current_hash: string;
+  tenant_id?: string | null;
+  team_id?: string | null;
+  actor_user_id?: string | null;
+  actor_username?: string | null;
+  actor_role?: string | null;
+  actor_type?: string | null;
+  request_id?: string | null;
+  source_service?: string | null;
+  reason?: string | null;
+}
+
+// Matches the anchor dict shape returned by GET /trust/anchors — the new
+// DB-backed historical anchor list, distinct from the legacy file-based
+// AnchorRecord (which has no id/created_by_user_id/label).
+export interface AuditAnchor {
+  id: number;
+  sequence: number;
+  root_hash: string;
+  event_count: number;
+  created_at: string;
+  created_by_user_id: string | null;
+  label: string | null;
+}
+
+export interface TrustEventFilters {
+  job_id?: string;
+  team_id?: string;
+  actor?: string;
+  event_type?: string;
+  start_time?: string;
+  end_time?: string;
+  limit?: number;
 }
 
 export interface DashboardSummary {
@@ -488,6 +520,11 @@ export interface AuditVerifyResponse {
   valid: boolean;
   event_count: number;
   message: string;
+  failed_check?: string | null;
+  failed_sequence?: number | null;
+  expected_sequence?: number | null;
+  actual_sequence?: number | null;
+  reason?: string | null;
 }
 
 // Matches the dict shapes returned by app.trust.anchor.verify_anchor()
@@ -503,7 +540,13 @@ export interface AnchorRecord {
 }
 
 export interface AnchorStatus {
-  status: 'no_anchor_file' | 'empty_anchor_file' | 'corrupt_anchor_file' | 'event_not_found' | 'verified' | 'tampered';
+  status:
+    | 'no_anchor_file' | 'empty_anchor_file' | 'corrupt_anchor_file' | 'event_not_found'
+    | 'verified' | 'tampered'
+    // app.trust.anchor.verify_anchor_by_id() statuses (GET /trust/anchors/{id}/verify):
+    | 'anchor_not_found' | 'event_missing'
+    // frontend-only fallback when the verify request itself fails:
+    | 'error';
   verified: boolean;
   message: string;
   anchor?: AnchorRecord;
@@ -576,4 +619,188 @@ export interface DatasetWorkloadsResponse {
   count: number;
   source: string;
   workloads: DatasetWorkloadItem[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BRSR (Business Responsibility and Sustainability Reporting)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type BrsrSourceType = 'GREENSHIFT_DERIVED' | 'COMPANY_PROVIDED' | 'CALCULATED' | 'ESTIMATED' | 'EXTERNAL_SOURCE' | 'MISSING';
+export type BrsrDataQuality = 'HIGH' | 'MEDIUM' | 'LOW' | 'MISSING';
+export type BrsrReportStatus = 'DRAFT' | 'DATA_COLLECTION' | 'VALIDATED' | 'APPROVED' | 'GENERATED';
+export type BrsrSection = 'SECTION_A' | 'SECTION_B' | 'SECTION_C' | 'CORE';
+export type BrsrExportFormat = 'pdf' | 'excel' | 'csv' | 'json';
+
+export interface BrsrCompanyProfile {
+  tenant_id: string;
+  company_name: string | null;
+  cin: string | null;
+  sector: string | null;
+  industry: string | null;
+  listed_status: string | null;
+  stock_exchange: string | null;
+  isin: string | null;
+  locations: Record<string, any>[] | null;
+  products_services: Record<string, any>[] | null;
+  employees_count: number | null;
+  workers_count: number | null;
+  revenue: number | null;
+  revenue_currency: string | null;
+  net_worth: number | null;
+  net_worth_currency: string | null;
+  capital: number | null;
+  capital_currency: string | null;
+  reporting_boundary: string | null;
+  currency_conversions: Record<string, any> | null;
+  source_type: string;
+  updated_at: string | null;
+}
+
+export type BrsrCompanyProfileUpdate = Partial<Omit<BrsrCompanyProfile, 'tenant_id' | 'source_type' | 'updated_at' | 'currency_conversions'>>;
+
+export interface BrsrReport {
+  id: number;
+  tenant_id: string;
+  financial_year: string;
+  reporting_period_start: string;
+  reporting_period_end: string;
+  framework_version: string;
+  status: BrsrReportStatus;
+  created_by: number;
+  approved_by: number | null;
+  created_at: string;
+  updated_at: string | null;
+  validated_at: string | null;
+  approved_at: string | null;
+  generated_at: string | null;
+}
+
+export interface BrsrReportCreate {
+  financial_year: string;
+  reporting_period_start: string;
+  reporting_period_end: string;
+  framework_version?: string;
+}
+
+export interface BrsrMetricDefinition {
+  metric_code: string;
+  metric_name: string;
+  principle: number | null;
+  section: BrsrSection;
+  brsr_core_attribute: string | null;
+  unit: string | null;
+  data_type: 'NUMERIC' | 'PERCENTAGE' | 'TEXT' | 'BOOLEAN';
+  required: boolean;
+  calculation_method: string | null;
+  framework_version: string;
+  description: string | null;
+  greenshift_derivable: boolean;
+}
+
+export interface BrsrMetricValue extends BrsrMetricDefinition {
+  id: number;
+  report_id: number;
+  value: number | null;
+  text_value: string | null;
+  currency: string | null;
+  source_type: BrsrSourceType;
+  source_record: string | null;
+  source_detail: Record<string, any> | null;
+  quality: BrsrDataQuality;
+  estimated: boolean;
+  estimation_method: string | null;
+  assumption: string | null;
+  data_gap: string | null;
+  reporting_currency: string | null;
+  exchange_rate: number | null;
+  exchange_rate_date: string | null;
+  conversion_source: string | null;
+  converted_value: number | null;
+  updated_at: string | null;
+}
+
+export interface BrsrMetricValueUpdate {
+  value?: number | null;
+  text_value?: string | null;
+  unit?: string | null;
+  currency?: string | null;
+  estimated?: boolean;
+  estimation_method?: string | null;
+  assumption?: string | null;
+  data_gap?: string | null;
+  reporting_currency?: string | null;
+  exchange_rate?: number | null;
+  exchange_rate_date?: string | null;
+  conversion_source?: string | null;
+  /** Only 'COMPANY_PROVIDED' or 'EXTERNAL_SOURCE' are accepted by the backend. */
+  source_type?: 'COMPANY_PROVIDED' | 'EXTERNAL_SOURCE' | null;
+}
+
+export interface BrsrValidationIssue {
+  metric_code: string | null;
+  severity: 'ERROR' | 'WARNING' | 'INFO';
+  code: string;
+  message: string;
+  suggested_resolution: string | null;
+}
+
+export interface BrsrValidationRun {
+  id: number;
+  report_id: number;
+  run_at: string;
+  run_by: number | null;
+  status: 'PASSED' | 'FAILED' | 'WARNINGS';
+  error_count: number;
+  warning_count: number;
+  info_count: number;
+  issues: BrsrValidationIssue[];
+}
+
+export interface BrsrDataQualitySummary {
+  high: number;
+  medium: number;
+  low: number;
+  missing: number;
+  total: number;
+}
+
+export interface BrsrOverview {
+  report: BrsrReport;
+  completion_pct: number;
+  required_metrics_total: number;
+  required_metrics_filled: number;
+  data_quality: BrsrDataQualitySummary;
+  missing_required_count: number;
+  brsr_core_completion_pct: number;
+  latest_validation: BrsrValidationRun | null;
+  can_approve: boolean;
+  can_generate: boolean;
+}
+
+export interface BrsrAssessment {
+  report_id: number;
+  assessment_status: string | null;
+  assessor_name: string | null;
+  assessor_type: 'INTERNAL' | 'EXTERNAL' | null;
+  assessment_date: string | null;
+  scope: string | null;
+  notes: string | null;
+  evidence_reference: string | null;
+  source_type: string;
+  updated_at: string | null;
+}
+
+export type BrsrAssessmentUpdate = Partial<Omit<BrsrAssessment, 'report_id' | 'source_type' | 'updated_at'>>;
+
+export interface BrsrAuditEvent {
+  event_id: string;
+  timestamp: string;
+  event_type: string;
+  sequence: number;
+  payload: Record<string, any>;
+  actor_username?: string | null;
+  actor_role?: string | null;
+  actor_type?: string | null;
+  request_id?: string | null;
+  source_service?: string | null;
 }

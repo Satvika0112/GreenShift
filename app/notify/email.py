@@ -77,6 +77,7 @@ def _deliver_one(db: Session, notif: NotificationORM) -> None:
             append_event(
                 db, EventType.EMAIL_DELIVERY_FAILED, job_id=notif.job_id,
                 payload={"notification_id": notif.id, "recipient_user_id": notif.recipient_user_id, "reason": "no_email_on_file"},
+                tenant_id=notif.tenant_id, source_service="notify",
             )
         except Exception:
             pass
@@ -112,6 +113,7 @@ def _deliver_one(db: Session, notif: NotificationORM) -> None:
                 append_event(
                     db, EventType.EMAIL_DELIVERY_FAILED, job_id=notif.job_id,
                     payload={"notification_id": notif.id, "recipient_user_id": notif.recipient_user_id, "attempts": notif.email_attempts},
+                    tenant_id=notif.tenant_id, source_service="notify",
                 )
             except Exception:
                 # Audit is best-effort here too — must never block the

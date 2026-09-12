@@ -286,6 +286,7 @@ def create_user(
             team_id=user.team_id,
             status=UserApprovalStatus.APPROVED.value,
             tenant_id=user.tenant_id,
+            actor=identity,
         )
     except Exception:
         pass
@@ -384,9 +385,9 @@ def update_user_status(
     became_inactive = old_active and not user.is_active
     try:
         if became_active:
-            record_user_activated(db, username=user.username, activated_by=admin_username, tenant_id=user.tenant_id)
+            record_user_activated(db, username=user.username, activated_by=admin_username, tenant_id=user.tenant_id, actor=identity)
         elif became_inactive:
-            record_user_deactivated(db, username=user.username, deactivated_by=admin_username, tenant_id=user.tenant_id)
+            record_user_deactivated(db, username=user.username, deactivated_by=admin_username, tenant_id=user.tenant_id, actor=identity)
     except Exception:
         pass
 
@@ -442,7 +443,7 @@ def deactivate_user(
 
     admin_username = getattr(identity, "username", "admin") if identity else "admin"
     try:
-        record_user_deactivated(db, username=user.username, deactivated_by=admin_username, tenant_id=user.tenant_id)
+        record_user_deactivated(db, username=user.username, deactivated_by=admin_username, tenant_id=user.tenant_id, actor=identity)
     except Exception:
         pass
 

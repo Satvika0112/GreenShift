@@ -94,6 +94,21 @@ def check_kubernetes_health() -> Dict[str, Any]:
         return {"status": "degraded", "reason": "kubernetes_api_unreachable"}
 
 
+def check_email_health() -> Dict[str, Any]:
+    """
+    Reports whether outbound notification email is configured — never the
+    SMTP host/username/password themselves. A disabled/unconfigured state
+    is not a failure: in-app real-time notifications work regardless (see
+    app.notify.email), this exists purely so an admin can see *why* emails
+    aren't arriving without anyone exposing secrets in a UI or a log.
+    """
+    if not settings.smtp_enabled:
+        return {"status": "disabled", "reason": "SMTP_ENABLED is false"}
+    if not settings.smtp_host:
+        return {"status": "unconfigured", "reason": "SMTP_HOST is not set"}
+    return {"status": "configured"}
+
+
 def check_carbon_data_health() -> Dict[str, Any]:
     """
     Determine availability and operational mode of carbon data across resilience hierarchy:
@@ -177,6 +192,7 @@ def get_system_health() -> Dict[str, Any]:
     redis_health = check_redis_health()
     k8s_health = check_kubernetes_health()
     carbon_health = check_carbon_data_health()
+    email_health = check_email_health()
 
     components = {
         "application": {"status": "healthy"},
@@ -184,6 +200,7 @@ def get_system_health() -> Dict[str, Any]:
         "redis": redis_health,
         "kubernetes": k8s_health,
         "carbon_data": carbon_health,
+        "email_delivery": email_health,
     }
 
     checks = {

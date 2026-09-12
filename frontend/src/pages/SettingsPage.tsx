@@ -323,6 +323,27 @@ export const SettingsPage: React.FC = () => {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>Email Delivery</span>
+            {(() => {
+              const emailStatus = healthStatus?.components?.email_delivery?.status;
+              const label =
+                emailStatus === 'configured' ? 'CONFIGURED' :
+                emailStatus === 'disabled' ? 'DISABLED (SMTP_ENABLED=false)' :
+                emailStatus === 'unconfigured' ? 'NOT CONFIGURED (SMTP_HOST unset)' :
+                'UNKNOWN';
+              const color = emailStatus === 'configured' ? '#10b981' : 'var(--text-muted)';
+              return (
+                <span style={{ fontWeight: 600, color, textAlign: 'right' }}>
+                  {label}
+                  <div style={{ fontSize: '0.68rem', fontWeight: 400, color: 'var(--text-muted)' }}>
+                    In-app notifications always work regardless.
+                  </div>
+                </span>
+              );
+            })()}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.85rem' }}>
             <span style={{ color: 'var(--text-secondary)' }}>Audit Ledger Verification</span>
             <span style={{ color: '#10b981', fontWeight: 600 }}>
               SHA-256 Tamper-Evident Hash Chain Active

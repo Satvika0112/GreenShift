@@ -58,3 +58,7 @@ cachetools==5.3.3    # in-memory caching for API responses
 redis>=5.0.0         # Redis distributed cache client for Carbon API
 prometheus-fastapi-instrumentator==7.0.0
 prometheus-client>=0.20.0
+
+# BRSR report generation (PDF/Excel)
+reportlab==5.0.1
+openpyxl==3.1.5

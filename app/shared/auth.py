@@ -416,6 +416,8 @@ def require_roles(*allowed_roles: UserRole) -> Callable:
                     endpoint="RBAC_CHECK",
                     reason=f"Role '{user_role_val}' not in allowed roles: {list(allowed_values)}",
                     team_id=current_user.team_id,
+                    tenant_id=current_user.tenant_id,
+                    actor=current_user,
                 )
             except Exception:
                 pass

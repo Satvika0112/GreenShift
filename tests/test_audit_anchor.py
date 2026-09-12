@@ -55,13 +55,25 @@ def test_verify_anchor_passes_on_valid_chain(db, tmp_anchor_path):
 
 
 def test_verify_anchor_detects_tamper(db, tmp_anchor_path):
-    """Write anchor → modify event hash in DB → verify → verified=False with tamper status."""
+    """Anchor a genuine event, then anchor-verify against a row whose current_hash
+    doesn't match what was anchored. Constructed directly at INSERT time rather
+    than appending-then-mutating, since audit_events now rejects UPDATE at the
+    database level (see tests/test_trust.py::TestAuditEventsAppendOnly) — this
+    exercises the identical verify_anchor() tamper-detection path."""
+    import json as _json
+    from app.trust.ledger import GENESIS_HASH, _compute_payload_hash, _compute_current_hash
+
     e1 = append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-ANC-03")
     write_anchor(db, anchor_path=tmp_anchor_path)
 
-    # Tamper with the event's current_hash in the database
-    e1.current_hash = "f" * 64
-    db.commit()
+    # Simulate a tampered chain: overwrite the anchor file's expected hash so
+    # it no longer matches the (unmodifiable) real event's current_hash —
+    # functionally identical to the event having been altered after anchoring.
+    path = tmp_anchor_path
+    lines = Path(path).read_text(encoding="utf-8").strip().split("\n")
+    anchor_record = _json.loads(lines[-1])
+    anchor_record["root_hash"] = "f" * 64
+    Path(path).write_text(_json.dumps(anchor_record) + "\n", encoding="utf-8")
 
     result = verify_anchor(db, anchor_path=tmp_anchor_path)
     assert result["status"] == "tampered"

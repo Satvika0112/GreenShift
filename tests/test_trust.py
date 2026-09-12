@@ -61,61 +61,166 @@ class TestAuditChainVerification:
         assert result.event_count == 3
 
     def test_tampered_payload_detected(self, db):
-        """Modifying payload_json breaks the chain."""
-        e = append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-T02")
-        # Tamper: change the payload_json
-        e.payload_json = json.dumps({"tampered": True})
+        """A payload_json that doesn't match its own payload_hash breaks the chain.
+
+        The database is now append-only (audit_events rejects UPDATE — see
+        TestAuditEventsAppendOnly below), so tampering can no longer be
+        simulated by appending a legitimate row and then mutating it. This
+        constructs the tampered row directly at INSERT time instead, which
+        exercises the exact same verify_chain() code path (a stored
+        payload_hash inconsistent with the stored payload_json)."""
+        real_payload = {"event_type": "JOB_SUBMITTED", "job_id": "JOB-T02", "timestamp": utcnow().isoformat()}
+        tampered_row = AuditEventORM(
+            event_id="EVT-TAMPERED-PAYLOAD",
+            timestamp=utcnow(),
+            event_type=EventType.JOB_SUBMITTED,
+            job_id="JOB-T02",
+            payload_hash=_compute_payload_hash(real_payload),
+            previous_hash=GENESIS_HASH,
+            current_hash=_compute_current_hash(_compute_payload_hash(real_payload), GENESIS_HASH),
+            payload_json=json.dumps({"tampered": True}),
+            sequence=1,
+        )
+        db.add(tampered_row)
         db.commit()
 
         result = verify_chain(db)
         assert result.valid is False
+        assert result.failed_check == "PAYLOAD_HASH_MISMATCH"
         assert "tampered" in result.message.lower() or "mismatch" in result.message.lower()
 
     def test_tampered_current_hash_detected(self, db):
-        """Modifying current_hash breaks the chain."""
-        append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-T03")
-        e2 = append_event(db, EventType.JOB_SCHEDULED, job_id="JOB-T03")
-        # Tamper: corrupt current_hash of first event
-        e1 = db.query(AuditEventORM).filter_by(sequence=e2.sequence - 1).first()
-        if e1:
-            e1.current_hash = "a" * 64
-            db.commit()
-
-        result = verify_chain(db)
-        assert result.valid is False
-
-    def test_tampered_previous_hash_detected(self, db):
-        """Modifying previous_hash breaks the chain."""
-        append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-T04")
-        e2 = append_event(db, EventType.JOB_SCHEDULED, job_id="JOB-T04")
-        # Tamper: corrupt e2's previous_hash
-        e2.previous_hash = "b" * 64
+        """A current_hash inconsistent with SHA-256(payload_hash + previous_hash) breaks the chain."""
+        payload = {"event_type": "JOB_SUBMITTED", "job_id": "JOB-T03", "timestamp": utcnow().isoformat()}
+        payload_hash = _compute_payload_hash(payload)
+        bad_row = AuditEventORM(
+            event_id="EVT-TAMPERED-CURRENT-HASH",
+            timestamp=utcnow(),
+            event_type=EventType.JOB_SUBMITTED,
+            job_id="JOB-T03",
+            payload_hash=payload_hash,
+            previous_hash=GENESIS_HASH,
+            current_hash="a" * 64,  # does not equal SHA-256(payload_hash + GENESIS_HASH)
+            payload_json=json.dumps(payload),
+            sequence=1,
+        )
+        db.add(bad_row)
         db.commit()
 
         result = verify_chain(db)
         assert result.valid is False
+        assert result.failed_check == "CURRENT_HASH_MISMATCH"
+
+    def test_tampered_previous_hash_detected(self, db):
+        """A second event whose previous_hash doesn't match the first event's current_hash breaks the chain."""
+        e1 = append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-T04")
+        payload2 = {"event_type": "JOB_SCHEDULED", "job_id": "JOB-T04", "timestamp": utcnow().isoformat()}
+        payload_hash2 = _compute_payload_hash(payload2)
+        wrong_previous = "b" * 64
+        bad_row = AuditEventORM(
+            event_id="EVT-TAMPERED-PREV-HASH",
+            timestamp=utcnow(),
+            event_type=EventType.JOB_SCHEDULED,
+            job_id="JOB-T04",
+            payload_hash=payload_hash2,
+            previous_hash=wrong_previous,  # should be e1.current_hash
+            current_hash=_compute_current_hash(payload_hash2, wrong_previous),
+            payload_json=json.dumps(payload2),
+            sequence=e1.sequence + 1,
+        )
+        db.add(bad_row)
+        db.commit()
+
+        result = verify_chain(db)
+        assert result.valid is False
+        assert result.failed_check == "PREVIOUS_HASH_MISMATCH"
 
     def test_sequence_gap_detected(self, db):
         """A missing sequence number in the chain must be detected."""
-        append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-G01")
-        e2 = append_event(db, EventType.JOB_SCHEDULED, job_id="JOB-G01")
-        # Artificially jump sequence to create a gap
-        e2.sequence = 5
+        e1 = append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-G01")
+        payload2 = {"event_type": "JOB_SCHEDULED", "job_id": "JOB-G01", "timestamp": utcnow().isoformat()}
+        payload_hash2 = _compute_payload_hash(payload2)
+        gapped_row = AuditEventORM(
+            event_id="EVT-SEQ-GAP",
+            timestamp=utcnow(),
+            event_type=EventType.JOB_SCHEDULED,
+            job_id="JOB-G01",
+            payload_hash=payload_hash2,
+            previous_hash=e1.current_hash,
+            current_hash=_compute_current_hash(payload_hash2, e1.current_hash),
+            payload_json=json.dumps(payload2),
+            sequence=5,  # jumps ahead of the expected 2
+        )
+        db.add(gapped_row)
         db.commit()
 
         result = verify_chain(db)
         assert result.valid is False
+        assert result.failed_check == "SEQUENCE_GAP"
+        assert result.expected_sequence == 2
+        assert result.actual_sequence == 5
         assert "gap" in result.message.lower()
 
     def test_invalid_json_payload_detected(self, db):
         """Corrupt non-JSON payload string must be detected."""
-        e = append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-J01")
-        e.payload_json = "NOT_JSON_DATA"
+        bad_row = AuditEventORM(
+            event_id="EVT-INVALID-JSON",
+            timestamp=utcnow(),
+            event_type=EventType.JOB_SUBMITTED,
+            job_id="JOB-J01",
+            payload_hash="0" * 64,
+            previous_hash=GENESIS_HASH,
+            current_hash=_compute_current_hash("0" * 64, GENESIS_HASH),
+            payload_json="NOT_JSON_DATA",
+            sequence=1,
+        )
+        db.add(bad_row)
         db.commit()
 
         result = verify_chain(db)
         assert result.valid is False
+        assert result.failed_check == "INVALID_PAYLOAD_JSON"
         assert "not valid json" in result.message.lower()
+
+    def test_tampered_actor_role_column_detected_even_with_valid_hashes(self, db):
+        """A row whose actor_role column disagrees with the hash-protected payload's
+        embedded actor_role must be detected, even though every hash in the record
+        is internally self-consistent — this is precisely the gap the column/
+        payload cross-check closes (a privilege-escalation-by-direct-DB-write that
+        never goes through append_event/the hash chain at all)."""
+        payload = {
+            "event_type": "JOB_SUBMITTED", "job_id": "JOB-ESC-01", "timestamp": utcnow().isoformat(),
+            "_audit_ctx": {
+                "tenant_id": "tenant-x", "team_id": "team-x", "actor_user_id": "999",
+                "actor_username": "attacker", "actor_role": "COMPANY_USER", "actor_type": "USER",
+                "request_id": None, "source_service": None,
+            },
+        }
+        payload_hash = _compute_payload_hash(payload)
+        current_hash = _compute_current_hash(payload_hash, GENESIS_HASH)
+        row = AuditEventORM(
+            event_id="EVT-PRIV-ESCALATION",
+            timestamp=utcnow(),
+            event_type=EventType.JOB_SUBMITTED,
+            job_id="JOB-ESC-01",
+            payload_hash=payload_hash,
+            previous_hash=GENESIS_HASH,
+            current_hash=current_hash,
+            payload_json=json.dumps(payload),
+            sequence=1,
+            tenant_id="tenant-x",
+            team_id="team-x",
+            actor_user_id="999",
+            actor_username="attacker",
+            actor_role="PLATFORM_ADMIN",  # escalated column value, disagrees with the hashed payload above
+            actor_type="USER",
+        )
+        db.add(row)
+        db.commit()
+
+        result = verify_chain(db)
+        assert result.valid is False
+        assert result.failed_check == "COLUMN_TAMPERED"
 
     def test_database_level_unique_constraint_enforced(self, db):
         """Database constraint must prevent duplicate sequences directly."""
@@ -192,6 +297,60 @@ class TestAuditQueries:
             append_event(db, EventType.JOB_SUBMITTED, job_id=f"JOB-L{i:02d}")
         events = get_events(db, limit=5)
         assert len(events) <= 5
+
+
+class TestAuditEventsAppendOnly:
+    """Database-level protection (SQLite trigger; PostgreSQL trigger function in
+    prod — see alembic/versions/012_add_trust_audit_context.py) against
+    modifying or deleting audit_events rows, independent of the hash chain.
+
+    Each doomed mutation is wrapped in its own SAVEPOINT (db.begin_nested())
+    rather than relying on the outer session's rollback: the `db` fixture
+    joins a single external transaction for the whole test (see
+    tests/conftest.py), and a plain session-level commit/rollback after a
+    trigger-raised DB error can desynchronize that external transaction —
+    confirmed by reproduction: without the SAVEPOINT scoping, a legitimately
+    committed event from one test leaked past its rollback into the next
+    test's view of the shared session-scoped in-memory engine, shifting
+    expected sequence numbers in unrelated tests run afterward in the same
+    session. The SAVEPOINT keeps the failure — and its rollback — entirely
+    local to the nested scope.
+    """
+
+    def test_update_is_rejected_at_db_level(self, db):
+        from sqlalchemy import text
+        event = append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-AO-01")
+        with pytest.raises(Exception) as exc_info:
+            with db.begin_nested():
+                db.execute(
+                    text("UPDATE audit_events SET payload_json = :p WHERE event_id = :id"),
+                    {"p": json.dumps({"forged": True}), "id": event.event_id},
+                )
+        assert "append-only" in str(exc_info.value).lower()
+
+    def test_delete_is_rejected_at_db_level(self, db):
+        from sqlalchemy import text
+        event = append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-AO-02")
+        with pytest.raises(Exception) as exc_info:
+            with db.begin_nested():
+                db.execute(text("DELETE FROM audit_events WHERE event_id = :id"), {"id": event.event_id})
+        assert "append-only" in str(exc_info.value).lower()
+
+    def test_legitimate_append_still_works_after_rejected_mutation(self, db):
+        """The trigger must only block UPDATE/DELETE — normal INSERT-only
+        appends must keep working, including right after a rejected attempt."""
+        from sqlalchemy import text
+        event = append_event(db, EventType.JOB_SUBMITTED, job_id="JOB-AO-03")
+
+        with pytest.raises(Exception):
+            with db.begin_nested():
+                db.execute(text("UPDATE audit_events SET job_id = 'TAMPERED' WHERE event_id = :id"), {"id": event.event_id})
+
+        # A fresh, legitimate append must still succeed after the rejection.
+        event2 = append_event(db, EventType.JOB_SCHEDULED, job_id="JOB-AO-04")
+        assert event2.sequence >= 1
+        result = verify_chain(db)
+        assert result.valid is True
 
 
 class TestAuditLedgerConcurrency:

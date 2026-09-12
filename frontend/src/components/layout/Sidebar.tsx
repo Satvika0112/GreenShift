@@ -19,6 +19,7 @@ import {
   Leaf,
   ChevronRight,
   Shield,
+  FileText,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -81,6 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'GOVERNANCE & TRUST',
       items: [
         { to: '/impact', label: 'Impact Reports', icon: TrendingUp },
+        { to: '/brsr', label: 'BRSR Reporting', icon: FileText },
         { to: '/audit', label: 'Audit & Trust Chain', icon: ShieldCheck },
         { to: '/alerts', label: 'Notifications', icon: AlertTriangle },
       ],

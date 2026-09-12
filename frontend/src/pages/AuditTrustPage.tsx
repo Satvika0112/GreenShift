@@ -2,50 +2,71 @@ import React, { useState, useEffect } from 'react';
 import {
   ShieldCheck,
   CheckCircle2,
-  Lock,
-  RefreshCw,
   Search,
-  Key,
   Database,
-  Hash,
   AlertTriangle,
   Anchor,
-  FileCheck,
+  Download,
+  Filter,
+  X,
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { EmptyState } from '../components/common/EmptyState';
 import { auditApi } from '../api/endpoints';
-import { AuditEvent, AnchorStatus } from '../types/api';
+import { AuditEvent, AnchorStatus, AuditAnchor, TrustEventFilters } from '../types/api';
 import { formatRegionalDateTime } from '../utils/dateTime';
+import { useAuth } from '../context/AuthContext';
+
+const EVENT_TYPES = [
+  'JOB_SUBMITTED', 'JOB_VALIDATED', 'JOB_SCHEDULED', 'SCHEDULE_PROPOSED',
+  'APPROVAL_GRANTED', 'APPROVAL_DECLINED', 'DISPATCH_REQUESTED', 'DISPATCH_BLOCKED',
+  'DISPATCH_STARTED', 'DISPATCH_AUTHORIZED', 'K8S_JOB_CREATED', 'K8S_JOB_STARTED',
+  'K8S_JOB_COMPLETED', 'K8S_JOB_FAILED', 'JOB_CANCELLED', 'SCHEDULING_FAILED',
+  'BRSR_REPORT_CREATED', 'BRSR_STATUS_CHANGED', 'BRSR_METRIC_UPDATED',
+  'BRSR_VALIDATION_RUN', 'BRSR_REPORT_APPROVED', 'BRSR_REPORT_GENERATED',
+  'BRSR_REPORT_EXPORTED', 'AUDIT_ANCHOR_CREATED', 'AUTH_LOGIN_SUCCESS', 'AUTH_LOGIN_FAILURE',
+];
 
 export const AuditTrustPage: React.FC = () => {
+  const { user, isPlatformAdmin, isCompanyAdmin } = useAuth();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [isVerifying, setIsVerifying] = useState(false);
   const [isCreatingAnchor, setIsCreatingAnchor] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [anchorStatus, setAnchorStatus] = useState<AnchorStatus | null>(null);
+  const [anchors, setAnchors] = useState<AuditAnchor[]>([]);
+  const [anchorVerifyResult, setAnchorVerifyResult] = useState<Record<number, AnchorStatus>>({});
   const [verificationResult, setVerificationResult] = useState<{
     status: 'VALID' | 'INVALID';
     eventCount: number;
     message: string;
+    failedCheck?: string | null;
+    failedSequence?: number | null;
   } | null>(null);
+  const [lastVerifiedAt, setLastVerifiedAt] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState<TrustEventFilters>({});
+  const [draftFilters, setDraftFilters] = useState<TrustEventFilters>({});
+  const [isExporting, setIsExporting] = useState(false);
 
-  const fetchLedger = async () => {
+  const fetchLedger = async (activeFilters: TrustEventFilters) => {
     setIsLoading(true);
     setLoadError(null);
     try {
       const [eventsRes, anchorRes] = await Promise.allSettled([
-        auditApi.getAuditEvents(100),
+        activeFilters.job_id
+          ? auditApi.getJobAuditTrail(activeFilters.job_id)
+          : auditApi.getAuditEvents(activeFilters),
         auditApi.verifyAnchor(),
       ]);
 
-      if (eventsRes.status === 'fulfilled' && eventsRes.value?.events) {
-        setEvents(eventsRes.value.events);
-      } else if (eventsRes.status === 'rejected') {
+      if (eventsRes.status === 'fulfilled') {
+        setEvents(eventsRes.value?.events || []);
+      } else {
         setLoadError('Failed to load cryptographic audit ledger from backend.');
       }
       if (anchorRes.status === 'fulfilled') {
@@ -59,20 +80,28 @@ export const AuditTrustPage: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchLedger();
-  }, []);
+    fetchLedger(filters);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters]);
+
+  useEffect(() => {
+    if (isPlatformAdmin) {
+      auditApi.listAnchors().then((res) => setAnchors(res.anchors)).catch(() => {});
+    }
+  }, [isPlatformAdmin]);
 
   const handleVerifyChain = async () => {
     setIsVerifying(true);
     try {
-      // AuditVerifyResponse has exactly these 3 fields — the backend's own
-      // `message` is displayed verbatim rather than constructing one here.
       const res = await auditApi.verifyTrustChain();
       setVerificationResult({
         status: res.valid ? 'VALID' : 'INVALID',
         eventCount: res.event_count,
         message: res.message,
+        failedCheck: res.failed_check,
+        failedSequence: res.failed_sequence,
       });
+      setLastVerifiedAt(new Date().toISOString());
     } catch (err: any) {
       setVerificationResult({
         status: 'INVALID',
@@ -90,11 +119,54 @@ export const AuditTrustPage: React.FC = () => {
       await auditApi.createAnchor();
       const updated = await auditApi.verifyAnchor();
       setAnchorStatus(updated);
+      const list = await auditApi.listAnchors();
+      setAnchors(list.anchors);
       alert('External cryptographic anchor successfully checkpointed.');
     } catch (err: any) {
       alert('Anchor creation failed: ' + (err.response?.data?.detail || err.message));
     } finally {
       setIsCreatingAnchor(false);
+    }
+  };
+
+  const handleVerifySpecificAnchor = async (anchorId: number) => {
+    try {
+      const result = await auditApi.verifyAnchorById(anchorId);
+      setAnchorVerifyResult((prev) => ({ ...prev, [anchorId]: result }));
+    } catch (err: any) {
+      setAnchorVerifyResult((prev) => ({
+        ...prev,
+        [anchorId]: { status: 'error', verified: false, message: err.response?.data?.detail || 'Verification failed.' },
+      }));
+    }
+  };
+
+  const handleApplyFilters = () => {
+    setFilters(draftFilters);
+    setShowFilters(false);
+  };
+
+  const handleClearFilters = () => {
+    setDraftFilters({});
+    setFilters({});
+  };
+
+  const handleExport = async (format: 'csv' | 'json') => {
+    setIsExporting(true);
+    try {
+      const blob = await auditApi.exportEvents(filters, format);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `audit_export.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert('Export failed: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -107,33 +179,112 @@ export const AuditTrustPage: React.FC = () => {
     );
   });
 
+  const activeFilterCount = Object.values(filters).filter(Boolean).length;
+  const visibilityLabel = isPlatformAdmin
+    ? 'Global (all companies)'
+    : isCompanyAdmin
+    ? `Company-wide — ${user?.company_name || user?.tenant_id || 'your company'}`
+    : `Your team — ${user?.team_id || 'unassigned'}`;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       <PageHeader
         title="Cryptographic Audit & Trust Ledger"
         subtitle="Immutable SHA-256 hash-chained event provenance protecting against tampering, unauthorized overrides, and dispatch discrepancies"
         actions={
-          <div style={{ display: 'flex', gap: '0.6rem' }}>
-            <button
-              className="btn btn-secondary"
-              onClick={handleCreateAnchor}
-              disabled={isCreatingAnchor}
-              title="Create immutable checkpoint anchor"
-            >
-              <Anchor size={15} className={isCreatingAnchor ? 'animate-spin' : ''} />
-              <span>{isCreatingAnchor ? 'Anchoring...' : 'Create Anchor'}</span>
+          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <button className="btn btn-secondary" onClick={() => setShowFilters((s) => !s)}>
+              <Filter size={15} />
+              <span>Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}</span>
             </button>
-            <button
-              className="btn btn-primary"
-              onClick={handleVerifyChain}
-              disabled={isVerifying}
-            >
-              <ShieldCheck size={16} className={isVerifying ? 'animate-spin' : ''} />
-              <span>{isVerifying ? 'Verifying Hashes...' : 'Verify Cryptographic Chain'}</span>
+            <button className="btn btn-secondary" onClick={() => handleExport('csv')} disabled={isExporting}>
+              <Download size={15} />
+              <span>Export CSV</span>
             </button>
+            {isPlatformAdmin && (
+              <>
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleCreateAnchor}
+                  disabled={isCreatingAnchor}
+                  title="Create immutable checkpoint anchor"
+                >
+                  <Anchor size={15} className={isCreatingAnchor ? 'animate-spin' : ''} />
+                  <span>{isCreatingAnchor ? 'Anchoring...' : 'Create Anchor'}</span>
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleVerifyChain}
+                  disabled={isVerifying}
+                >
+                  <ShieldCheck size={16} className={isVerifying ? 'animate-spin' : ''} />
+                  <span>{isVerifying ? 'Verifying Hashes...' : 'Verify Cryptographic Chain'}</span>
+                </button>
+              </>
+            )}
           </div>
         }
       />
+
+      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+        Visibility scope: <strong style={{ color: 'var(--text-primary)' }}>{visibilityLabel}</strong>
+        {!isPlatformAdmin && (
+          <span> — chain verification and anchor management are Platform Admin-only.</span>
+        )}
+      </div>
+
+      {showFilters && (
+        <GlassCard title="Filters" subtitle="Applied on top of your authorized visibility scope — never bypasses it">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem' }}>
+            <input
+              className="input"
+              placeholder="Job ID"
+              value={draftFilters.job_id || ''}
+              onChange={(e) => setDraftFilters((f) => ({ ...f, job_id: e.target.value || undefined }))}
+            />
+            <input
+              className="input"
+              placeholder="Team ID"
+              value={draftFilters.team_id || ''}
+              onChange={(e) => setDraftFilters((f) => ({ ...f, team_id: e.target.value || undefined }))}
+            />
+            <input
+              className="input"
+              placeholder="Actor (username)"
+              value={draftFilters.actor || ''}
+              onChange={(e) => setDraftFilters((f) => ({ ...f, actor: e.target.value || undefined }))}
+            />
+            <select
+              className="input"
+              value={draftFilters.event_type || ''}
+              onChange={(e) => setDraftFilters((f) => ({ ...f, event_type: e.target.value || undefined }))}
+            >
+              <option value="">All event types</option>
+              {EVENT_TYPES.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            <input
+              className="input"
+              type="datetime-local"
+              value={draftFilters.start_time || ''}
+              onChange={(e) => setDraftFilters((f) => ({ ...f, start_time: e.target.value || undefined }))}
+            />
+            <input
+              className="input"
+              type="datetime-local"
+              value={draftFilters.end_time || ''}
+              onChange={(e) => setDraftFilters((f) => ({ ...f, end_time: e.target.value || undefined }))}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button className="btn btn-primary btn-sm" onClick={handleApplyFilters}>Apply</button>
+            <button className="btn btn-secondary btn-sm" onClick={handleClearFilters}>
+              <X size={13} /> Clear
+            </button>
+          </div>
+        </GlassCard>
+      )}
 
       {loadError && (
         <div
@@ -196,6 +347,17 @@ export const AuditTrustPage: React.FC = () => {
               <div style={{ fontSize: '1rem', fontWeight: 600, color: '#ffffff', marginTop: '0.15rem' }}>
                 {verificationResult.message}
               </div>
+              {verificationResult.failedCheck && (
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem', fontFamily: 'var(--font-mono)' }}>
+                  failed_check: {verificationResult.failedCheck}
+                  {verificationResult.failedSequence != null && ` · sequence: ${verificationResult.failedSequence}`}
+                </div>
+              )}
+              {lastVerifiedAt && (
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                  Last verified: {formatRegionalDateTime(lastVerifiedAt, 'UTC')}
+                </div>
+              )}
             </div>
           </div>
 
@@ -231,9 +393,53 @@ export const AuditTrustPage: React.FC = () => {
         </GlassCard>
       )}
 
-      {/* Ledger Block Explorer */}
+      {/* Historical anchors — Platform Admin only */}
+      {isPlatformAdmin && anchors.length > 0 && (
+        <GlassCard title={`Historical Anchors (${anchors.length})`} subtitle="Server-derived checkpoints; sequence/hash can never be supplied by a client">
+          <div className="data-table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Sequence</th>
+                  <th>Root Hash</th>
+                  <th>Created</th>
+                  <th>Created By</th>
+                  <th>Verify</th>
+                </tr>
+              </thead>
+              <tbody>
+                {anchors.map((a) => {
+                  const result = anchorVerifyResult[a.id];
+                  return (
+                    <tr key={a.id}>
+                      <td>{a.id}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>#{a.sequence}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>{a.root_hash.substring(0, 20)}...</td>
+                      <td style={{ fontSize: '0.75rem' }}>{formatRegionalDateTime(a.created_at, 'UTC')}</td>
+                      <td style={{ fontSize: '0.75rem' }}>{a.created_by_user_id || 'N/A'}</td>
+                      <td>
+                        <button className="btn btn-secondary btn-sm" onClick={() => handleVerifySpecificAnchor(a.id)}>
+                          Verify
+                        </button>
+                        {result && (
+                          <span style={{ marginLeft: '0.5rem', fontSize: '0.72rem', color: result.verified ? '#10b981' : '#ef4444', fontWeight: 700 }}>
+                            {result.verified ? 'VALID' : result.message}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </GlassCard>
+      )}
+
+      {/* Ledger Block Explorer / Workload Audit Timeline */}
       <GlassCard
-        title={`Audit Ledger Blocks (${events.length})`}
+        title={filters.job_id ? `Workload Audit Timeline — ${filters.job_id} (${events.length})` : `Audit Ledger Blocks (${events.length})`}
         subtitle="Chronological sequence of SHA-256 chained system, scheduling, and approval events"
         actions={
           <div style={{ position: 'relative', width: '220px' }}>
@@ -265,6 +471,10 @@ export const AuditTrustPage: React.FC = () => {
                   <th>Seq</th>
                   <th>Event Type</th>
                   <th>Target Job ID</th>
+                  <th>Actor</th>
+                  <th>Role</th>
+                  <th>Source</th>
+                  <th>Request ID</th>
                   <th>Timestamp (UTC)</th>
                   <th>Previous Block Hash</th>
                   <th>Current SHA-256 Hash</th>
@@ -280,11 +490,22 @@ export const AuditTrustPage: React.FC = () => {
                     </td>
                     <td>
                       <span style={{ fontWeight: 600, color: '#ffffff' }}>{evt.event_type}</span>
+                      {evt.reason && (
+                        <div style={{ fontSize: '0.68rem', color: '#f59e0b', marginTop: '0.15rem', maxWidth: '260px' }}>
+                          {evt.reason}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>
                         {evt.job_id || 'N/A'}
                       </span>
+                    </td>
+                    <td style={{ fontSize: '0.75rem' }}>{evt.actor_username || (evt.actor_type === 'SYSTEM' ? 'SYSTEM' : 'N/A')}</td>
+                    <td style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{evt.actor_role || '—'}</td>
+                    <td style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{evt.source_service || '—'}</td>
+                    <td style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                      {evt.request_id ? `${evt.request_id.substring(0, 8)}...` : '—'}
                     </td>
                     <td>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>

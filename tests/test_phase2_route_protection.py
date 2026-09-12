@@ -58,7 +58,10 @@ def setup_route_protection_db():
         db.query(ApprovalORM).delete()
         db.query(KubernetesExecutionORM).delete()
         db.query(ScheduleDecisionORM).delete()
-        db.query(AuditEventORM).delete()
+        # audit_events is append-only at the DB level (Trust/Audit P0) — never
+        # deleted, including in test cleanup. Tests below filter by unique
+        # job_id/username/event_type, so accumulated rows across the shared
+        # file-backed test DB do not affect their assertions.
         db.query(JobORM).delete()
         db.query(UserORM).delete()
         db.commit()
@@ -86,7 +89,10 @@ def setup_route_protection_db():
         db.query(ApprovalORM).delete()
         db.query(KubernetesExecutionORM).delete()
         db.query(ScheduleDecisionORM).delete()
-        db.query(AuditEventORM).delete()
+        # audit_events is append-only at the DB level (Trust/Audit P0) — never
+        # deleted, including in test cleanup. Tests below filter by unique
+        # job_id/username/event_type, so accumulated rows across the shared
+        # file-backed test DB do not affect their assertions.
         db.query(JobORM).delete()
         db.query(UserORM).delete()
         db.commit()
@@ -245,7 +251,10 @@ def test_company_user_cannot_access_admin_endpoints(client, auth_tokens):
 
 
 def test_company_user_can_read_telemetry_reports_and_trust(client, auth_tokens):
-    """COMPANY_USER can successfully access read-only telemetry, reports, and trust ledger."""
+    """COMPANY_USER can successfully access read-only telemetry, reports, and its
+    own team-scoped slice of the trust ledger — but NOT global chain verification
+    (Trust/Audit P0: /trust/verify is Platform-Admin-only, since it operates on
+    the GLOBAL ledger, not any one company's data)."""
     user_token = auth_tokens["COMPANY_USER_team_alpha"]
     headers = {"Authorization": f"Bearer {user_token}"}
 
@@ -253,10 +262,14 @@ def test_company_user_can_read_telemetry_reports_and_trust(client, auth_tokens):
     res_jobs = client.get("/api/v1/jobs", headers=headers)
     assert res_jobs.status_code == 200
 
-    # 2. GET /trust/verify
-    res_trust = client.get("/api/v1/trust/verify", headers=headers)
-    assert res_trust.status_code == 200
-    assert "valid" in res_trust.json()
+    # 2. GET /trust/events — read-only, team-scoped, allowed for COMPANY_USER
+    res_trust_events = client.get("/api/v1/trust/events", headers=headers)
+    assert res_trust_events.status_code == 200
+    assert "events" in res_trust_events.json()
+
+    # 2b. GET /trust/verify — global chain verification, Platform-Admin-only
+    res_trust_verify = client.get("/api/v1/trust/verify", headers=headers)
+    assert res_trust_verify.status_code == 403
 
     # 3. GET /report/summary
     res_report = client.get("/api/v1/report/summary", headers=headers)

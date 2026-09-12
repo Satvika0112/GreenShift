@@ -27,7 +27,22 @@ import {
   AuditVerifyResponse,
   AnchorStatus,
   AnchorCreateResult,
+  AuditAnchor,
+  TrustEventFilters,
   DatasetWorkloadsResponse,
+  BrsrCompanyProfile,
+  BrsrCompanyProfileUpdate,
+  BrsrReport,
+  BrsrReportCreate,
+  BrsrMetricDefinition,
+  BrsrMetricValue,
+  BrsrMetricValueUpdate,
+  BrsrValidationRun,
+  BrsrOverview,
+  BrsrAssessment,
+  BrsrAssessmentUpdate,
+  BrsrAuditEvent,
+  BrsrExportFormat,
 } from '../types/api';
 
 // ==========================================
@@ -488,9 +503,9 @@ export const notificationsApi = {
 // AUDIT & TRUST CHAIN
 // ==========================================
 export const auditApi = {
-  getAuditEvents: async (limit = 50, jobId?: string): Promise<{ events: AuditEvent[] }> => {
+  getAuditEvents: async (filters: TrustEventFilters = {}): Promise<{ events: AuditEvent[] }> => {
     const res = await apiClient.get<{ events: AuditEvent[] }>('/api/v1/trust/events', {
-      params: { limit, job_id: jobId },
+      params: { limit: 50, ...filters },
     });
     return res.data;
   },
@@ -512,6 +527,121 @@ export const auditApi = {
 
   createAnchor: async (): Promise<AnchorCreateResult> => {
     const res = await apiClient.post<AnchorCreateResult>('/api/v1/trust/anchor/create');
+    return res.data;
+  },
+
+  listAnchors: async (): Promise<{ anchors: AuditAnchor[] }> => {
+    const res = await apiClient.get<{ anchors: AuditAnchor[] }>('/api/v1/trust/anchors');
+    return res.data;
+  },
+
+  verifyAnchorById: async (anchorId: number): Promise<AnchorStatus> => {
+    const res = await apiClient.get<AnchorStatus>(`/api/v1/trust/anchors/${anchorId}/verify`);
+    return res.data;
+  },
+
+  exportEvents: async (filters: TrustEventFilters, format: 'csv' | 'json'): Promise<Blob> => {
+    const res = await apiClient.get('/api/v1/trust/events/export', {
+      params: { ...filters, format },
+      responseType: 'blob',
+    });
+    return res.data;
+  },
+};
+
+// ==========================================
+// BRSR (Business Responsibility and Sustainability Reporting)
+// ==========================================
+export const brsrApi = {
+  getCompanyProfile: async (tenantId?: string): Promise<BrsrCompanyProfile> => {
+    const res = await apiClient.get<BrsrCompanyProfile>('/api/v1/brsr/company-profile', {
+      params: tenantId ? { tenant_id: tenantId } : undefined,
+    });
+    return res.data;
+  },
+
+  updateCompanyProfile: async (update: BrsrCompanyProfileUpdate): Promise<BrsrCompanyProfile> => {
+    const res = await apiClient.put<BrsrCompanyProfile>('/api/v1/brsr/company-profile', update);
+    return res.data;
+  },
+
+  getMetricDefinitions: async (params?: { section?: string; principle?: number }): Promise<BrsrMetricDefinition[]> => {
+    const res = await apiClient.get<BrsrMetricDefinition[]>('/api/v1/brsr/metric-definitions', { params });
+    return res.data;
+  },
+
+  getReports: async (tenantId?: string): Promise<BrsrReport[]> => {
+    const res = await apiClient.get<BrsrReport[]>('/api/v1/brsr/reports', {
+      params: tenantId ? { tenant_id: tenantId } : undefined,
+    });
+    return res.data;
+  },
+
+  createReport: async (input: BrsrReportCreate): Promise<BrsrReport> => {
+    const res = await apiClient.post<BrsrReport>('/api/v1/brsr/reports', input);
+    return res.data;
+  },
+
+  getReport: async (reportId: number): Promise<BrsrReport> => {
+    const res = await apiClient.get<BrsrReport>(`/api/v1/brsr/reports/${reportId}`);
+    return res.data;
+  },
+
+  getOverview: async (reportId: number): Promise<BrsrOverview> => {
+    const res = await apiClient.get<BrsrOverview>(`/api/v1/brsr/reports/${reportId}/overview`);
+    return res.data;
+  },
+
+  getMetrics: async (reportId: number, params?: { section?: string; principle?: number }): Promise<BrsrMetricValue[]> => {
+    const res = await apiClient.get<BrsrMetricValue[]>(`/api/v1/brsr/reports/${reportId}/metrics`, { params });
+    return res.data;
+  },
+
+  updateMetric: async (reportId: number, metricCode: string, update: BrsrMetricValueUpdate): Promise<BrsrMetricValue> => {
+    const res = await apiClient.put<BrsrMetricValue>(`/api/v1/brsr/reports/${reportId}/metrics/${metricCode}`, update);
+    return res.data;
+  },
+
+  applyGreenShiftData: async (reportId: number): Promise<{ updated_metrics: number }> => {
+    const res = await apiClient.post(`/api/v1/brsr/reports/${reportId}/apply-greenshift-data`);
+    return res.data;
+  },
+
+  runValidation: async (reportId: number): Promise<BrsrValidationRun> => {
+    const res = await apiClient.post<BrsrValidationRun>(`/api/v1/brsr/reports/${reportId}/validate`);
+    return res.data;
+  },
+
+  getLatestValidation: async (reportId: number): Promise<BrsrValidationRun | null> => {
+    const res = await apiClient.get<BrsrValidationRun | null>(`/api/v1/brsr/reports/${reportId}/validation`);
+    return res.data;
+  },
+
+  transitionStatus: async (reportId: number, targetStatus: string): Promise<BrsrReport> => {
+    const res = await apiClient.post<BrsrReport>(`/api/v1/brsr/reports/${reportId}/transition`, { target_status: targetStatus });
+    return res.data;
+  },
+
+  getAssessment: async (reportId: number): Promise<BrsrAssessment> => {
+    const res = await apiClient.get<BrsrAssessment>(`/api/v1/brsr/reports/${reportId}/assessment`);
+    return res.data;
+  },
+
+  updateAssessment: async (reportId: number, update: BrsrAssessmentUpdate): Promise<BrsrAssessment> => {
+    const res = await apiClient.put<BrsrAssessment>(`/api/v1/brsr/reports/${reportId}/assessment`, update);
+    return res.data;
+  },
+
+  getAuditTrail: async (reportId: number): Promise<BrsrAuditEvent[]> => {
+    const res = await apiClient.get<BrsrAuditEvent[]>(`/api/v1/brsr/reports/${reportId}/audit`);
+    return res.data;
+  },
+
+  exportReport: async (reportId: number, exportFormat: BrsrExportFormat): Promise<Blob> => {
+    const res = await apiClient.get(`/api/v1/brsr/reports/${reportId}/export`, {
+      params: { format: exportFormat },
+      responseType: 'blob',
+    });
     return res.data;
   },
 };

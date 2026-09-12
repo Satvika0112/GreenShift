@@ -301,7 +301,7 @@ def login(
     )
 
     try:
-        record_login_success(db, username=user.username, role=role_str, team_id=user.team_id, ip_address=client_ip)
+        record_login_success(db, username=user.username, role=role_str, team_id=user.team_id, ip_address=client_ip, tenant_id=tenant_id, actor=user)
     except Exception:
         pass
 
@@ -418,7 +418,7 @@ def login_email(
     )
 
     try:
-        record_login_success(db, username=user.username, role=role_str, team_id=user.team_id, ip_address=client_ip)
+        record_login_success(db, username=user.username, role=role_str, team_id=user.team_id, ip_address=client_ip, tenant_id=tenant_id, actor=user)
     except Exception:
         pass
 

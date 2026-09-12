@@ -4,10 +4,16 @@ Trust service — integrates audit event recording into the full pipeline.
 
 Called by other agents whenever a significant event occurs.
 Provides a simple event-recording API that other agents use.
+
+Every record_* function accepts an optional `actor` (a real, server-resolved
+UserORM/AuthenticatedIdentity — never a client-supplied identity field) and
+`request_id` (from request.state.request_id at the API boundary). Omitting
+`actor` is the correct, honest way to record a genuine SYSTEM/background
+event (scheduler loop, dispatcher poll) — see app.trust.ledger._resolve_actor_context.
 """
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
@@ -17,12 +23,18 @@ from app.shared.models import EventType
 logger = logging.getLogger(__name__)
 
 
-def record_job_submitted(db: Session, job_id: str, team_id: str, region: str) -> None:
+def record_job_submitted(
+    db: Session, job_id: str, team_id: str, region: str,
+    tenant_id: Optional[str] = None, actor: Optional[Any] = None, request_id: Optional[str] = None,
+) -> None:
     """Record a JOB_SUBMITTED audit event."""
-    append_event(db, EventType.JOB_SUBMITTED, job_id=job_id, payload={
-        "team_id": team_id,
-        "region": region,
-    })
+    append_event(
+        db, EventType.JOB_SUBMITTED, job_id=job_id, payload={
+            "team_id": team_id,
+            "region": region,
+        },
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="ingest",
+    )
 
 
 def record_job_scheduled(
@@ -37,6 +49,10 @@ def record_job_scheduled(
     electricity_cost: Optional[float] = None,
     currency: Optional[str] = None,
     reason: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """Record a JOB_SCHEDULED audit event with full regional and optimization context."""
     payload = {
@@ -56,7 +72,10 @@ def record_job_scheduled(
     if reason:
         payload["reason"] = reason
 
-    append_event(db, EventType.JOB_SCHEDULED, job_id=job_id, payload=payload)
+    append_event(
+        db, EventType.JOB_SCHEDULED, job_id=job_id, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="decide",
+    )
 
 
 def record_schedule_proposed(
@@ -69,6 +88,10 @@ def record_schedule_proposed(
     region_id: Optional[str] = None,
     tariff_plan: Optional[str] = None,
     deadline: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """Record a SCHEDULE_PROPOSED audit event awaiting human approval."""
     payload = {
@@ -84,7 +107,32 @@ def record_schedule_proposed(
     if deadline:
         payload["deadline"] = deadline
 
-    append_event(db, EventType.SCHEDULE_PROPOSED, job_id=job_id, payload=payload)
+    append_event(
+        db, EventType.SCHEDULE_PROPOSED, job_id=job_id, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="decide",
+    )
+
+
+def record_scheduling_infeasible(
+    db: Session,
+    job_id: str,
+    reason: str,
+    tenant_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
+    context: Optional[dict] = None,
+) -> None:
+    """Record a SCHEDULING_FAILED audit event when no feasible execution window
+    exists for a job. `reason` must be the scheduler's actual failure reason
+    (the ValueError/exception message) — never a fabricated or generic string."""
+    payload = {"job_id": job_id, "reason": reason}
+    if context:
+        payload.update(context)
+    append_event(
+        db, EventType.SCHEDULING_FAILED, job_id=job_id, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="decide",
+    )
 
 
 def record_approval_granted(
@@ -95,6 +143,10 @@ def record_approval_granted(
     approved_by: Optional[str] = "admin",
     reason: Optional[str] = None,
     timestamp: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """Record an APPROVAL_GRANTED audit event."""
     from app.shared.utils import utcnow
@@ -107,7 +159,10 @@ def record_approval_granted(
         "reason": reason or "Schedule approved",
         "timestamp": ts,
     }
-    append_event(db, EventType.APPROVAL_GRANTED, job_id=job_id, payload=payload)
+    append_event(
+        db, EventType.APPROVAL_GRANTED, job_id=job_id, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="approval",
+    )
 
 
 def record_approval_declined(
@@ -118,6 +173,10 @@ def record_approval_declined(
     approved_by: Optional[str] = "admin",
     reason: Optional[str] = None,
     timestamp: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """Record an APPROVAL_DECLINED audit event."""
     from app.shared.utils import utcnow
@@ -130,7 +189,10 @@ def record_approval_declined(
         "reason": reason or "Schedule declined",
         "timestamp": ts,
     }
-    append_event(db, EventType.APPROVAL_DECLINED, job_id=job_id, payload=payload)
+    append_event(
+        db, EventType.APPROVAL_DECLINED, job_id=job_id, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="approval",
+    )
 
 
 def record_dispatch_requested(
@@ -138,6 +200,9 @@ def record_dispatch_requested(
     job_id: str,
     requested_by: Optional[str] = "system",
     team_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """Record a DISPATCH_REQUESTED audit event."""
     from app.shared.utils import utcnow
@@ -148,7 +213,10 @@ def record_dispatch_requested(
     }
     if team_id:
         payload["team_id"] = team_id
-    append_event(db, EventType.DISPATCH_REQUESTED, job_id=job_id, payload=payload)
+    append_event(
+        db, EventType.DISPATCH_REQUESTED, job_id=job_id, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="dispatch",
+    )
 
 
 def record_dispatch_blocked(
@@ -157,6 +225,10 @@ def record_dispatch_blocked(
     reason: str,
     current_status: Optional[str] = None,
     requested_by: Optional[str] = "system",
+    tenant_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """Record a DISPATCH_BLOCKED audit event."""
     from app.shared.utils import utcnow
@@ -167,7 +239,10 @@ def record_dispatch_blocked(
         "requested_by": requested_by or "system",
         "timestamp": utcnow().isoformat(),
     }
-    append_event(db, EventType.DISPATCH_BLOCKED, job_id=job_id, payload=payload)
+    append_event(
+        db, EventType.DISPATCH_BLOCKED, job_id=job_id, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="dispatch",
+    )
 
 
 def record_dispatch_started(
@@ -176,6 +251,10 @@ def record_dispatch_started(
     kubernetes_job_name: str,
     namespace: str,
     dispatched_by: Optional[str] = "system",
+    tenant_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """Record a DISPATCH_STARTED audit event."""
     from app.shared.utils import utcnow
@@ -186,7 +265,10 @@ def record_dispatch_started(
         "dispatched_by": dispatched_by or "system",
         "timestamp": utcnow().isoformat(),
     }
-    append_event(db, EventType.DISPATCH_STARTED, job_id=job_id, payload=payload)
+    append_event(
+        db, EventType.DISPATCH_STARTED, job_id=job_id, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="dispatch",
+    )
 
 
 def record_dispatch_authorized(
@@ -194,6 +276,10 @@ def record_dispatch_authorized(
     job_id: str,
     schedule_decision_id: int,
     authorized_at: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """Record a DISPATCH_AUTHORIZED audit event."""
     from app.shared.utils import utcnow
@@ -203,71 +289,86 @@ def record_dispatch_authorized(
         "schedule_decision_id": schedule_decision_id,
         "authorized_at": ts,
     }
-    append_event(db, EventType.DISPATCH_AUTHORIZED, job_id=job_id, payload=payload)
+    append_event(
+        db, EventType.DISPATCH_AUTHORIZED, job_id=job_id, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="dispatch",
+    )
 
 
 def record_k8s_job_created(
-    db: Session,
-    job_id: str,
-    kubernetes_job_name: str,
-    namespace: str,
+    db: Session, job_id: str, kubernetes_job_name: str, namespace: str,
+    tenant_id: Optional[str] = None, team_id: Optional[str] = None,
+    actor: Optional[Any] = None, request_id: Optional[str] = None,
 ) -> None:
     """Record a K8S_JOB_CREATED audit event."""
-    append_event(db, EventType.K8S_JOB_CREATED, job_id=job_id, payload={
-        "kubernetes_job_name": kubernetes_job_name,
-        "namespace": namespace,
-    })
+    append_event(
+        db, EventType.K8S_JOB_CREATED, job_id=job_id, payload={
+            "kubernetes_job_name": kubernetes_job_name,
+            "namespace": namespace,
+        },
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="dispatch",
+    )
 
 
 def record_k8s_job_started(
-    db: Session,
-    job_id: str,
-    kubernetes_job_name: str,
-    pod_name: Optional[str],
-    actual_start: str,
+    db: Session, job_id: str, kubernetes_job_name: str, pod_name: Optional[str], actual_start: str,
+    tenant_id: Optional[str] = None, team_id: Optional[str] = None,
+    actor: Optional[Any] = None, request_id: Optional[str] = None,
 ) -> None:
     """Record a K8S_JOB_STARTED audit event."""
-    append_event(db, EventType.K8S_JOB_STARTED, job_id=job_id, payload={
-        "kubernetes_job_name": kubernetes_job_name,
-        "pod_name": pod_name,
-        "actual_start": actual_start,
-    })
+    append_event(
+        db, EventType.K8S_JOB_STARTED, job_id=job_id, payload={
+            "kubernetes_job_name": kubernetes_job_name,
+            "pod_name": pod_name,
+            "actual_start": actual_start,
+        },
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="dispatch",
+    )
 
 
 def record_k8s_job_completed(
-    db: Session,
-    job_id: str,
-    kubernetes_job_name: str,
-    pod_name: Optional[str],
-    actual_end: str,
+    db: Session, job_id: str, kubernetes_job_name: str, pod_name: Optional[str], actual_end: str,
+    tenant_id: Optional[str] = None, team_id: Optional[str] = None,
+    actor: Optional[Any] = None, request_id: Optional[str] = None,
 ) -> None:
     """Record a K8S_JOB_COMPLETED audit event."""
-    append_event(db, EventType.K8S_JOB_COMPLETED, job_id=job_id, payload={
-        "kubernetes_job_name": kubernetes_job_name,
-        "pod_name": pod_name,
-        "actual_end": actual_end,
-    })
+    append_event(
+        db, EventType.K8S_JOB_COMPLETED, job_id=job_id, payload={
+            "kubernetes_job_name": kubernetes_job_name,
+            "pod_name": pod_name,
+            "actual_end": actual_end,
+        },
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="dispatch",
+    )
 
 
 def record_k8s_job_failed(
-    db: Session,
-    job_id: str,
-    kubernetes_job_name: str,
-    error_message: Optional[str],
+    db: Session, job_id: str, kubernetes_job_name: str, error_message: Optional[str],
+    tenant_id: Optional[str] = None, team_id: Optional[str] = None,
+    actor: Optional[Any] = None, request_id: Optional[str] = None,
 ) -> None:
     """Record a K8S_JOB_FAILED audit event."""
-    append_event(db, EventType.K8S_JOB_FAILED, job_id=job_id, payload={
-        "kubernetes_job_name": kubernetes_job_name,
-        "error_message": error_message,
-    })
+    append_event(
+        db, EventType.K8S_JOB_FAILED, job_id=job_id, payload={
+            "kubernetes_job_name": kubernetes_job_name,
+            "error_message": error_message,
+        },
+        actor=actor, tenant_id=tenant_id, team_id=team_id, request_id=request_id, source_service="dispatch",
+    )
 
 
-def record_export_generated(db: Session, export_format: str, record_count: int) -> None:
+def record_export_generated(
+    db: Session, export_format: str, record_count: int,
+    tenant_id: Optional[str] = None, actor: Optional[Any] = None, request_id: Optional[str] = None,
+) -> None:
     """Record an EXPORT_GENERATED audit event."""
-    append_event(db, EventType.EXPORT_GENERATED, payload={
-        "export_format": export_format,
-        "record_count": record_count,
-    })
+    append_event(
+        db, EventType.EXPORT_GENERATED, payload={
+            "export_format": export_format,
+            "record_count": record_count,
+        },
+        actor=actor, tenant_id=tenant_id, request_id=request_id, source_service="export",
+    )
 
 
 def record_carbon_provenance(
@@ -283,6 +384,7 @@ def record_carbon_provenance(
     """
     Record carbon data source provenance in the SHA-256 audit ledger.
     SECURITY: Never records API keys or authentication headers.
+    Always a SYSTEM event — carbon data resolution has no human actor.
     """
     event_type_map = {
         "electricity_maps": EventType.CARBON_API_SUCCESS,
@@ -306,7 +408,7 @@ def record_carbon_provenance(
     if fallback_reason:
         payload["fallback_reason"] = fallback_reason
 
-    append_event(db, etype, job_id=job_id, payload=payload)
+    append_event(db, etype, job_id=job_id, payload=payload, source_service="ingest")
 
 
 def record_login_success(
@@ -315,8 +417,14 @@ def record_login_success(
     role: str,
     team_id: Optional[str] = None,
     ip_address: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    actor: Optional[Any] = None,
 ) -> None:
-    """Record an AUTH_LOGIN_SUCCESS audit event without sensitive credentials."""
+    """Record an AUTH_LOGIN_SUCCESS audit event without sensitive credentials.
+    `actor` is the user who just authenticated — this IS a real human actor
+    even though the request that triggered it (the login POST) had no prior
+    session, so it's passed explicitly by the caller rather than derived
+    from a dependency."""
     payload = {
         "username": username,
         "role": role,
@@ -325,7 +433,10 @@ def record_login_success(
         payload["team_id"] = team_id
     if ip_address:
         payload["ip_address"] = ip_address
-    append_event(db, EventType.AUTH_LOGIN_SUCCESS, payload=payload)
+    append_event(
+        db, EventType.AUTH_LOGIN_SUCCESS, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, source_service="auth",
+    )
 
 
 def record_login_failure(
@@ -334,14 +445,15 @@ def record_login_failure(
     reason: str = "Invalid credentials",
     ip_address: Optional[str] = None,
 ) -> None:
-    """Record an AUTH_LOGIN_FAILURE audit event without logging password attempts."""
+    """Record an AUTH_LOGIN_FAILURE audit event without logging password attempts.
+    Always SYSTEM — a failed login never resolves to a real authenticated actor."""
     payload = {
         "username_attempted": username_attempted,
         "reason": reason,
     }
     if ip_address:
         payload["ip_address"] = ip_address
-    append_event(db, EventType.AUTH_LOGIN_FAILURE, payload=payload)
+    append_event(db, EventType.AUTH_LOGIN_FAILURE, payload=payload, source_service="auth")
 
 
 def record_access_denied(
@@ -351,6 +463,8 @@ def record_access_denied(
     endpoint: str,
     reason: str,
     team_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    actor: Optional[Any] = None,
 ) -> None:
     """Record an AUTH_ACCESS_DENIED audit event."""
     payload = {
@@ -361,7 +475,10 @@ def record_access_denied(
     }
     if team_id:
         payload["team_id"] = team_id
-    append_event(db, EventType.AUTH_ACCESS_DENIED, payload=payload)
+    append_event(
+        db, EventType.AUTH_ACCESS_DENIED, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, source_service="auth",
+    )
 
 
 def record_user_registered(
@@ -371,8 +488,12 @@ def record_user_registered(
     team_id: Optional[str] = None,
     status: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    actor: Optional[Any] = None,
 ) -> None:
-    """Record an AUTH_USER_REGISTERED audit event without password hash."""
+    """Record an AUTH_USER_REGISTERED audit event without password hash.
+    `actor` is None (correctly SYSTEM) for public self-registration — the
+    registrant has no authenticated session yet — but is the real creating
+    admin (Company/Platform Admin) when a user is created via the admin API."""
     payload = {
         "username": username,
         "role": role,
@@ -383,7 +504,10 @@ def record_user_registered(
         payload["status"] = status
     if tenant_id:
         payload["tenant_id"] = tenant_id
-    append_event(db, EventType.AUTH_USER_REGISTERED, payload=payload)
+    append_event(
+        db, EventType.AUTH_USER_REGISTERED, payload=payload,
+        actor=actor, tenant_id=tenant_id, team_id=team_id, source_service="auth",
+    )
 
 
 def record_user_activated(
@@ -391,6 +515,7 @@ def record_user_activated(
     username: str,
     activated_by: str,
     tenant_id: Optional[str] = None,
+    actor: Optional[Any] = None,
 ) -> None:
     """Record an AUTH_USER_ACTIVATED audit event."""
     payload = {
@@ -399,7 +524,10 @@ def record_user_activated(
     }
     if tenant_id:
         payload["tenant_id"] = tenant_id
-    append_event(db, EventType.AUTH_USER_ACTIVATED, payload=payload)
+    append_event(
+        db, EventType.AUTH_USER_ACTIVATED, payload=payload,
+        actor=actor, tenant_id=tenant_id, source_service="auth",
+    )
 
 
 def record_user_deactivated(
@@ -407,6 +535,7 @@ def record_user_deactivated(
     username: str,
     deactivated_by: str,
     tenant_id: Optional[str] = None,
+    actor: Optional[Any] = None,
 ) -> None:
     """Record an AUTH_USER_DEACTIVATED audit event."""
     payload = {
@@ -415,7 +544,10 @@ def record_user_deactivated(
     }
     if tenant_id:
         payload["tenant_id"] = tenant_id
-    append_event(db, EventType.AUTH_USER_DEACTIVATED, payload=payload)
+    append_event(
+        db, EventType.AUTH_USER_DEACTIVATED, payload=payload,
+        actor=actor, tenant_id=tenant_id, source_service="auth",
+    )
 
 
 def run_trust_loop() -> None:

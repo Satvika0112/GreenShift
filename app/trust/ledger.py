@@ -21,17 +21,33 @@ import logging
 import random
 import time
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from sqlalchemy.exc import IntegrityError, OperationalError, DatabaseError
 from sqlalchemy.orm import Session
 
-from app.shared.models import AuditEventORM, AuditEvent, AuditVerifyResponse, EventType
+from app.shared.models import ActorType, AuditEventORM, AuditEvent, AuditVerifyResponse, EventType
 from app.shared.utils import generate_event_id, utcnow
 
 logger = logging.getLogger(__name__)
 
 GENESIS_HASH = "0" * 64  # SHA-256 zero hash for the first record
+
+# Identity/context fields are namespaced under this single payload key
+# (never as flat top-level keys) specifically to avoid colliding with
+# pre-existing, unrelated business-data payload fields that already used
+# names like "team_id" for a different purpose long before this feature
+# existed (e.g. the historical record_job_submitted() payload {"team_id":
+# ..., "region": ...} — a caller-supplied informational team_id, not an
+# audit-scoping one). A flat top-level "team_id" cross-check against such a
+# legacy row would false-positive as tampering. Nesting under one
+# exclusively-owned key removes any possibility of that collision, for both
+# pre-existing rows and any future caller's payload shape.
+_AUDIT_CONTEXT_KEY = "_audit_ctx"
+_CONTEXT_CROSSCHECK_FIELDS = (
+    "tenant_id", "team_id", "actor_user_id", "actor_username",
+    "actor_role", "actor_type", "request_id", "source_service",
+)
 
 
 def _sha256(data: str) -> str:
@@ -70,12 +86,60 @@ def _get_next_sequence(db: Session) -> int:
     return (last.sequence + 1) if last else 1
 
 
+def _resolve_actor_context(
+    actor: Optional[Any],
+    tenant_id: Optional[str],
+    team_id: Optional[str],
+) -> dict:
+    """
+    Derive actor_user_id/actor_username/actor_role/actor_type from a real,
+    server-resolved UserORM (or AuthenticatedIdentity) — NEVER from
+    client-supplied fields. `actor=None` means a genuine SYSTEM/background
+    action with no human actor (scheduler loop, dispatcher poll, trust
+    verification loop) — actor_type is set to SYSTEM, all actor_* fields
+    stay NULL rather than being fabricated.
+
+    tenant_id/team_id passed explicitly (e.g. the job's own tenant/team)
+    take priority over the actor's own tenant/team, since the relevant
+    scope for an event is often the resource being acted on (a Platform
+    Admin approving another tenant's job should record THAT tenant, not
+    the admin's own). Falls back to the actor's tenant/team only when the
+    caller didn't supply one.
+    """
+    if actor is None:
+        return {
+            "tenant_id": tenant_id,
+            "team_id": team_id,
+            "actor_user_id": None,
+            "actor_username": None,
+            "actor_role": None,
+            "actor_type": ActorType.SYSTEM.value,
+        }
+    actor_role = getattr(actor, "role", None)
+    role_val = actor_role.value if hasattr(actor_role, "value") else (str(actor_role) if actor_role else None)
+    actor_id = getattr(actor, "id", None) or getattr(actor, "user_id", None)
+    return {
+        "tenant_id": tenant_id if tenant_id is not None else getattr(actor, "tenant_id", None),
+        "team_id": team_id if team_id is not None else getattr(actor, "team_id", None),
+        "actor_user_id": str(actor_id) if actor_id is not None else None,
+        "actor_username": getattr(actor, "username", None),
+        "actor_role": role_val,
+        "actor_type": ActorType.USER.value,
+    }
+
+
 def append_event(
     db: Session,
     event_type: EventType,
     job_id: Optional[str] = None,
     payload: Optional[dict] = None,
     max_retries: int = 15,
+    *,
+    actor: Optional[Any] = None,
+    tenant_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    source_service: Optional[str] = None,
 ) -> AuditEventORM:
     """
     Append a new event to the tamper-evident audit ledger with concurrency retry.
@@ -87,11 +151,20 @@ def append_event(
     hashes and sequence, and retries.
 
     Args:
-        db:          SQLAlchemy session
-        event_type:  Type of event (EventType enum)
-        job_id:      Associated job ID (optional)
-        payload:     Event data to hash (optional — auto-populated if not provided)
-        max_retries: Maximum collision retry attempts
+        db:             SQLAlchemy session
+        event_type:     Type of event (EventType enum)
+        job_id:         Associated job ID (optional)
+        payload:        Event data to hash (optional — auto-populated if not provided)
+        max_retries:    Maximum collision retry attempts
+        actor:          The real, server-resolved UserORM/AuthenticatedIdentity that
+                         performed this action, or None for a genuine SYSTEM/background
+                         event. Never derive this from client-supplied identity fields.
+        tenant_id:      Explicit tenant scope for this event (e.g. the affected job's
+                         tenant) — falls back to actor.tenant_id when omitted.
+        team_id:        Explicit team scope — falls back to actor.team_id when omitted.
+        request_id:     The inbound request's correlation ID (request.state.request_id),
+                         when this event originates from an HTTP request.
+        source_service: Short label for the originating module (e.g. "brsr", "dispatch").
 
     Returns:
         The newly created AuditEventORM record.
@@ -99,13 +172,24 @@ def append_event(
     now = utcnow()
 
     payload_dict = dict(payload) if payload is not None else {}
+    context = _resolve_actor_context(actor, tenant_id, team_id)
 
-    # Always include standard fields in payload
+    # event_type/job_id/timestamp have always been top-level (pre-dating
+    # this feature) and never collide with caller payload data, since a
+    # caller never had reason to set a *different* value under those exact
+    # keys. The new identity/context fields go under the dedicated
+    # _audit_ctx namespace instead of flat top-level keys — seeing
+    # verify_chain()'s docstring / _AUDIT_CONTEXT_KEY comment for why.
     payload_dict.update({
         "event_type": event_type.value,
         "job_id": job_id,
         "timestamp": now.isoformat(),
     })
+    payload_dict[_AUDIT_CONTEXT_KEY] = {
+        "request_id": request_id,
+        "source_service": source_service,
+        **context,
+    }
 
     payload_hash = _compute_payload_hash(payload_dict)
     payload_json = json.dumps(payload_dict, sort_keys=True, default=str)
@@ -133,6 +217,14 @@ def append_event(
                 current_hash=current_hash,
                 payload_json=payload_json,
                 sequence=sequence,
+                tenant_id=context["tenant_id"],
+                team_id=context["team_id"],
+                actor_user_id=context["actor_user_id"],
+                actor_username=context["actor_username"],
+                actor_role=context["actor_role"],
+                actor_type=context["actor_type"],
+                request_id=request_id,
+                source_service=source_service,
             )
             db.add(record)
             db.commit()
@@ -167,6 +259,26 @@ def append_event(
     raise RuntimeError(f"Failed to append audit event after {max_retries} attempts")
 
 
+# Denormalized columns cross-checked against their hashed payload
+# counterpart on every verify pass (see AuditEventORM docstring).
+# `job_id` is checked against the pre-existing top-level payload key (always
+# present, never collides). The identity/context fields are checked against
+# the namespaced _audit_ctx sub-object instead of a flat key — see
+# _AUDIT_CONTEXT_KEY's comment for why a flat key would false-positive
+# against legacy, unrelated business-data payloads. Only checked when the
+# payload actually declares the key/sub-object — legacy rows predating this
+# feature (no _audit_ctx at all) are never flagged.
+_TOP_LEVEL_CROSSCHECK_FIELDS = ("job_id",)
+
+
+def _fail(count: int, failed_check: str, message: str, **extra) -> AuditVerifyResponse:
+    logger.warning("Audit chain BROKEN: %s", message)
+    return AuditVerifyResponse(
+        valid=False, event_count=count, message=message,
+        failed_check=failed_check, reason=message, **extra,
+    )
+
+
 def verify_chain(db: Session) -> AuditVerifyResponse:
     """
     Verify the integrity of the entire audit chain.
@@ -176,9 +288,15 @@ def verify_chain(db: Session) -> AuditVerifyResponse:
       2. Each record's payload_hash matches re-computed hash of its payload_json.
       3. Each record's previous_hash matches the prior record's current_hash.
       4. Each record's current_hash matches SHA-256(payload_hash + previous_hash).
+      5. Denormalized identity/context columns (job_id, tenant_id, team_id,
+         actor_*, request_id, source_service) match their hash-protected
+         counterpart embedded in payload_json — catches a direct DB edit of
+         one of these columns that leaves payload_json itself untouched.
 
     Returns:
-        AuditVerifyResponse with valid=True if chain is intact.
+        AuditVerifyResponse with valid=True if chain is intact, plus
+        structured failure diagnostics (failed_check/failed_sequence/
+        expected_sequence/actual_sequence/reason) when it is not.
     """
     events = (
         db.query(AuditEventORM)
@@ -201,44 +319,87 @@ def verify_chain(db: Session) -> AuditVerifyResponse:
     for i, event in enumerate(events):
         # 1. Duplicate sequence check
         if event.sequence in seen_sequences:
-            msg = f"Duplicate sequence detected at index {i}: sequence {event.sequence} appears more than once"
-            logger.warning("Audit chain BROKEN: %s", msg)
-            return AuditVerifyResponse(valid=False, event_count=count, message=msg)
+            return _fail(
+                count, "DUPLICATE_SEQUENCE",
+                f"Duplicate sequence detected at index {i}: sequence {event.sequence} appears more than once",
+                failed_sequence=event.sequence,
+            )
         seen_sequences.add(event.sequence)
 
         # 2. Sequence gap / monotonic check
         if event.sequence != expected_sequence:
-            msg = f"Sequence gap at record {i}: expected {expected_sequence}, got {event.sequence}"
-            logger.warning("Audit chain BROKEN: %s", msg)
-            return AuditVerifyResponse(valid=False, event_count=count, message=msg)
+            return _fail(
+                count, "SEQUENCE_GAP",
+                f"Sequence gap at record {i}: expected {expected_sequence}, got {event.sequence}",
+                failed_sequence=expected_sequence,
+                expected_sequence=expected_sequence,
+                actual_sequence=event.sequence,
+            )
 
         # 3. Payload JSON valid check
         try:
             payload = json.loads(event.payload_json)
         except (json.JSONDecodeError, TypeError):
-            msg = f"Sequence {event.sequence}: payload_json is not valid JSON"
-            logger.warning("Audit chain BROKEN: %s", msg)
-            return AuditVerifyResponse(valid=False, event_count=count, message=msg)
+            return _fail(
+                count, "INVALID_PAYLOAD_JSON",
+                f"Sequence {event.sequence}: payload_json is not valid JSON",
+                failed_sequence=event.sequence,
+            )
 
         # 4. Payload hash check
         expected_payload_hash = _compute_payload_hash(payload)
         if event.payload_hash != expected_payload_hash:
-            msg = f"Sequence {event.sequence}: payload_hash mismatch (data tampered)"
-            logger.warning("Audit chain BROKEN: %s", msg)
-            return AuditVerifyResponse(valid=False, event_count=count, message=msg)
+            return _fail(
+                count, "PAYLOAD_HASH_MISMATCH",
+                f"Sequence {event.sequence}: payload_hash mismatch (data tampered)",
+                failed_sequence=event.sequence,
+            )
 
         # 5. Previous hash check
         if event.previous_hash != previous_hash:
-            msg = f"Sequence {event.sequence}: previous_hash mismatch (chain broken: expected {previous_hash}, got {event.previous_hash})"
-            logger.warning("Audit chain BROKEN: %s", msg)
-            return AuditVerifyResponse(valid=False, event_count=count, message=msg)
+            return _fail(
+                count, "PREVIOUS_HASH_MISMATCH",
+                f"Sequence {event.sequence}: previous_hash mismatch (chain broken: expected {previous_hash}, got {event.previous_hash})",
+                failed_sequence=event.sequence,
+            )
 
         # 6. Current hash check
         expected_current_hash = _compute_current_hash(event.payload_hash, event.previous_hash)
         if event.current_hash != expected_current_hash:
-            msg = f"Sequence {event.sequence}: current_hash mismatch (record tampered: expected {expected_current_hash}, got {event.current_hash})"
-            logger.warning("Audit chain BROKEN: %s", msg)
-            return AuditVerifyResponse(valid=False, event_count=count, message=msg)
+            return _fail(
+                count, "CURRENT_HASH_MISMATCH",
+                f"Sequence {event.sequence}: current_hash mismatch (record tampered: expected {expected_current_hash}, got {event.current_hash})",
+                failed_sequence=event.sequence,
+            )
+
+        # 7. Denormalized column vs hashed-payload cross-check
+        for field in _TOP_LEVEL_CROSSCHECK_FIELDS:
+            if field not in payload:
+                continue  # legacy row or genuinely not part of this event's hashed context
+            column_value = getattr(event, field, None)
+            payload_value = payload.get(field)
+            if column_value != payload_value:
+                return _fail(
+                    count, "COLUMN_TAMPERED",
+                    f"Sequence {event.sequence}: column '{field}' ({column_value!r}) does not match "
+                    f"its hash-protected payload value ({payload_value!r}) — record tampered",
+                    failed_sequence=event.sequence,
+                )
+
+        audit_ctx = payload.get(_AUDIT_CONTEXT_KEY)
+        if isinstance(audit_ctx, dict):
+            for field in _CONTEXT_CROSSCHECK_FIELDS:
+                if field not in audit_ctx:
+                    continue
+                column_value = getattr(event, field, None)
+                payload_value = audit_ctx.get(field)
+                if column_value != payload_value:
+                    return _fail(
+                        count, "COLUMN_TAMPERED",
+                        f"Sequence {event.sequence}: column '{field}' ({column_value!r}) does not match "
+                        f"its hash-protected payload value ({payload_value!r}) — record tampered",
+                        failed_sequence=event.sequence,
+                    )
 
         previous_hash = event.current_hash
         expected_sequence += 1

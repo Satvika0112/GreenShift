@@ -126,6 +126,7 @@ def approve_schedule(
     reason: Optional[str] = None,
     approved_by: Optional[str] = "admin",
     user: Optional[UserORM] = None,
+    request_id: Optional[str] = None,
 ) -> ApprovalResponse:
     """
     Approve a proposed schedule for a job.
@@ -213,6 +214,7 @@ def approve_schedule(
             approved_by=approved_by or "admin",
             reason=approval.reason,
             timestamp=now.isoformat(),
+            tenant_id=job.tenant_id, team_id=job.team_id, actor=user, request_id=request_id,
         )
     except Exception as exc:
         logger.warning("Audit record failed for job %s approval: %s", job.job_id, exc)
@@ -264,6 +266,7 @@ def decline_schedule(
     reason: Optional[str] = None,
     approved_by: Optional[str] = "admin",
     user: Optional[UserORM] = None,
+    request_id: Optional[str] = None,
 ) -> ApprovalResponse:
     """
     Decline a proposed schedule for a job.
@@ -354,6 +357,7 @@ def decline_schedule(
             approved_by=approved_by or "admin",
             reason=approval.reason,
             timestamp=now.isoformat(),
+            tenant_id=job.tenant_id, team_id=job.team_id, actor=user, request_id=request_id,
         )
     except Exception as exc:
         logger.warning("Audit record failed for job %s decline: %s", job.job_id, exc)
@@ -396,6 +400,7 @@ def resubmit_workload(
     db: Session,
     job_id: str,
     user: Optional[UserORM] = None,
+    request_id: Optional[str] = None,
 ) -> JobORM:
     """
     Resubmit a workload that was previously DECLINED, CANCELLED, or FAILED.
@@ -436,6 +441,8 @@ def resubmit_workload(
                 "company_name": job.company_name,
                 "team_id": job.team_id,
             },
+            actor=user, tenant_id=job.tenant_id, team_id=job.team_id,
+            request_id=request_id, source_service="approval",
         )
     except Exception as exc:
         logger.warning("Audit record failed for job %s resubmission: %s", job.job_id, exc)

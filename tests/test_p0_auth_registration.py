@@ -28,7 +28,10 @@ def clean_db(monkeypatch):
     monkeypatch.setattr(settings, "auth_enabled", True)
     app.dependency_overrides.clear()
     with SessionLocal() as db:
-        db.query(AuditEventORM).delete()
+        # audit_events is append-only at the DB level (Trust/Audit P0) — never
+        # deleted, including in test cleanup. Tests below filter by unique
+        # job_id/username/event_type, so accumulated rows across the shared
+        # file-backed test DB do not affect their assertions.
         db.query(UserORM).delete()
         db.query(TenantORM).delete()
         # Seed test tenants
@@ -38,7 +41,10 @@ def clean_db(monkeypatch):
     yield
     app.dependency_overrides.clear()
     with SessionLocal() as db:
-        db.query(AuditEventORM).delete()
+        # audit_events is append-only at the DB level (Trust/Audit P0) — never
+        # deleted, including in test cleanup. Tests below filter by unique
+        # job_id/username/event_type, so accumulated rows across the shared
+        # file-backed test DB do not affect their assertions.
         db.query(UserORM).delete()
         db.query(TenantORM).delete()
         db.commit()

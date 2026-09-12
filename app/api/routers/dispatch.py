@@ -3,7 +3,7 @@ Agent 3 — DISPATCH
 FastAPI router for dispatch endpoints.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.dispatch.dispatcher import (
@@ -29,6 +29,7 @@ router = APIRouter()
 @router.post("/dispatch/{job_id}")
 def trigger_dispatch(
     job_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
@@ -37,6 +38,7 @@ def trigger_dispatch(
     Strictly validates tenant isolation, user authorization, job approval status, and schedule ownership.
     """
     from app.api.tenant_scope import get_tenant_jobs
+    request_id = getattr(request.state, "request_id", None)
     try:
         job = get_tenant_jobs(db, identity=current_user, job_id=job_id)
     except HTTPException as exc:
@@ -46,13 +48,14 @@ def trigger_dispatch(
                 record_dispatch_blocked(
                     db, job_id, reason=exc.detail,
                     current_status=None, requested_by=current_user.username,
+                    tenant_id=current_user.tenant_id, actor=current_user, request_id=request_id,
                 )
             except Exception as audit_exc:
                 logger.warning(f"Audit record failed for dispatch blocked on {job_id}: {audit_exc}")
         raise
 
     try:
-        execution = dispatch_job(db, job, user=current_user)
+        execution = dispatch_job(db, job, user=current_user, request_id=request_id)
     except (DispatchPermissionError, DispatchBlockedError, DispatchError) as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
     except HTTPException:

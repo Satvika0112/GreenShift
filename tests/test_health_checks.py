@@ -269,3 +269,56 @@ def test_metrics_endpoint_exports_health_metrics():
     assert response.status_code == 200
     assert "greenshift_health_checks_total" in response.text
     assert "greenshift_dependency_health_status" in response.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. Email Delivery Configuration Status (never exposes SMTP credentials)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_email_health_disabled_when_smtp_disabled():
+    from app.shared.config import settings
+    from app.shared.health import check_email_health
+    original = settings.smtp_enabled
+    settings.smtp_enabled = False
+    try:
+        result = check_email_health()
+    finally:
+        settings.smtp_enabled = original
+    assert result["status"] == "disabled"
+
+
+def test_email_health_unconfigured_when_enabled_but_no_host():
+    from app.shared.config import settings
+    from app.shared.health import check_email_health
+    original_enabled, original_host = settings.smtp_enabled, settings.smtp_host
+    settings.smtp_enabled = True
+    settings.smtp_host = ""
+    try:
+        result = check_email_health()
+    finally:
+        settings.smtp_enabled, settings.smtp_host = original_enabled, original_host
+    assert result["status"] == "unconfigured"
+
+
+def test_email_health_configured_when_enabled_with_host():
+    from app.shared.config import settings
+    from app.shared.health import check_email_health
+    original_enabled, original_host = settings.smtp_enabled, settings.smtp_host
+    settings.smtp_enabled = True
+    settings.smtp_host = "smtp.example.com"
+    try:
+        result = check_email_health()
+    finally:
+        settings.smtp_enabled, settings.smtp_host = original_enabled, original_host
+    assert result == {"status": "configured"}
+
+
+def test_health_endpoint_includes_email_delivery_component_without_credentials():
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert "email_delivery" in data["components"]
+    assert data["components"]["email_delivery"]["status"] in ("disabled", "unconfigured", "configured")
+    text = response.text.lower()
+    assert "smtp_password" not in text
+    assert "smtp_username" not in text

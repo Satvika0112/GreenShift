@@ -63,25 +63,32 @@ def submit_new_job(
         if normalized_deadline <= utcnow():
             raise HTTPException(status_code=400, detail="Deadline must be in the future")
         body.deadline = normalized_deadline
+        request_id = getattr(request.state, "request_id", None)
         job = ingest_job(
             db,
             body,
             tenant_id=current_user.tenant_id,
             company_name=current_user.company_name,
             submitted_by_user_id=current_user.id,
+            actor=current_user,
+            request_id=request_id,
         )
 
         # Record validation audit event
         try:
             from app.trust.ledger import append_event
-            append_event(db, EventType.JOB_VALIDATED, job_id=job.job_id, payload={
-                "team_id": job.team_id,
-                "tenant_id": job.tenant_id,
-                "company_name": job.company_name,
-                "region": job.region,
-                "deadline": job.deadline.isoformat(),
-                "runtime_minutes": job.runtime_minutes,
-            })
+            append_event(
+                db, EventType.JOB_VALIDATED, job_id=job.job_id, payload={
+                    "team_id": job.team_id,
+                    "tenant_id": job.tenant_id,
+                    "company_name": job.company_name,
+                    "region": job.region,
+                    "deadline": job.deadline.isoformat(),
+                    "runtime_minutes": job.runtime_minutes,
+                },
+                actor=current_user, tenant_id=job.tenant_id, team_id=job.team_id,
+                request_id=request_id, source_service="ingest",
+            )
         except Exception:
             pass
 
@@ -370,6 +377,7 @@ def get_job_history(
 @router.post("/jobs/{job_id}/cancel", response_model=dict, summary="Cancel an active or pending workload")
 def cancel_workload(
     job_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(get_current_user),
 ):
@@ -417,6 +425,8 @@ def cancel_workload(
                 "company_name": job.company_name,
                 "reason": "Cancelled by authorized user",
             },
+            actor=current_user, tenant_id=job.tenant_id, team_id=job.team_id,
+            request_id=getattr(request.state, "request_id", None), source_service="ingest",
         )
     except Exception as exc:
         logger.warning(f"Failed to record audit event for job cancellation: {exc}")

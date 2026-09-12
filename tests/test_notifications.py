@@ -495,14 +495,43 @@ class TestEmailTemplates:
     def test_render_email_falls_back_to_title_message_for_unmapped_event(self, db, two_users):
         from app.notify.templates import render_email
         alice = two_users["alice"]
+        job = JobORM(
+            job_id="JOB-NO-TEMPLATE", team_id="team-x", tenant_id=alice.tenant_id,
+            submitted_by_user_id=alice.id, submitted_at=utcnow(), deadline=utcnow() + timedelta(hours=6),
+            runtime_minutes=30, power_kw=2.0, region="IN-TG",
+            container_image="greenshift/sample-workload:latest", status=JobStatus.SUBMITTED,
+        )
+        db.add(job)
+        db.commit()
         notif = create_notification(
-            db, recipient_user_id=alice.id, event_type=EventType.JOB_SUBMITTED,
+            db, recipient_user_id=alice.id, event_type=EventType.BUDGET_UPDATED,
             category="WORKLOAD", severity="INFO", title="Fallback Title", message="Fallback message body.",
             tenant_id=alice.tenant_id, job_id="JOB-NO-TEMPLATE",
         )
         subject, body = render_email(db, notif)
         assert subject == "Fallback Title"
         assert body == "Fallback message body."
+
+    def test_job_submitted_template_includes_real_job_content(self, db, two_users):
+        from app.notify.templates import render_email
+        alice = two_users["alice"]
+        job = JobORM(
+            job_id="JOB-SUBMIT-TEMPLATE-1", team_id="team-x", tenant_id=alice.tenant_id,
+            submitted_by_user_id=alice.id, submitted_at=utcnow(), deadline=utcnow() + timedelta(hours=6),
+            runtime_minutes=30, power_kw=2.0, region="IN-TG", job_type="DATA_PROCESSING",
+            container_image="greenshift/sample-workload:latest", status=JobStatus.SUBMITTED,
+        )
+        db.add(job)
+        db.commit()
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.JOB_SUBMITTED,
+            category="WORKLOAD", severity="INFO", title="fallback", message="fallback",
+            tenant_id=alice.tenant_id, job_id="JOB-SUBMIT-TEMPLATE-1",
+        )
+        subject, body = render_email(db, notif)
+        assert subject == "GreenShift: Workload Submitted — JOB-SUBMIT-TEMPLATE-1"
+        assert "DATA_PROCESSING" in body
+        assert "IN-TG" in body
 
     def test_render_email_falls_back_when_job_no_longer_exists(self, db, two_users):
         from app.notify.templates import render_email
@@ -917,9 +946,121 @@ class TestAdminFanoutOnFailureAndCancellation:
         assert admin_notifs2[0].dedup_key.endswith(":admin")
 
 
+class TestPlatformAdminCriticalEscalation:
+    """Platform Admin is the platform's universal escalation authority for
+    CRITICAL events (SCHEDULING_FAILED, K8S_JOB_FAILED — both unconditionally
+    CRITICAL by construction, matching Platform Admin's documented scope of
+    'critical execution/system failures'). It must NOT be cc'd on ordinary,
+    non-critical events — that would be 'emailing every role for every
+    event', which the spec explicitly forbids."""
+
+    @pytest.fixture
+    def platform_and_tenant(self, db):
+        platform_admin = UserORM(
+            username="notif_pa_escalation", email="pa_escalation@greenshift.io",
+            hashed_password=hash_password("pass12345"), role=UserRole.PLATFORM_ADMIN,
+            tenant_id=None, is_active=True,
+        )
+        tenant_admin = UserORM(
+            username="notif_ta_escalation", email="ta_escalation@greenshift.io",
+            hashed_password=hash_password("pass12345"), role=UserRole.COMPANY_ADMIN,
+            tenant_id="tenant-escalation", is_active=True,
+        )
+        submitter = UserORM(
+            username="notif_sub_escalation", email="sub_escalation@greenshift.io",
+            hashed_password=hash_password("pass12345"), role=UserRole.COMPANY_USER,
+            tenant_id="tenant-escalation", is_active=True,
+        )
+        db.add_all([platform_admin, tenant_admin, submitter])
+        db.commit()
+        for u in (platform_admin, tenant_admin, submitter):
+            db.refresh(u)
+        return {"platform_admin": platform_admin, "tenant_admin": tenant_admin, "submitter": submitter}
+
+    def test_scheduling_failed_reaches_platform_admin(self, db, platform_and_tenant):
+        from app.decide.service import process_pending_jobs
+        from app.shared.models import JobSubmitRequest
+        from app.ingest.jobs import submit_job
+
+        submitter = platform_and_tenant["submitter"]
+        req = JobSubmitRequest(
+            job_id="JOB-PA-ESCALATION-1", team_id="team-escalation",
+            deadline=utcnow() + timedelta(hours=12), runtime_minutes=60, power_kw=0.5,
+            region="IN-WE", container_image="greenshift/sample-workload:latest",
+            carbon_budget_kg=0.000001,
+        )
+        submit_job(db, req, tenant_id="tenant-escalation", submitted_by_user_id=submitter.id)
+        process_pending_jobs(db)
+
+        notifs = (
+            db.query(NotificationORM)
+            .filter(NotificationORM.job_id == "JOB-PA-ESCALATION-1", NotificationORM.event_type == EventType.SCHEDULING_FAILED)
+            .all()
+        )
+        recipient_ids = {n.recipient_user_id for n in notifs}
+        assert platform_and_tenant["platform_admin"].id in recipient_ids
+        assert platform_and_tenant["tenant_admin"].id in recipient_ids
+
+    def test_execution_failed_reaches_platform_admin(self, db, platform_and_tenant):
+        from unittest.mock import MagicMock
+        from app.dispatch.dispatcher import refresh_job_status
+        from app.shared.models import KubernetesExecutionORM
+
+        submitter = platform_and_tenant["submitter"]
+        now = utcnow()
+        job = JobORM(
+            job_id="JOB-PA-ESCALATION-2", team_id="team-escalation", tenant_id="tenant-escalation",
+            submitted_by_user_id=submitter.id, submitted_at=now, deadline=now + timedelta(hours=12),
+            runtime_minutes=30, power_kw=1.0, region="IN-TG",
+            container_image="greenshift/sample-workload:latest", status=JobStatus.RUNNING,
+        )
+        execution = KubernetesExecutionORM(
+            job_id="JOB-PA-ESCALATION-2", kubernetes_job_name="gs-job-pa-escalation-2",
+            kubernetes_namespace="greenshift", planned_start=now, planned_end=now + timedelta(minutes=30),
+            gs_status=JobStatus.RUNNING, pod_name="gs-job-pa-escalation-2-pod", created_at=now,
+        )
+        job.kubernetes_execution = execution
+        db.add(job)
+        db.commit()
+
+        mock_batch, mock_core = MagicMock(), MagicMock()
+        with patch("app.dispatch.dispatcher.get_batch_v1", return_value=mock_batch), \
+             patch("app.dispatch.dispatcher.get_core_v1", return_value=mock_core), \
+             patch("app.dispatch.dispatcher.get_job_status", return_value=("Failed", JobStatus.FAILED)), \
+             patch("app.dispatch.dispatcher.get_pod_start_time", return_value=now), \
+             patch("app.dispatch.dispatcher.get_job_completion_time", return_value=now + timedelta(minutes=5)):
+            refresh_job_status(db, execution)
+
+        notifs = (
+            db.query(NotificationORM)
+            .filter(NotificationORM.job_id == "JOB-PA-ESCALATION-2", NotificationORM.event_type == EventType.K8S_JOB_FAILED)
+            .all()
+        )
+        recipient_ids = {n.recipient_user_id for n in notifs}
+        assert platform_and_tenant["platform_admin"].id in recipient_ids
+
+    def test_platform_admin_not_notified_for_non_critical_approval_granted(self, db, platform_and_tenant):
+        """Confirms escalation is scoped to CRITICAL events only — Platform
+        Admin is not cc'd on routine approval-granted notifications."""
+        submitter = platform_and_tenant["submitter"]
+        create_notification(
+            db, recipient_user_id=submitter.id, event_type=EventType.APPROVAL_GRANTED,
+            category="APPROVAL", severity="INFO", title="Approved", message="m",
+            tenant_id="tenant-escalation", job_id="JOB-PA-ESCALATION-3",
+        )
+        notifs = (
+            db.query(NotificationORM)
+            .filter(NotificationORM.job_id == "JOB-PA-ESCALATION-3")
+            .all()
+        )
+        recipient_ids = {n.recipient_user_id for n in notifs}
+        assert platform_and_tenant["platform_admin"].id not in recipient_ids
+
+
 class TestEmailUrgencySubjects:
-    """Subject lines communicate urgency per spec: CRITICAL/HIGH failure
-    outcomes are bracketed, informational/call-to-action ones are not."""
+    """Subject lines use the LOW/MEDIUM/HIGH/CRITICAL severity scheme —
+    only HIGH/CRITICAL are bracketed, matching the exact format:
+    "[SEVERITY] GreenShift: Title — Workload"."""
 
     def _job(self, db, tenant_id, job_id, status=JobStatus.FAILED):
         job = JobORM(
@@ -933,7 +1074,22 @@ class TestEmailUrgencySubjects:
         db.commit()
         return job
 
-    def test_scheduling_failed_subject_is_bracketed_high(self, db, two_users):
+    def test_job_submitted_subject_is_low_no_bracket(self, db, two_users):
+        from app.notify.templates import render_email
+        alice = two_users["alice"]
+        self._job(db, alice.tenant_id, "JOB-URGENCY-0", status=JobStatus.SUBMITTED)
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.JOB_SUBMITTED,
+            category="WORKLOAD", severity="INFO", title="fallback", message="fallback",
+            tenant_id=alice.tenant_id, job_id="JOB-URGENCY-0",
+        )
+        subject, _ = render_email(db, notif)
+        assert subject.startswith("GreenShift: Workload Submitted")
+        assert "[" not in subject
+
+    def test_scheduling_failed_subject_is_bracketed_critical(self, db, two_users):
+        """Per spec section 5, Scheduling Failed is CRITICAL (not HIGH) —
+        it is unconditionally CRITICAL in this system by construction."""
         from app.notify.templates import render_email
         alice = two_users["alice"]
         self._job(db, alice.tenant_id, "JOB-URGENCY-1")
@@ -943,8 +1099,7 @@ class TestEmailUrgencySubjects:
             tenant_id=alice.tenant_id, job_id="JOB-URGENCY-1",
         )
         subject, _ = render_email(db, notif)
-        assert "[HIGH]" in subject
-        assert "Scheduling failed" in subject
+        assert subject == "[CRITICAL] GreenShift: Scheduling Failed — urgency-test-workload"
 
     def test_execution_failed_subject_is_bracketed_critical(self, db, two_users):
         from app.notify.templates import render_email
@@ -956,9 +1111,12 @@ class TestEmailUrgencySubjects:
             tenant_id=alice.tenant_id, job_id="JOB-URGENCY-2",
         )
         subject, _ = render_email(db, notif)
-        assert "[CRITICAL]" in subject
+        assert subject == "[CRITICAL] GreenShift: Workload Execution Failed — urgency-test-workload"
 
-    def test_approval_required_subject_is_not_bracketed(self, db, two_users):
+    def test_approval_required_subject_is_bracketed_high(self, db, two_users):
+        """Per spec section 5's literal example: "[HIGH] GreenShift: Approval
+        Required — JOB-123" — Approval Required IS bracketed (a change from
+        treating it as an unbracketed call-to-action)."""
         from app.notify.templates import render_email
         alice = two_users["alice"]
         self._job(db, alice.tenant_id, "JOB-URGENCY-3", status=JobStatus.PENDING_APPROVAL)
@@ -968,11 +1126,22 @@ class TestEmailUrgencySubjects:
             tenant_id=alice.tenant_id, job_id="JOB-URGENCY-3",
         )
         subject, _ = render_email(db, notif)
-        assert "[HIGH]" not in subject
-        assert "[CRITICAL]" not in subject
-        assert "Approval required" in subject
+        assert subject == "[HIGH] GreenShift: Approval Required — urgency-test-workload"
 
-    def test_workload_scheduled_subject_is_not_bracketed(self, db, two_users):
+    def test_schedule_proposed_submitter_subject_is_medium_no_bracket(self, db, two_users):
+        from app.notify.templates import render_email
+        alice = two_users["alice"]
+        self._job(db, alice.tenant_id, "JOB-URGENCY-3b", status=JobStatus.PENDING_APPROVAL)
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.SCHEDULE_PROPOSED,
+            category="SCHEDULING", severity="INFO", title="fallback", message="fallback",
+            tenant_id=alice.tenant_id, job_id="JOB-URGENCY-3b",
+        )
+        subject, _ = render_email(db, notif)
+        assert subject == "GreenShift: Schedule Proposed — urgency-test-workload"
+        assert "[" not in subject
+
+    def test_workload_scheduled_subject_is_low_no_bracket(self, db, two_users):
         from app.notify.templates import render_email
         alice = two_users["alice"]
         self._job(db, alice.tenant_id, "JOB-URGENCY-4", status=JobStatus.APPROVED)
@@ -982,9 +1151,7 @@ class TestEmailUrgencySubjects:
             tenant_id=alice.tenant_id, job_id="JOB-URGENCY-4",
         )
         subject, _ = render_email(db, notif)
-        assert "[HIGH]" not in subject
-        assert "[CRITICAL]" not in subject
-        assert "Workload scheduled" in subject
+        assert subject == "GreenShift: Workload Scheduled — urgency-test-workload"
 
     def test_schedule_declined_includes_real_reason_and_approver(self, db, two_users):
         from app.notify.templates import render_email
@@ -1011,9 +1178,34 @@ class TestEmailUrgencySubjects:
             tenant_id=alice.tenant_id, job_id=job.job_id,
         )
         subject, body = render_email(db, notif)
-        assert "[HIGH]" in subject
+        assert subject == "[HIGH] GreenShift: Schedule Declined — urgency-test-workload"
         assert "Carbon budget exceeded for this window" in body
         assert "company_admin_x" in body
+
+    def test_no_value_is_ever_fabricated_missing_fields_say_not_available(self, db, two_users):
+        """Spec section 6: unavailable values must read 'Not available',
+        never a fabricated number/date/currency. carbon_budget_kg is
+        genuinely optional (nullable) on JobORM — deadline is NOT NULL at
+        the schema level, so a job can never actually exist without one;
+        this exercises the one field that legitimately can be missing."""
+        from app.notify.templates import render_email
+        alice = two_users["alice"]
+        job = JobORM(
+            job_id="JOB-URGENCY-6", team_id="team-x", tenant_id=alice.tenant_id,
+            submitted_by_user_id=None, submitted_at=utcnow(), deadline=utcnow() + timedelta(hours=6),
+            runtime_minutes=30, power_kw=2.0, region="IN-TG",
+            container_image="greenshift/sample-workload:latest", status=JobStatus.FAILED,
+            carbon_budget_kg=None,
+        )
+        db.add(job)
+        db.commit()
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.SCHEDULING_FAILED,
+            category="SCHEDULING", severity="CRITICAL", title="fallback", message="fallback",
+            tenant_id=alice.tenant_id, job_id="JOB-URGENCY-6",
+        )
+        _, body = render_email(db, notif)
+        assert "Carbon budget: Not available" in body
 
 
 class TestNotificationStreamEndpoint:

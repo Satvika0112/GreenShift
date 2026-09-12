@@ -78,6 +78,7 @@ def api_approve_schedule(
             reason=body.reason,
             approved_by=current_user.username,
             user=current_user,
+            request_id=getattr(request.state, "request_id", None),
         )
     except ApprovalNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -129,6 +130,7 @@ def api_decline_schedule(
             reason=body.reason,
             approved_by=current_user.username,
             user=current_user,
+            request_id=getattr(request.state, "request_id", None),
         )
     except ApprovalNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -167,7 +169,10 @@ def api_resubmit_workload(
     Reset a DECLINED, CANCELLED, or FAILED workload back to SUBMITTED status so it can be re-scheduled.
     """
     try:
-        job = resubmit_workload(db=db, job_id=job_id, user=current_user)
+        job = resubmit_workload(
+            db=db, job_id=job_id, user=current_user,
+            request_id=getattr(request.state, "request_id", None),
+        )
         return {
             "job_id": job.job_id,
             "status": job.status.value,

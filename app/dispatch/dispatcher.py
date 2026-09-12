@@ -144,7 +144,9 @@ def validate_job_for_dispatch(job: JobORM, user: Optional[object] = None) -> Non
             )
 
 
-def dispatch_job(db: Session, job: JobORM, user: Optional[object] = None) -> KubernetesExecutionORM:
+def dispatch_job(
+    db: Session, job: JobORM, user: Optional[object] = None, request_id: Optional[str] = None,
+) -> KubernetesExecutionORM:
     """
     Create a Kubernetes Job for an approved GreenShift job.
 
@@ -154,9 +156,10 @@ def dispatch_job(db: Session, job: JobORM, user: Optional[object] = None) -> Kub
         - user (if supplied) has permission to dispatch (PLATFORM_ADMIN, or COMPANY_ADMIN/COMPANY_USER within their own company)
 
     Args:
-        db:   SQLAlchemy session
-        job:  JobORM with associated schedule_decision
-        user: Optional UserORM triggering the dispatch
+        db:         SQLAlchemy session
+        job:        JobORM with associated schedule_decision
+        user:       Optional UserORM triggering the dispatch (None for a background/system dispatch pass)
+        request_id: Correlation ID of the inbound HTTP request, if any
 
     Returns:
         KubernetesExecutionORM record
@@ -178,7 +181,10 @@ def dispatch_job(db: Session, job: JobORM, user: Optional[object] = None) -> Kub
             record_dispatch_authorized,
             record_k8s_job_created,
         )
-        record_dispatch_requested(db, job.job_id, requested_by=caller_name, team_id=job.team_id)
+        record_dispatch_requested(
+            db, job.job_id, requested_by=caller_name, team_id=job.team_id,
+            tenant_id=job.tenant_id, actor=user, request_id=request_id,
+        )
     except Exception as exc:
         logger.warning("Audit record failed for dispatch requested on %s: %s", job.job_id, exc)
 
@@ -195,6 +201,7 @@ def dispatch_job(db: Session, job: JobORM, user: Optional[object] = None) -> Kub
                 reason=str(exc),
                 current_status=job.status,
                 requested_by=caller_name,
+                tenant_id=job.tenant_id, team_id=job.team_id, actor=user, request_id=request_id,
             )
         except Exception as audit_exc:
             logger.warning("Audit record failed for dispatch blocked on %s: %s", job.job_id, audit_exc)
@@ -305,9 +312,18 @@ def dispatch_job(db: Session, job: JobORM, user: Optional[object] = None) -> Kub
             record_dispatch_authorized,
             record_k8s_job_created,
         )
-        record_dispatch_started(db, job.job_id, k8s_name, namespace, dispatched_by=caller_name)
-        record_dispatch_authorized(db, job.job_id, decision.id, now.isoformat())
-        record_k8s_job_created(db, job.job_id, k8s_name, namespace)
+        record_dispatch_started(
+            db, job.job_id, k8s_name, namespace, dispatched_by=caller_name,
+            tenant_id=job.tenant_id, team_id=job.team_id, actor=user, request_id=request_id,
+        )
+        record_dispatch_authorized(
+            db, job.job_id, decision.id, now.isoformat(),
+            tenant_id=job.tenant_id, team_id=job.team_id, actor=user, request_id=request_id,
+        )
+        record_k8s_job_created(
+            db, job.job_id, k8s_name, namespace,
+            tenant_id=job.tenant_id, team_id=job.team_id, actor=user, request_id=request_id,
+        )
     except Exception as exc:
         logger.warning("Audit record failed for job %s creation: %s", job.job_id, exc)
 
@@ -353,7 +369,7 @@ def _mark_job_failed(db: Session, job: JobORM, error_msg: str) -> None:
     try:
         from app.trust.service import record_k8s_job_failed
         k8s_name = job.kubernetes_execution.kubernetes_job_name if job.kubernetes_execution else f"gs-{k8s_safe_name(job.job_id)}"
-        record_k8s_job_failed(db, job.job_id, k8s_name, error_msg)
+        record_k8s_job_failed(db, job.job_id, k8s_name, error_msg, tenant_id=job.tenant_id, team_id=job.team_id)
     except Exception as exc:
         logger.warning("Audit record failed for job %s failure: %s", job.job_id, exc)
 
@@ -442,6 +458,7 @@ def refresh_job_status(db: Session, execution: KubernetesExecutionORM) -> Kubern
                         execution.kubernetes_job_name,
                         execution.pod_name,
                         (execution.actual_start or now).isoformat(),
+                        tenant_id=getattr(job, "tenant_id", None), team_id=getattr(job, "team_id", None),
                     )
                 elif gs_status == JobStatus.COMPLETED:
                     record_k8s_job_completed(
@@ -450,6 +467,7 @@ def refresh_job_status(db: Session, execution: KubernetesExecutionORM) -> Kubern
                         execution.kubernetes_job_name,
                         execution.pod_name,
                         (execution.actual_end or now).isoformat(),
+                        tenant_id=getattr(job, "tenant_id", None), team_id=getattr(job, "team_id", None),
                     )
                 elif gs_status == JobStatus.FAILED:
                     record_k8s_job_failed(
@@ -457,13 +475,19 @@ def refresh_job_status(db: Session, execution: KubernetesExecutionORM) -> Kubern
                         execution.job_id,
                         execution.kubernetes_job_name,
                         execution.error_message,
+                        tenant_id=getattr(job, "tenant_id", None), team_id=getattr(job, "team_id", None),
                     )
             except Exception as exc:
                 logger.warning("Audit record failed for job %s transition to %s: %s", execution.job_id, gs_status, exc)
 
             if job and gs_status in (JobStatus.COMPLETED, JobStatus.FAILED):
                 try:
-                    from app.notify.service import create_notification, notify_users, resolve_tenant_admin_user_ids
+                    from app.notify.service import (
+                        create_notification,
+                        notify_users,
+                        resolve_platform_admin_user_ids,
+                        resolve_tenant_admin_user_ids,
+                    )
                     from app.shared.models import EventType
                     if gs_status == JobStatus.COMPLETED:
                         if job.submitted_by_user_id:
@@ -495,8 +519,11 @@ def refresh_job_status(db: Session, execution: KubernetesExecutionORM) -> Kubern
                                 email_required=True,
                             )
                         # Execution failure is CRITICAL and may need operator
-                        # intervention — notify the responsible Company Admin(s) too.
-                        admin_ids = set(resolve_tenant_admin_user_ids(db, job.tenant_id))
+                        # intervention — notify the responsible Company Admin(s)
+                        # and Platform Admin (the platform's universal escalation
+                        # authority for CRITICAL events; K8S_JOB_FAILED has no
+                        # lower-severity variant in this system).
+                        admin_ids = set(resolve_tenant_admin_user_ids(db, job.tenant_id)) | set(resolve_platform_admin_user_ids(db))
                         admin_ids.discard(job.submitted_by_user_id)
                         if admin_ids:
                             notify_users(

@@ -115,6 +115,32 @@ describe('SettingsPage', () => {
     expect(screen.getByText('HEALTHY')).toBeInTheDocument();
   });
 
+  it('shows the real email delivery configuration status for a company admin', async () => {
+    mockIsCompanyAdmin = true;
+    (sustainabilityApi.getDataSourcesStatus as any).mockResolvedValue({});
+    (monitoringApi.getSystemHealth as any).mockResolvedValue({
+      service: 'greenshift-api',
+      status: 'healthy',
+      components: { email_delivery: { status: 'configured' } },
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText('CONFIGURED')).toBeInTheDocument());
+  });
+
+  it('shows a disabled email delivery status without exposing any SMTP credentials', async () => {
+    mockIsCompanyAdmin = true;
+    (sustainabilityApi.getDataSourcesStatus as any).mockResolvedValue({});
+    (monitoringApi.getSystemHealth as any).mockResolvedValue({
+      service: 'greenshift-api',
+      status: 'healthy',
+      components: { email_delivery: { status: 'disabled', reason: 'SMTP_ENABLED is false' } },
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/DISABLED/)).toBeInTheDocument());
+    expect(screen.getByText(/In-app notifications always work regardless/)).toBeInTheDocument();
+    expect(document.body.innerHTML.toLowerCase()).not.toContain('smtp_password');
+  });
+
   it('persists client preferences to local storage on save', async () => {
     const user = userEvent.setup();
     renderPage();

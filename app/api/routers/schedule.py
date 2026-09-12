@@ -3,7 +3,7 @@ Agent 2 — DECIDE
 FastAPI router for schedule endpoints.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.decide.service import schedule_and_store
@@ -21,6 +21,7 @@ router = APIRouter()
 @router.post("/schedule/{job_id}")
 def trigger_schedule(
     job_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserORM = Depends(
         require_roles(UserRole.PLATFORM_ADMIN, UserRole.COMPANY_ADMIN, UserRole.COMPANY_USER)
@@ -38,11 +39,17 @@ def trigger_schedule(
             status_code=400,
             detail=f"Job {job_id} is in status {job.status} — only SUBMITTED jobs can be scheduled",
         )
+    request_id = getattr(request.state, "request_id", None)
     try:
-        decision = schedule_and_store(db, job)
+        decision = schedule_and_store(db, job, record_audit=True, actor=current_user, request_id=request_id)
     except ValueError as exc:
         try:
-            from app.notify.service import create_notification, notify_users, resolve_tenant_admin_user_ids
+            from app.notify.service import (
+                create_notification,
+                notify_users,
+                resolve_platform_admin_user_ids,
+                resolve_tenant_admin_user_ids,
+            )
             from app.shared.models import EventType
             failure_message = f"No feasible execution window was found for workload '{job.job_id}': {exc}"
             if job.submitted_by_user_id:
@@ -59,7 +66,10 @@ def trigger_schedule(
                     dedup_suffix="infeasible",
                     email_required=True,
                 )
-            admin_ids = set(resolve_tenant_admin_user_ids(db, job.tenant_id))
+            # SCHEDULING_FAILED is unconditionally CRITICAL — Platform Admin
+            # (the platform's universal escalation authority) is included
+            # alongside the tenant's own Company Admin(s).
+            admin_ids = set(resolve_tenant_admin_user_ids(db, job.tenant_id)) | set(resolve_platform_admin_user_ids(db))
             admin_ids.discard(job.submitted_by_user_id)
             if admin_ids:
                 notify_users(

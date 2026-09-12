@@ -31,7 +31,10 @@ from app.shared.utils import utcnow
 logger = logging.getLogger(__name__)
 
 
-def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> ScheduleDecision:
+def schedule_and_store(
+    db: Session, job: JobORM, record_audit: bool = False,
+    actor: Optional[Any] = None, request_id: Optional[str] = None,
+) -> ScheduleDecision:
     """
     Run the scheduler for a job and persist the ScheduleDecision.
 
@@ -39,6 +42,9 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
         db:           SQLAlchemy session
         job:          JobORM record to schedule
         record_audit: Whether to automatically record a JOB_SCHEDULED audit event
+        actor:        The real, server-resolved user who triggered this (None for a
+                      background/system scheduling pass — see run_scheduling_loop)
+        request_id:   Correlation ID of the inbound HTTP request, if any
 
     Returns:
         ScheduleDecision pydantic model
@@ -80,6 +86,22 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
             scheduler_carbon_avoided_kg.labels(region=job.region).inc(decision.carbon_avoided)
     except Exception as exc:
         scheduler_jobs_total.labels(region=job.region, status="failed").inc()
+        # Always recorded (unlike the success-path audit below, which honors
+        # `record_audit`) — a scheduling failure is significant enough to
+        # audit regardless of the caller's success-path preference, and this
+        # is the single call path both the manual-trigger router and the
+        # background scheduling loop go through, so there is exactly one
+        # audit event per infeasible attempt, never a duplicate.
+        try:
+            from app.trust.service import record_scheduling_infeasible
+            record_scheduling_infeasible(
+                db, job.job_id, reason=str(exc),
+                tenant_id=job.tenant_id, team_id=job.team_id,
+                actor=actor, request_id=request_id,
+                context={"deadline": deadline.isoformat(), "region": job.region},
+            )
+        except Exception as audit_exc:
+            logger.warning("Audit record failed for job %s scheduling infeasibility: %s", job.job_id, audit_exc)
         raise
 
     # Persist decision with regional & impact details (update if already exists)
@@ -260,6 +282,7 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
                 carbon_emission=decision.carbon_emission,
                 carbon_avoided=decision.carbon_avoided,
                 budget_remaining=decision.budget_remaining,
+                tenant_id=job.tenant_id, team_id=job.team_id, actor=actor, request_id=request_id,
             )
             # Add schedule proposed event with decision id
             sd_record = db.query(ScheduleDecisionORM).filter(ScheduleDecisionORM.job_id == decision.job_id).first()
@@ -274,6 +297,7 @@ def schedule_and_store(db: Session, job: JobORM, record_audit: bool = False) -> 
                     region_id=decision.region_id,
                     tariff_plan=decision.tariff_plan,
                     deadline=job.deadline.isoformat() if job.deadline else None,
+                    tenant_id=job.tenant_id, team_id=job.team_id, actor=actor, request_id=request_id,
                 )
         except Exception as exc:
             logger.warning("Audit record failed for job %s scheduling: %s", decision.job_id, exc)
@@ -482,7 +506,12 @@ def process_pending_jobs(db: Session) -> int:
             job.status = JobStatus.FAILED
             db.commit()
             try:
-                from app.notify.service import create_notification, notify_users, resolve_tenant_admin_user_ids
+                from app.notify.service import (
+                    create_notification,
+                    notify_users,
+                    resolve_platform_admin_user_ids,
+                    resolve_tenant_admin_user_ids,
+                )
                 from app.shared.models import EventType
                 failure_message = (
                     f"GreenShift could not find an execution window for workload "
@@ -504,8 +533,13 @@ def process_pending_jobs(db: Session) -> int:
                     )
                 # The responsible Company Admin(s) need to know too — a
                 # failed workload may need manual intervention (budget/region
-                # change) only they can authorize.
-                admin_ids = set(resolve_tenant_admin_user_ids(db, job.tenant_id))
+                # change) only they can authorize. Platform Admins are also
+                # included: SCHEDULING_FAILED is unconditionally CRITICAL in
+                # this system (no lower-severity variant exists), and Platform
+                # Admin is already the platform's universal escalation
+                # authority (the same role that can act on any tenant's
+                # approvals per app.approval.service.check_user_approval_permission).
+                admin_ids = set(resolve_tenant_admin_user_ids(db, job.tenant_id)) | set(resolve_platform_admin_user_ids(db))
                 admin_ids.discard(job.submitted_by_user_id)
                 if admin_ids:
                     notify_users(

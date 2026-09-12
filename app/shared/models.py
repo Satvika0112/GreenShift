@@ -106,6 +106,25 @@ class EventType(str, enum.Enum):
     API_KEY_REVOKED      = "API_KEY_REVOKED"
     AUDIT_VERIFICATION_FAILED = "AUDIT_VERIFICATION_FAILED"
     JOB_RESUBMITTED      = "JOB_RESUBMITTED"
+    # ── BRSR Reporting Events ──
+    BRSR_REPORT_CREATED       = "BRSR_REPORT_CREATED"
+    BRSR_STATUS_CHANGED       = "BRSR_STATUS_CHANGED"
+    BRSR_METRIC_UPDATED       = "BRSR_METRIC_UPDATED"
+    BRSR_VALIDATION_RUN       = "BRSR_VALIDATION_RUN"
+    BRSR_REPORT_APPROVED      = "BRSR_REPORT_APPROVED"
+    BRSR_REPORT_GENERATED     = "BRSR_REPORT_GENERATED"
+    BRSR_REPORT_EXPORTED      = "BRSR_REPORT_EXPORTED"
+    # ── Trust/Audit ledger events ──
+    AUDIT_ANCHOR_CREATED      = "AUDIT_ANCHOR_CREATED"
+
+
+class ActorType(str, enum.Enum):
+    """Who/what performed an audited action. Never inferred from client input —
+    USER means a real authenticated UserORM was resolved server-side; SYSTEM
+    means the action originated from a background process with no human actor
+    (scheduler loop, dispatcher poll, trust verification loop)."""
+    USER   = "USER"
+    SYSTEM = "SYSTEM"
 
 
 class UserApprovalStatus(str, enum.Enum):
@@ -483,23 +502,47 @@ class KubernetesExecutionORM(Base):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class AuditEventORM(Base):
-    """Tamper-evident audit ledger — owned by TRUST agent."""
+    """Tamper-evident audit ledger — owned by TRUST agent.
+
+    tenant_id/team_id/actor_*/request_id/source_service are denormalized
+    columns for efficient RBAC-scoped querying, but they are never the sole
+    source of truth: append_event() also folds them into payload_json before
+    computing payload_hash, and verify_chain() cross-checks these columns
+    against that hashed payload on every verification pass — so a direct DB
+    edit of e.g. actor_role or tenant_id (bypassing the hash chain entirely)
+    is still detected. See app/trust/ledger.py.
+    """
 
     __tablename__ = "audit_events"
     __table_args__ = (
         UniqueConstraint("sequence", name="uq_audit_events_sequence"),
         Index("ix_audit_events_job_sequence", "job_id", "sequence"),
+        Index("ix_audit_events_tenant_sequence", "tenant_id", "sequence"),
+        Index("ix_audit_events_team_sequence", "team_id", "sequence"),
     )
 
-    event_id      = Column(String, primary_key=True)
-    timestamp     = Column(DateTime(timezone=True), nullable=False, index=True)
-    event_type    = Column(SAEnum(EventType), nullable=False, index=True)
-    job_id        = Column(String, nullable=True, index=True)
-    payload_hash  = Column(String(64), nullable=False)   # SHA-256 hex
-    previous_hash = Column(String(64), nullable=False)   # SHA-256 hex (genesis = 0*64)
-    current_hash  = Column(String(64), nullable=False)   # SHA-256 hex
-    payload_json  = Column(Text, nullable=False)         # serialised event payload
-    sequence      = Column(Integer, nullable=False, unique=True, index=True)  # monotonically increasing and globally unique
+    event_id       = Column(String, primary_key=True)
+    timestamp      = Column(DateTime(timezone=True), nullable=False, index=True)
+    event_type     = Column(SAEnum(EventType), nullable=False, index=True)
+    job_id         = Column(String, nullable=True, index=True)
+    payload_hash   = Column(String(64), nullable=False)   # SHA-256 hex
+    previous_hash  = Column(String(64), nullable=False)   # SHA-256 hex (genesis = 0*64)
+    current_hash   = Column(String(64), nullable=False)   # SHA-256 hex
+    payload_json   = Column(Text, nullable=False)         # serialised event payload
+    sequence       = Column(Integer, nullable=False, unique=True, index=True)  # monotonically increasing and globally unique
+
+    # ── Actor identity & request context (P0) — always server-derived, never
+    # accepted from client input. NULL is the honest value when genuinely
+    # not applicable (e.g. team_id for a tenant-wide event, or every actor_*
+    # field for a SYSTEM-originated background event). ──
+    tenant_id      = Column(String, nullable=True, index=True)
+    team_id        = Column(String, nullable=True, index=True)
+    actor_user_id  = Column(String, nullable=True, index=True)
+    actor_username = Column(String, nullable=True)
+    actor_role     = Column(String, nullable=True)
+    actor_type     = Column(String, nullable=True, index=True)  # ActorType.USER / SYSTEM
+    request_id     = Column(String, nullable=True, index=True)
+    source_service = Column(String, nullable=True)
 
     @property
     def payload(self) -> dict:
@@ -509,6 +552,97 @@ class AuditEventORM(Base):
             return json.loads(self.payload_json)
         except Exception:
             return {}
+
+    @property
+    def reason(self) -> Optional[str]:
+        """Human-readable reason/detail for this event, when the recording
+        code supplied one (e.g. the scheduler's actual infeasibility reason
+        for SCHEDULING_FAILED, or a dispatch-blocked reason) — never
+        fabricated; None when the event genuinely has no reason to show."""
+        return self.payload.get("reason")
+
+
+# ── Append-only DB protection ────────────────────────────────────────────────
+# Defense in depth beyond the hash chain: block UPDATE/DELETE on audit_events
+# at the database level itself, so a compromised application layer (or a
+# direct DB console) cannot silently rewrite history without also breaking
+# the cryptographic chain. Registered as `after_create` DDL so it fires for
+# every path that creates this table — Base.metadata.create_all() (fresh dev
+# DB, the in-memory test DB) as well as being re-asserted idempotently by
+# alembic/versions/012_add_trust_audit_context.py for an EXISTING table on a
+# populated dev/prod DB (create_all() is a no-op there, so the DDL event
+# would never fire again on ITS OWN — the migration issues the same DDL
+# directly for that path).
+from sqlalchemy import event as _sa_event
+from sqlalchemy.schema import DDL as _DDL
+
+_SQLITE_AUDIT_APPEND_ONLY_DDL = _DDL(
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_audit_events_no_update
+    BEFORE UPDATE ON audit_events
+    BEGIN
+        SELECT RAISE(ABORT, 'audit_events is append-only: UPDATE is not permitted');
+    END;
+    """
+)
+_SQLITE_AUDIT_APPEND_ONLY_DELETE_DDL = _DDL(
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_audit_events_no_delete
+    BEFORE DELETE ON audit_events
+    BEGIN
+        SELECT RAISE(ABORT, 'audit_events is append-only: DELETE is not permitted');
+    END;
+    """
+)
+_PG_AUDIT_APPEND_ONLY_DDL = _DDL(
+    """
+    CREATE OR REPLACE FUNCTION fn_audit_events_append_only()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        RAISE EXCEPTION 'audit_events is append-only: % is not permitted', TG_OP;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS trg_audit_events_append_only ON audit_events;
+    CREATE TRIGGER trg_audit_events_append_only
+    BEFORE UPDATE OR DELETE ON audit_events
+    FOR EACH ROW EXECUTE FUNCTION fn_audit_events_append_only();
+    """
+)
+
+_sa_event.listen(
+    AuditEventORM.__table__, "after_create",
+    _SQLITE_AUDIT_APPEND_ONLY_DDL.execute_if(dialect="sqlite"),
+)
+_sa_event.listen(
+    AuditEventORM.__table__, "after_create",
+    _SQLITE_AUDIT_APPEND_ONLY_DELETE_DDL.execute_if(dialect="sqlite"),
+)
+_sa_event.listen(
+    AuditEventORM.__table__, "after_create",
+    _PG_AUDIT_APPEND_ONLY_DDL.execute_if(dialect="postgresql"),
+)
+
+
+class AuditAnchorORM(Base):
+    """A historical, DB-backed checkpoint of the audit chain's root hash.
+
+    Complements (does not replace) the pre-existing external JSONL anchor
+    file in app/trust/anchor.py — the file remains an additional
+    tamper-evidence boundary outside the database itself, while this table
+    is what makes "list historical anchors" and "verify a specific
+    historical anchor" possible without re-parsing a flat file.
+    """
+
+    __tablename__ = "audit_anchors"
+
+    id                 = Column(Integer, primary_key=True, autoincrement=True)
+    sequence           = Column(Integer, nullable=False, index=True)
+    root_hash          = Column(String(64), nullable=False)
+    event_count        = Column(Integer, nullable=False)
+    created_at         = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    created_by_user_id = Column(String, nullable=True)  # server-derived Platform Admin id — never client-supplied
+    label              = Column(String, nullable=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -687,6 +821,300 @@ class NotificationPreferenceORM(Base):
     email_system     = Column(Boolean, nullable=False, default=True)
     created_at       = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at       = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLAlchemy ORM — BRSR (Business Responsibility and Sustainability Reporting)
+#
+# Architecture: one tenant-scoped report header (BrsrReportORM) drives a
+# flexible metric registry (BrsrMetricDefinitionORM, global reference data —
+# not tenant-scoped) whose answers are stored generically in
+# BrsrMetricValueORM (one row per report+metric). This single generic value
+# table serves Section A/B, all 9 principles, and all 9 BRSR Core categories
+# alike — the registry's `section`/`principle`/`brsr_core_attribute` columns
+# classify each answer, so adding/changing a metric never requires a schema
+# change or new page component. A separate one-row-per-tenant company
+# profile table holds the static company-identity fields BRSR always needs
+# (CIN, sector, listed status, headcount, ...), since those aren't really
+# "reporting period metrics" in the same sense.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class BrsrReportStatus(str, enum.Enum):
+    DRAFT            = "DRAFT"
+    DATA_COLLECTION  = "DATA_COLLECTION"
+    VALIDATED        = "VALIDATED"
+    APPROVED         = "APPROVED"
+    GENERATED        = "GENERATED"
+
+
+# Only these forward transitions are legal — enforced server-side in
+# app.brsr.service, never trusted from the client. Matches the linear
+# lifecycle in the spec; there is deliberately no "reject/reopen" transition
+# yet since BRSR doesn't ask for one — a report needing rework is edited
+# in DATA_COLLECTION-equivalent state by re-deriving from DRAFT is out of
+# scope until a real workflow need is demonstrated.
+BRSR_STATUS_TRANSITIONS: Dict[str, str] = {
+    BrsrReportStatus.DRAFT.value: BrsrReportStatus.DATA_COLLECTION.value,
+    BrsrReportStatus.DATA_COLLECTION.value: BrsrReportStatus.VALIDATED.value,
+    BrsrReportStatus.VALIDATED.value: BrsrReportStatus.APPROVED.value,
+    BrsrReportStatus.APPROVED.value: BrsrReportStatus.GENERATED.value,
+}
+
+
+class BrsrSourceType(str, enum.Enum):
+    GREENSHIFT_DERIVED = "GREENSHIFT_DERIVED"
+    COMPANY_PROVIDED   = "COMPANY_PROVIDED"
+    CALCULATED         = "CALCULATED"
+    ESTIMATED          = "ESTIMATED"
+    EXTERNAL_SOURCE    = "EXTERNAL_SOURCE"
+    MISSING            = "MISSING"
+
+
+class BrsrDataQuality(str, enum.Enum):
+    HIGH    = "HIGH"
+    MEDIUM  = "MEDIUM"
+    LOW     = "LOW"
+    MISSING = "MISSING"
+
+
+class BrsrSection(str, enum.Enum):
+    SECTION_A = "SECTION_A"   # General disclosures
+    SECTION_B = "SECTION_B"   # Management & process (governance)
+    SECTION_C = "SECTION_C"   # Principle-wise performance
+    CORE      = "CORE"        # BRSR Core (9 attributes, subset of Section C)
+
+
+class BrsrCompanyProfileORM(Base):
+    """
+    One row per tenant — static BRSR company-identity fields. Every field is
+    COMPANY_PROVIDED by definition (there is no GreenShift-derivable company
+    registration data), so provenance is tracked once at the row level
+    rather than per-field as with BrsrMetricValueORM. Nothing here is ever
+    inferred or defaulted from operational data — a field left blank stays
+    NULL until a Company Admin enters it.
+    """
+
+    __tablename__ = "brsr_company_profiles"
+
+    id                 = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id          = Column(String, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+
+    company_name       = Column(String, nullable=True)
+    cin                = Column(String(21), nullable=True)   # Corporate Identity Number (India) — 21 chars
+    sector             = Column(String, nullable=True)
+    industry           = Column(String, nullable=True)
+    listed_status      = Column(String, nullable=True)       # "LISTED" / "UNLISTED"
+    stock_exchange     = Column(String, nullable=True)
+    isin               = Column(String(12), nullable=True)
+    locations          = Column(JSON, nullable=True)         # [{"type": "registered_office"|"plant"|..., "address": "...", "state": "...", "country": "..."}]
+    products_services  = Column(JSON, nullable=True)         # [{"name": "...", "nic_code": "...", "pct_turnover": ...}]
+    employees_count    = Column(Integer, nullable=True)
+    workers_count       = Column(Integer, nullable=True)
+    revenue            = Column(Float, nullable=True)
+    revenue_currency   = Column(String(3), nullable=True)
+    net_worth          = Column(Float, nullable=True)
+    net_worth_currency = Column(String(3), nullable=True)
+    capital            = Column(Float, nullable=True)        # paid-up capital
+    capital_currency   = Column(String(3), nullable=True)
+    reporting_boundary = Column(Text, nullable=True)
+
+    # Structured currency-conversion provenance for the monetary fields above
+    # (Phase 14) — keyed by field name, e.g. {"revenue": {"original_value":
+    # ..., "original_currency": "USD", "reporting_currency": "INR",
+    # "converted_value": ..., "exchange_rate": ..., "exchange_rate_date":
+    # ..., "conversion_source": "..."}}. Never auto-populated with a
+    # fabricated rate — only ever written when the Company Admin/an
+    # integration supplies a real rate + source.
+    currency_conversions = Column(JSON, nullable=True)
+
+    source_type = Column(String, nullable=False, default=BrsrSourceType.COMPANY_PROVIDED.value)
+    updated_by  = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at  = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at  = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
+
+
+class BrsrReportORM(Base):
+    """One BRSR report per tenant per financial year."""
+
+    __tablename__ = "brsr_reports"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "financial_year", name="uq_brsr_reports_tenant_fy"),
+        CheckConstraint(
+            "status IN ('DRAFT', 'DATA_COLLECTION', 'VALIDATED', 'APPROVED', 'GENERATED')",
+            name="ck_brsr_reports_status_valid",
+        ),
+    )
+
+    id                     = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id              = Column(String, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    financial_year         = Column(String(10), nullable=False)   # e.g. "2025-26"
+    reporting_period_start = Column(DateTime(timezone=True), nullable=False)
+    reporting_period_end   = Column(DateTime(timezone=True), nullable=False)
+    framework_version      = Column(String(20), nullable=False, default="BRSR-2023")
+    status                 = Column(String(20), nullable=False, default=BrsrReportStatus.DRAFT.value, index=True)
+
+    created_by  = Column(Integer, ForeignKey("users.id"), nullable=False)
+    approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    created_at   = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at   = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
+    validated_at = Column(DateTime(timezone=True), nullable=True)
+    approved_at  = Column(DateTime(timezone=True), nullable=True)
+    generated_at = Column(DateTime(timezone=True), nullable=True)
+
+    metric_values = relationship("BrsrMetricValueORM", back_populates="report", cascade="all, delete-orphan")
+
+
+class BrsrMetricDefinitionORM(Base):
+    """
+    The metric/question registry (Phase 4) — global reference data, not
+    tenant-scoped. A framework/version change (e.g. a future BRSR revision)
+    is handled by adding new rows with a new `framework_version` and
+    `effective_from`, never by rewriting application code.
+    """
+
+    __tablename__ = "brsr_metric_definitions"
+    __table_args__ = (
+        CheckConstraint(
+            "section IN ('SECTION_A', 'SECTION_B', 'SECTION_C', 'CORE')",
+            name="ck_brsr_metric_def_section_valid",
+        ),
+    )
+
+    metric_code          = Column(String(80), primary_key=True)
+    metric_name          = Column(String, nullable=False)
+    principle            = Column(Integer, nullable=True)   # 1-9, null for Section A/B
+    section              = Column(String(20), nullable=False, index=True)
+    brsr_core_attribute  = Column(String(60), nullable=True, index=True)
+    unit                 = Column(String(40), nullable=True)
+    data_type            = Column(String(20), nullable=False, default="NUMERIC")  # NUMERIC/PERCENTAGE/TEXT/BOOLEAN
+    required             = Column(Boolean, nullable=False, default=False)
+    calculation_method   = Column(Text, nullable=True)
+    framework_version    = Column(String(20), nullable=False, default="BRSR-2023")
+    effective_from       = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    effective_to         = Column(DateTime(timezone=True), nullable=True)
+    description          = Column(Text, nullable=True)
+    # Whether app.brsr.calculations can auto-derive this metric from real
+    # GreenShift operational data (jobs/energy/carbon). False for anything
+    # that only a company can know (headcount, board composition, ...).
+    greenshift_derivable = Column(Boolean, nullable=False, default=False)
+
+
+class BrsrMetricValueORM(Base):
+    """
+    One answer to one registry metric for one report. Generic by design
+    (Phase 3/4) — this single table backs Section A/B, every principle, and
+    every BRSR Core category; which "page" a row belongs to is purely a
+    property of its `metric_code`'s registry definition, not of this table.
+    """
+
+    __tablename__ = "brsr_metric_values"
+    __table_args__ = (
+        UniqueConstraint("report_id", "metric_code", name="uq_brsr_metric_values_report_metric"),
+        CheckConstraint(
+            "source_type IN ('GREENSHIFT_DERIVED', 'COMPANY_PROVIDED', 'CALCULATED', 'ESTIMATED', 'EXTERNAL_SOURCE', 'MISSING')",
+            name="ck_brsr_metric_values_source_type_valid",
+        ),
+        CheckConstraint(
+            "quality IN ('HIGH', 'MEDIUM', 'LOW', 'MISSING')",
+            name="ck_brsr_metric_values_quality_valid",
+        ),
+    )
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    report_id   = Column(Integer, ForeignKey("brsr_reports.id", ondelete="CASCADE"), nullable=False, index=True)
+    metric_code = Column(String(80), ForeignKey("brsr_metric_definitions.metric_code"), nullable=False, index=True)
+
+    # A missing value is NULL, never a fabricated 0 — see BrsrSourceType.MISSING.
+    value       = Column(Float, nullable=True)
+    text_value  = Column(Text, nullable=True)     # narrative/boolean-as-text answers
+    unit        = Column(String(40), nullable=True)
+    currency    = Column(String(3), nullable=True)
+
+    source_type   = Column(String(20), nullable=False, default=BrsrSourceType.MISSING.value)
+    source_record = Column(String, nullable=True)     # short reference, e.g. "job:JOB-123" or "manual-entry"
+    source_detail = Column(JSON, nullable=True)        # richer lineage payload (e.g. list of job_ids + calc inputs)
+
+    quality            = Column(String(20), nullable=False, default=BrsrDataQuality.MISSING.value)
+    estimated          = Column(Boolean, nullable=False, default=False)
+    estimation_method  = Column(Text, nullable=True)
+    assumption         = Column(Text, nullable=True)
+    data_gap           = Column(Text, nullable=True)
+
+    # Currency conversion provenance (Phase 14) — only populated when a real
+    # rate + source is supplied; never fabricated.
+    reporting_currency = Column(String(3), nullable=True)
+    exchange_rate      = Column(Float, nullable=True)
+    exchange_rate_date = Column(DateTime(timezone=True), nullable=True)
+    conversion_source  = Column(String, nullable=True)
+    converted_value    = Column(Float, nullable=True)
+
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
+
+    report = relationship("BrsrReportORM", back_populates="metric_values")
+
+
+class BrsrValidationRunORM(Base):
+    """One execution of the validation engine (Phase 10) against a report."""
+
+    __tablename__ = "brsr_validation_runs"
+
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    report_id  = Column(Integer, ForeignKey("brsr_reports.id", ondelete="CASCADE"), nullable=False, index=True)
+    run_at     = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    run_by     = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status     = Column(String(20), nullable=False)   # PASSED / FAILED / WARNINGS
+    error_count   = Column(Integer, nullable=False, default=0)
+    warning_count = Column(Integer, nullable=False, default=0)
+    info_count    = Column(Integer, nullable=False, default=0)
+
+    issues = relationship("BrsrValidationIssueORM", back_populates="run", cascade="all, delete-orphan")
+
+
+class BrsrValidationIssueORM(Base):
+    """One finding from a validation run."""
+
+    __tablename__ = "brsr_validation_issues"
+    __table_args__ = (
+        CheckConstraint("severity IN ('ERROR', 'WARNING', 'INFO')", name="ck_brsr_validation_issues_severity_valid"),
+    )
+
+    id           = Column(Integer, primary_key=True, autoincrement=True)
+    run_id       = Column(Integer, ForeignKey("brsr_validation_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    metric_code  = Column(String(80), nullable=True, index=True)
+    severity     = Column(String(10), nullable=False)
+    code         = Column(String(60), nullable=False)
+    message      = Column(Text, nullable=False)
+    suggested_resolution = Column(Text, nullable=True)
+
+    run = relationship("BrsrValidationRunORM", back_populates="issues")
+
+
+class BrsrAssessmentORM(Base):
+    """
+    Assessment/Assurance record (Phase 22) — purely a record of
+    company-provided assurance information. GreenShift itself never
+    performs or claims independent assessment/assurance.
+    """
+
+    __tablename__ = "brsr_assessments"
+
+    id                  = Column(Integer, primary_key=True, autoincrement=True)
+    report_id           = Column(Integer, ForeignKey("brsr_reports.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    assessment_status   = Column(String(30), nullable=True)   # NOT_ASSESSED / INTERNAL_REVIEW / EXTERNAL_ASSURANCE
+    assessor_name       = Column(String, nullable=True)
+    assessor_type       = Column(String(20), nullable=True)   # INTERNAL / EXTERNAL
+    assessment_date     = Column(DateTime(timezone=True), nullable=True)
+    scope               = Column(Text, nullable=True)
+    notes               = Column(Text, nullable=True)
+    evidence_reference  = Column(Text, nullable=True)
+    source_type         = Column(String, nullable=False, default=BrsrSourceType.COMPANY_PROVIDED.value)
+    updated_by          = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at          = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at          = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -942,11 +1370,53 @@ class AuditEvent(BaseModel):
     current_hash:  str
     sequence:      int
 
+    tenant_id:      Optional[str] = None
+    team_id:        Optional[str] = None
+    actor_user_id:  Optional[str] = None
+    actor_username: Optional[str] = None
+    actor_role:     Optional[str] = None
+    actor_type:     Optional[str] = None
+    request_id:     Optional[str] = None
+    source_service: Optional[str] = None
+    reason:         Optional[str] = None
+
 
 class AuditVerifyResponse(BaseModel):
     valid:       bool
     event_count: int
     message:     str
+
+    # Structured failure diagnostics — populated only when valid is False.
+    # Kept optional/additive so existing callers reading valid/event_count/
+    # message are unaffected.
+    failed_check:      Optional[str] = None
+    failed_sequence:   Optional[int] = None
+    expected_sequence: Optional[int] = None
+    actual_sequence:   Optional[int] = None
+    reason:            Optional[str] = None
+
+
+class AuditAnchor(BaseModel):
+    """A historical, DB-backed audit chain checkpoint."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id:                 int
+    sequence:           int
+    root_hash:          str
+    event_count:        int
+    created_at:         datetime
+    created_by_user_id: Optional[str] = None
+    label:              Optional[str] = None
+
+
+class AnchorVerifyResult(BaseModel):
+    status:        str
+    verified:      bool
+    message:       str
+    anchor:        Optional[Dict[str, Any]] = None
+    total_anchors: Optional[int] = None
+    failed_check:  Optional[str] = None
 
 
 class DashboardSummary(BaseModel):
@@ -1272,3 +1742,285 @@ class NotificationPreferenceUpdateRequest(BaseModel):
     email_scheduling: Optional[bool] = None
     email_approval: Optional[bool] = None
     email_execution: Optional[bool] = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pydantic Schemas — BRSR
+# ─────────────────────────────────────────────────────────────────────────────
+
+class BrsrCompanyProfileResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    company_name: Optional[str] = None
+    cin: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    listed_status: Optional[str] = None
+    stock_exchange: Optional[str] = None
+    isin: Optional[str] = None
+    locations: Optional[List[Dict[str, Any]]] = None
+    products_services: Optional[List[Dict[str, Any]]] = None
+    employees_count: Optional[int] = None
+    workers_count: Optional[int] = None
+    revenue: Optional[float] = None
+    revenue_currency: Optional[str] = None
+    net_worth: Optional[float] = None
+    net_worth_currency: Optional[str] = None
+    capital: Optional[float] = None
+    capital_currency: Optional[str] = None
+    reporting_boundary: Optional[str] = None
+    currency_conversions: Optional[Dict[str, Any]] = None
+    source_type: str
+    updated_at: Optional[datetime] = None
+
+
+class BrsrCompanyProfileUpdateRequest(BaseModel):
+    """
+    Company Admin-editable fields only. There is deliberately no
+    `tenant_id`/`source_type`/`updated_by` field here — recipient/company
+    identity for a write is always the authenticated caller's own
+    `tenant_id`, never anything the client supplies (see app/brsr/service.py).
+    """
+    company_name: Optional[str] = None
+    cin: Optional[str] = Field(None, max_length=21)
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    listed_status: Optional[str] = None
+    stock_exchange: Optional[str] = None
+    isin: Optional[str] = Field(None, max_length=12)
+    locations: Optional[List[Dict[str, Any]]] = None
+    products_services: Optional[List[Dict[str, Any]]] = None
+    employees_count: Optional[int] = Field(None, ge=0)
+    workers_count: Optional[int] = Field(None, ge=0)
+    revenue: Optional[float] = Field(None, ge=0)
+    revenue_currency: Optional[str] = Field(None, min_length=3, max_length=3)
+    net_worth: Optional[float] = None
+    net_worth_currency: Optional[str] = Field(None, min_length=3, max_length=3)
+    capital: Optional[float] = Field(None, ge=0)
+    capital_currency: Optional[str] = Field(None, min_length=3, max_length=3)
+    reporting_boundary: Optional[str] = None
+
+    @field_validator("listed_status")
+    @classmethod
+    def validate_listed_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("LISTED", "UNLISTED"):
+            raise ValueError("listed_status must be 'LISTED' or 'UNLISTED'")
+        return v
+
+
+class BrsrReportResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    tenant_id: str
+    financial_year: str
+    reporting_period_start: datetime
+    reporting_period_end: datetime
+    framework_version: str
+    status: str
+    created_by: int
+    approved_by: Optional[int] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    validated_at: Optional[datetime] = None
+    approved_at: Optional[datetime] = None
+    generated_at: Optional[datetime] = None
+
+
+class BrsrStatusTransitionRequest(BaseModel):
+    target_status: str
+
+    @field_validator("target_status")
+    @classmethod
+    def validate_target_status(cls, v: str) -> str:
+        valid = {s.value for s in BrsrReportStatus}
+        if v not in valid:
+            raise ValueError(f"target_status must be one of {sorted(valid)}")
+        return v
+
+
+class BrsrReportCreateRequest(BaseModel):
+    financial_year: str = Field(..., pattern=r"^\d{4}-\d{2}$", description="e.g. 2025-26")
+    reporting_period_start: datetime
+    reporting_period_end: datetime
+    framework_version: str = "BRSR-2023"
+
+    @model_validator(mode="after")
+    def validate_period(self) -> "BrsrReportCreateRequest":
+        if self.reporting_period_end <= self.reporting_period_start:
+            raise ValueError("reporting_period_end must be after reporting_period_start")
+        return self
+
+
+class BrsrMetricDefinitionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    metric_code: str
+    metric_name: str
+    principle: Optional[int] = None
+    section: str
+    brsr_core_attribute: Optional[str] = None
+    unit: Optional[str] = None
+    data_type: str
+    required: bool
+    calculation_method: Optional[str] = None
+    framework_version: str
+    description: Optional[str] = None
+    greenshift_derivable: bool
+
+
+class BrsrMetricValueResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    report_id: int
+    metric_code: str
+    value: Optional[float] = None
+    text_value: Optional[str] = None
+    unit: Optional[str] = None
+    currency: Optional[str] = None
+    source_type: str
+    source_record: Optional[str] = None
+    source_detail: Optional[Dict[str, Any]] = None
+    quality: str
+    estimated: bool
+    estimation_method: Optional[str] = None
+    assumption: Optional[str] = None
+    data_gap: Optional[str] = None
+    reporting_currency: Optional[str] = None
+    exchange_rate: Optional[float] = None
+    exchange_rate_date: Optional[datetime] = None
+    conversion_source: Optional[str] = None
+    converted_value: Optional[float] = None
+    updated_at: Optional[datetime] = None
+
+
+class BrsrMetricValueWithDefinition(BrsrMetricValueResponse):
+    """Metric value joined with its registry definition — the shape the
+    BRSR Core/Environmental/Social/Governance UI pages actually consume."""
+    metric_name: str
+    principle: Optional[int] = None
+    section: str
+    brsr_core_attribute: Optional[str] = None
+    data_type: str
+    required: bool
+    calculation_method: Optional[str] = None
+    description: Optional[str] = None
+
+
+class BrsrMetricValueUpdateRequest(BaseModel):
+    """
+    Company Admin-editable answer fields. `quality`/`report_id`/`metric_code`
+    are always server-derived — quality is recomputed from completeness, not
+    client-supplied, and the row identity comes from the URL, not the body.
+
+    `source_type` is deliberately restricted to the two provenance tiers a
+    Company Admin can honestly self-declare — COMPANY_PROVIDED (the default
+    when omitted) or EXTERNAL_SOURCE (e.g. a utility bill or third-party
+    auditor's figure). GREENSHIFT_DERIVED and CALCULATED remain permanently
+    unreachable through this endpoint (see app/brsr/service.py::update_metric_value)
+    — a client can never claim automated-derivation provenance for its own
+    manual entry — and MISSING isn't a value someone "sets", it's the
+    absence of one.
+    """
+    value: Optional[float] = None
+    text_value: Optional[str] = None
+    unit: Optional[str] = None
+    currency: Optional[str] = Field(None, min_length=3, max_length=3)
+    source_type: Optional[str] = None
+    estimated: Optional[bool] = None
+    estimation_method: Optional[str] = None
+    assumption: Optional[str] = None
+    data_gap: Optional[str] = None
+    reporting_currency: Optional[str] = Field(None, min_length=3, max_length=3)
+    exchange_rate: Optional[float] = Field(None, gt=0)
+    exchange_rate_date: Optional[datetime] = None
+    conversion_source: Optional[str] = None
+
+    @field_validator("source_type")
+    @classmethod
+    def validate_source_type(cls, v: Optional[str]) -> Optional[str]:
+        allowed = {"COMPANY_PROVIDED", "EXTERNAL_SOURCE"}
+        if v is not None and v not in allowed:
+            raise ValueError(f"source_type must be one of {sorted(allowed)} when set by a client")
+        return v
+
+
+class BrsrValidationIssueResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    metric_code: Optional[str] = None
+    severity: str
+    code: str
+    message: str
+    suggested_resolution: Optional[str] = None
+
+
+class BrsrValidationRunResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    report_id: int
+    run_at: datetime
+    run_by: Optional[int] = None
+    status: str
+    error_count: int
+    warning_count: int
+    info_count: int
+    issues: List[BrsrValidationIssueResponse] = []
+
+
+class BrsrAssessmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    report_id: int
+    assessment_status: Optional[str] = None
+    assessor_name: Optional[str] = None
+    assessor_type: Optional[str] = None
+    assessment_date: Optional[datetime] = None
+    scope: Optional[str] = None
+    notes: Optional[str] = None
+    evidence_reference: Optional[str] = None
+    source_type: str
+    updated_at: Optional[datetime] = None
+
+
+class BrsrAssessmentUpdateRequest(BaseModel):
+    assessment_status: Optional[str] = None
+    assessor_name: Optional[str] = None
+    assessor_type: Optional[str] = None
+    assessment_date: Optional[datetime] = None
+    scope: Optional[str] = None
+    notes: Optional[str] = None
+    evidence_reference: Optional[str] = None
+
+    @field_validator("assessor_type")
+    @classmethod
+    def validate_assessor_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("INTERNAL", "EXTERNAL"):
+            raise ValueError("assessor_type must be 'INTERNAL' or 'EXTERNAL'")
+        return v
+
+
+class BrsrDataQualitySummary(BaseModel):
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    missing: int = 0
+    total: int = 0
+
+
+class BrsrOverviewResponse(BaseModel):
+    """Every number here is derived live from the database — never a fake
+    progress percentage (Phase 16)."""
+    report: BrsrReportResponse
+    completion_pct: float
+    required_metrics_total: int
+    required_metrics_filled: int
+    data_quality: BrsrDataQualitySummary
+    missing_required_count: int
+    brsr_core_completion_pct: float
+    latest_validation: Optional[BrsrValidationRunResponse] = None
+    can_approve: bool
+    can_generate: bool
