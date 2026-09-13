@@ -68,7 +68,12 @@ def send_email(to_address: str, subject: str, body: str) -> None:
         if settings.smtp_use_tls:
             server.starttls()
         if settings.smtp_username:
-            server.login(settings.smtp_username, settings.smtp_password)
+            # Providers (Gmail app passwords in particular) display the
+            # secret with spaces every 4 characters for readability, but the
+            # real credential has none — smtplib sends whatever bytes it's
+            # given, so a pasted value with those display spaces intact
+            # fails AUTH even though the underlying secret is correct.
+            server.login(settings.smtp_username.strip(), settings.smtp_password.replace(" ", "").strip())
         server.send_message(msg)
 
 
