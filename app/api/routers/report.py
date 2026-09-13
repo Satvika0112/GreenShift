@@ -17,6 +17,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from app.trust.report import generate_report, generate_csv, generate_markdown_summary
+from app.api.tenant_scope import is_team_restricted
 from app.ingest.data_sources import get_data_source_status
 from app.shared.database import get_db
 from app.shared.auth import get_current_user
@@ -53,7 +54,10 @@ def get_report_summary(
     if not is_company_admin(current_user):
         effective_team = current_user.team_id
     try:
-        return generate_report(db, team_id=effective_team, start_date=start_date, end_date=end_date, tenant_id=effective_tenant)
+        return generate_report(
+            db, team_id=effective_team, start_date=start_date, end_date=end_date, tenant_id=effective_tenant,
+            team_restricted=is_team_restricted(current_user),
+        )
     except Exception as exc:
         logger.error(f"Error generating report summary: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while generating the sustainability report.")
@@ -78,7 +82,10 @@ def get_report_csv(
     if not is_company_admin(current_user):
         effective_team = current_user.team_id
     try:
-        csv_content = generate_csv(db, team_id=effective_team, tenant_id=effective_tenant)
+        csv_content = generate_csv(
+            db, team_id=effective_team, tenant_id=effective_tenant,
+            team_restricted=is_team_restricted(current_user),
+        )
         return PlainTextResponse(
             content=csv_content,
             media_type="text/csv",

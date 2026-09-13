@@ -171,6 +171,25 @@ class TestTrustEventsRBAC:
         assert identities["job_a1"] not in job_ids
         assert identities["job_a2"] not in job_ids
 
+    def test_company_user_with_no_team_sees_zero_events_not_the_whole_tenant(self, client, identities):
+        """Regression: scope_audit_events_query previously only appended the
+        team filter `and user.team_id`, so a Company User whose team_id is
+        None (not yet assigned) skipped the team clause entirely and fell
+        through to the tenant filter alone — seeing every team's events
+        instead of none. Must fail closed to zero, matching
+        can_view_job_audit's `bool(user.team_id) and ...` sibling check."""
+        with SessionLocal() as db:
+            _, no_team_headers = _make_user(
+                db, "trust_sec_no_team_user", "noteam@a.trustsec.io",
+                UserRole.COMPANY_USER, TENANT_A, None,
+            )
+        resp = client.get("/api/v1/trust/events?limit=1000", headers=no_team_headers)
+        assert resp.status_code == 200
+        job_ids = {e["job_id"] for e in resp.json()["events"]}
+        assert identities["job_a1"] not in job_ids
+        assert identities["job_a2"] not in job_ids
+        assert job_ids == set()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RBAC — /trust/jobs/{job_id}

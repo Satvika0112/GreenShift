@@ -1,15 +1,13 @@
 """
 Trust/Audit RBAC scoping.
 
-Deliberately independent of app.api.tenant_scope.get_tenant_jobs, which
-team-scopes COMPANY_ADMIN identically to COMPANY_USER (only
-is_platform_admin() is special-cased there) — a real, documented bug
-relative to that function's own docstring ("Company admins can view all
-jobs within their own tenant") and to this module's required RBAC matrix.
-That function is shared by 6 other routers outside Trust/Audit ownership,
-so it is not modified; Trust/Audit instead owns its own correctly-scoped
-authorization here, matching the pattern app.brsr.service already uses for
-its own require_view_access/require_edit_access.
+Deliberately independent of app.api.tenant_scope.get_tenant_jobs (which
+already correctly excludes COMPANY_ADMIN from team-scoping via its own
+is_team_restricted() helper — not a bug as of this writing). That function
+is shared by 6 other routers outside Trust/Audit ownership, so it is not
+modified; Trust/Audit instead owns its own correctly-scoped authorization
+here, matching the pattern app.brsr.service already uses for its own
+require_view_access/require_edit_access.
 
 RBAC matrix enforced throughout this module:
   PLATFORM_ADMIN — global visibility; only role that may verify the global
@@ -70,7 +68,15 @@ def scope_audit_events_query(db: Session, query: Query, user: UserORM) -> Query:
     )
     query = query.filter(tenant_filter)
 
-    if _role_value(user) == "COMPANY_USER" and user.team_id:
+    if _role_value(user) == "COMPANY_USER":
+        # Checked unconditionally (not "and user.team_id") so a Company User
+        # with no team assigned yet fails closed to zero events instead of
+        # silently falling through to the whole tenant's audit trail — matches
+        # can_view_job_audit's `bool(user.team_id) and job.team_id == ...`
+        # below, which denies outright (never grants visibility into
+        # team_id-null rows either) when user.team_id is falsy.
+        if not user.team_id:
+            return query.filter(false())
         team_job_ids = db.query(JobORM.job_id).filter(JobORM.team_id == user.team_id)
         team_filter = or_(
             AuditEventORM.team_id == user.team_id,

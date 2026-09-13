@@ -52,8 +52,14 @@ def submit_new_job(
     from app.shared.timezone import normalize_to_utc
     try:
         user_role_val = current_user.role.value if isinstance(current_user.role, UserRole) else str(current_user.role)
-        if user_role_val == "COMPANY_USER" and current_user.team_id:
-            if body.team_id and body.team_id != current_user.team_id:
+        # Checked unconditionally (not "and current_user.team_id") — a
+        # Company User with no team assigned yet must fail closed and be
+        # rejected for ANY team_id (JobSubmitRequest.team_id is required and
+        # non-empty), not silently accepted, since body.team_id is written
+        # straight onto JobORM.team_id (app.ingest.jobs.submit_job) with no
+        # other check forcing it back to the caller's own team.
+        if user_role_val == "COMPANY_USER":
+            if body.team_id != current_user.team_id:
                 raise HTTPException(
                     status_code=403,
                     detail=f"User for team '{current_user.team_id}' cannot submit jobs for team '{body.team_id}'",

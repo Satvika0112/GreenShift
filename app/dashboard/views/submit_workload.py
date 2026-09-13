@@ -174,7 +174,16 @@ def render_submit_workload_view() -> None:
         with mc1:
             st.markdown(render_metric_card("Carbon Intensity", f"{carbon_intensity:.1f} gCO₂/kWh", "Grid forecast", accent=True), unsafe_allow_html=True)
         with mc2:
-            st.markdown(render_metric_card("Electricity Cost", f"${cost_usd:.4f}", "Time-of-Day tariff"), unsafe_allow_html=True)
+            # Currency Consistency: prefer the execution region's real
+            # native_cost + currency over the USD-normalized
+            # electricity_cost — a "$" cost must never be shown for an
+            # INR/AUD/SEK region.
+            _native_cost, _currency = sched_res.get("native_cost"), sched_res.get("currency")
+            _cost_display = (
+                f"{_native_cost:.4f} {_currency}" if _native_cost is not None and _currency
+                else f"{cost_usd:.4f} USD"
+            )
+            st.markdown(render_metric_card("Electricity Cost", _cost_display, "Time-of-Day tariff"), unsafe_allow_html=True)
         with mc3:
             st.markdown(render_metric_card("Carbon Avoided", f"{carbon_avoided:.4f} kg", "Saved vs immediate baseline", accent=True), unsafe_allow_html=True)
 

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.analytics.fleet_impact import compute_fleet_impact
 from app.analytics.actual_impact import compute_actual_impact, compute_fleet_actual_impact
+from app.api.tenant_scope import is_team_restricted
 from app.shared.auth import AuthenticatedIdentity, get_current_identity, is_company_admin, is_platform_admin
 from app.shared.database import get_db
 
@@ -58,6 +59,7 @@ def get_fleet_impact(
         region_id=region_id,
         job_type=job_type,
         experiment_id=experiment_id,
+        team_restricted=is_team_restricted(identity),
     )
     return report.to_dict()
 
@@ -126,5 +128,8 @@ def get_fleet_actual_impact(
     effective_tenant_id = tenant_id if (identity and is_platform_admin(identity)) else (identity.tenant_id if identity else tenant_id)
     effective_team_id = identity.team_id if (identity and not is_company_admin(identity)) else None
 
-    summary = compute_fleet_actual_impact(db, tenant_id=effective_tenant_id, team_id=effective_team_id)
+    summary = compute_fleet_actual_impact(
+        db, tenant_id=effective_tenant_id, team_id=effective_team_id,
+        team_restricted=is_team_restricted(identity),
+    )
     return summary.to_dict()

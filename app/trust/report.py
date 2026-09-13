@@ -302,6 +302,7 @@ def generate_report(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     tenant_id: Optional[str] = None,
+    team_restricted: bool = False,
 ) -> dict:
     """
     Generate a full BRSR-style sustainability report.
@@ -312,6 +313,11 @@ def generate_report(
         start_date: Filter jobs submitted on/after this date (optional).
         end_date:   Filter jobs submitted on/before this date (optional).
         tenant_id:  Filter jobs by tenant (optional).
+        team_restricted: True for a plain Company User (per
+            app.api.tenant_scope.is_team_restricted) — applies the team
+            filter unconditionally, even when team_id is None, so a user
+            with no team assigned yet fails closed instead of silently
+            getting the whole tenant's report.
 
     Returns:
         dict with keys: metadata, summary, jobs, audit
@@ -319,7 +325,9 @@ def generate_report(
     query = db.query(JobORM)
     if tenant_id:
         query = query.filter(JobORM.tenant_id == tenant_id)
-    if team_id:
+    if team_restricted:
+        query = query.filter(JobORM.team_id == team_id)
+    elif team_id:
         query = query.filter(JobORM.team_id == team_id)
     if start_date:
         query = query.filter(JobORM.submitted_at >= start_date)
@@ -373,6 +381,7 @@ def generate_csv(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     tenant_id: Optional[str] = None,
+    team_restricted: bool = False,
 ) -> str:
     """
     Generate a CSV string of the full job-level report.
@@ -381,7 +390,10 @@ def generate_csv(
     Returns:
         CSV string (utf-8).
     """
-    report = generate_report(db, team_id=team_id, start_date=start_date, end_date=end_date, tenant_id=tenant_id)
+    report = generate_report(
+        db, team_id=team_id, start_date=start_date, end_date=end_date, tenant_id=tenant_id,
+        team_restricted=team_restricted,
+    )
     rows = report["jobs"]
 
     if not rows:

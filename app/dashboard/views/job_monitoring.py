@@ -78,7 +78,16 @@ def render_job_monitoring_view() -> None:
         with m3:
             st.markdown(render_metric_card("Carbon", f"{dec.get('carbon_intensity', 0.0):.1f}", "gCO₂/kWh", accent=True), unsafe_allow_html=True)
         with m4:
-            st.markdown(render_metric_card("Cost", f"${dec.get('electricity_cost', 0.0):.4f}", "Estimated"), unsafe_allow_html=True)
+            # Currency Consistency: prefer the execution region's real
+            # native_cost + currency over the USD-normalized
+            # electricity_cost — a "$" cost must never be shown for an
+            # INR/AUD/SEK region.
+            _native_cost, _currency = dec.get("native_cost"), dec.get("currency")
+            _cost_display = (
+                f"{_native_cost:.4f} {_currency}" if _native_cost is not None and _currency
+                else f"{dec.get('electricity_cost', 0.0):.4f} USD"
+            )
+            st.markdown(render_metric_card("Cost", _cost_display, "Estimated"), unsafe_allow_html=True)
 
         # Specs & Scheduling Details
         col_s1, col_s2 = st.columns(2)

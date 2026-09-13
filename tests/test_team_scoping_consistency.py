@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from app.api.main import app
 from app.shared.config import settings
-from app.shared.database import SessionLocal
+from app.shared.database import get_db
 from app.shared.models import (
     APIKeyORM,
     ApprovalORM,
@@ -35,30 +35,31 @@ from app.shared.models import (
 )
 from app.shared.auth import create_access_token, hash_password
 
+# Final Consistency Audit: this file previously seeded/queried the real,
+# on-disk greenshift.db directly via app.shared.database.SessionLocal (the
+# same database a running dev server uses) — same root cause as
+# tests/test_login_hardening.py and tests/test_p0_auth_registration.py.
+# Adding a job-submission regression test here (which performs a real
+# client.post("/api/v1/jobs", ...) against the real DB) started tripping
+# cross-test pollution against this shared file (stale rows tripping FK
+# constraints / other tests' exact-job-set assertions). Fixed by switching
+# to the same isolated in-memory `db` fixture (see tests/conftest.py) every
+# other test file already uses, wired into the app via the standard get_db
+# override — no test assertions changed.
+
 
 @pytest.fixture(autouse=True)
-def clean_db(monkeypatch):
+def clean_db(db, monkeypatch):
     monkeypatch.setattr(settings, "auth_enabled", True)
-    app.dependency_overrides.clear()
-    with SessionLocal() as db:
-        db.query(ApprovalORM).delete()
-        db.query(APIKeyORM).delete()
-        db.query(ScheduleDecisionORM).delete()
-        db.query(JobORM).delete()
-        db.query(UserORM).delete()
-        db.query(TenantORM).delete()
-        db.add(TenantORM(id="tenant-teamscope", name="TeamScope Corp", is_active=True))
-        db.commit()
+
+    def _get_test_db():
+        yield db
+
+    app.dependency_overrides[get_db] = _get_test_db
+    db.add(TenantORM(id="tenant-teamscope", name="TeamScope Corp", is_active=True))
+    db.commit()
     yield
-    app.dependency_overrides.clear()
-    with SessionLocal() as db:
-        db.query(ApprovalORM).delete()
-        db.query(APIKeyORM).delete()
-        db.query(ScheduleDecisionORM).delete()
-        db.query(JobORM).delete()
-        db.query(UserORM).delete()
-        db.query(TenantORM).delete()
-        db.commit()
+    app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.fixture
@@ -111,31 +112,30 @@ def _make_job(db, job_id, tenant_id, team_id):
 
 
 @pytest.fixture
-def scoped_setup():
-    with SessionLocal() as db:
-        admin_headers = _make_user(
-            db, "ts_company_admin", "admin@teamscope.com",
-            UserRole.COMPANY_ADMIN, tenant_id="tenant-teamscope", team_id="team-red",
-        )
-        red_user_headers = _make_user(
-            db, "ts_red_user", "red@teamscope.com",
-            UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id="team-red",
-        )
-        blue_user_headers = _make_user(
-            db, "ts_blue_user", "blue@teamscope.com",
-            UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id="team-blue",
-        )
-        no_team_user_headers = _make_user(
-            db, "ts_noteam_user", "noteam@teamscope.com",
-            UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id=None,
-        )
-        plat_headers = _make_user(
-            db, "ts_plat_admin", "plat@greenshift.dev",
-            UserRole.PLATFORM_ADMIN, tenant_id=None, team_id=None,
-        )
+def scoped_setup(db):
+    admin_headers = _make_user(
+        db, "ts_company_admin", "admin@teamscope.com",
+        UserRole.COMPANY_ADMIN, tenant_id="tenant-teamscope", team_id="team-red",
+    )
+    red_user_headers = _make_user(
+        db, "ts_red_user", "red@teamscope.com",
+        UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id="team-red",
+    )
+    blue_user_headers = _make_user(
+        db, "ts_blue_user", "blue@teamscope.com",
+        UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id="team-blue",
+    )
+    no_team_user_headers = _make_user(
+        db, "ts_noteam_user", "noteam@teamscope.com",
+        UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id=None,
+    )
+    plat_headers = _make_user(
+        db, "ts_plat_admin", "plat@greenshift.dev",
+        UserRole.PLATFORM_ADMIN, tenant_id=None, team_id=None,
+    )
 
-        _make_job(db, "job-red-001", "tenant-teamscope", "team-red")
-        _make_job(db, "job-blue-001", "tenant-teamscope", "team-blue")
+    _make_job(db, "job-red-001", "tenant-teamscope", "team-red")
+    _make_job(db, "job-blue-001", "tenant-teamscope", "team-blue")
 
     return {
         "admin_headers": admin_headers,
@@ -238,49 +238,48 @@ class TestMissingTeamContextNeverBroadensAccess:
 
 
 @pytest.fixture
-def approvals_setup():
+def approvals_setup(db):
     """Two teams within one company, each with a decided (one pending, one
     declined) approval — mirrors app.api.routers.approval's own inline
     tenant/team scoping (a separate code path from get_tenant_jobs)."""
-    with SessionLocal() as db:
-        admin_headers = _make_user(
-            db, "appr_company_admin", "appr_admin@teamscope.com",
-            UserRole.COMPANY_ADMIN, tenant_id="tenant-teamscope", team_id="team-red",
+    admin_headers = _make_user(
+        db, "appr_company_admin", "appr_admin@teamscope.com",
+        UserRole.COMPANY_ADMIN, tenant_id="tenant-teamscope", team_id="team-red",
+    )
+    red_user_headers = _make_user(
+        db, "appr_red_user", "appr_red@teamscope.com",
+        UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id="team-red",
+    )
+
+    now = datetime.now(timezone.utc)
+
+    def _job_with_decision(job_id, team_id, decision):
+        job = JobORM(
+            job_id=job_id, team_id=team_id, tenant_id="tenant-teamscope",
+            company_name="TeamScope Corp", job_type="TRAINING", priority="HIGH",
+            status=JobStatus.PENDING_APPROVAL if decision is None else (
+                JobStatus.DECLINED if decision == "DECLINED" else JobStatus.APPROVED
+            ),
+            submitted_at=now, deadline=now + timedelta(hours=24),
+            runtime_minutes=60, power_kw=10.0, region="IN-TG",
+            container_image="python:3.10-slim",
         )
-        red_user_headers = _make_user(
-            db, "appr_red_user", "appr_red@teamscope.com",
-            UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id="team-red",
+        db.add(job)
+        db.flush()
+        sd = ScheduleDecisionORM(
+            job_id=job_id, selected_start=now + timedelta(hours=1), selected_end=now + timedelta(hours=2),
+            carbon_intensity=300.0, carbon_emission=1.0, electricity_cost=0.5, reason="test",
         )
+        db.add(sd)
+        db.flush()
+        if decision is not None:
+            db.add(ApprovalORM(job_id=job_id, schedule_decision_id=sd.id, decision=decision, approved_by="tester"))
+        db.commit()
 
-        now = datetime.now(timezone.utc)
-
-        def _job_with_decision(job_id, team_id, decision):
-            job = JobORM(
-                job_id=job_id, team_id=team_id, tenant_id="tenant-teamscope",
-                company_name="TeamScope Corp", job_type="TRAINING", priority="HIGH",
-                status=JobStatus.PENDING_APPROVAL if decision is None else (
-                    JobStatus.DECLINED if decision == "DECLINED" else JobStatus.APPROVED
-                ),
-                submitted_at=now, deadline=now + timedelta(hours=24),
-                runtime_minutes=60, power_kw=10.0, region="IN-TG",
-                container_image="python:3.10-slim",
-            )
-            db.add(job)
-            db.flush()
-            sd = ScheduleDecisionORM(
-                job_id=job_id, selected_start=now + timedelta(hours=1), selected_end=now + timedelta(hours=2),
-                carbon_intensity=300.0, carbon_emission=1.0, electricity_cost=0.5, reason="test",
-            )
-            db.add(sd)
-            db.flush()
-            if decision is not None:
-                db.add(ApprovalORM(job_id=job_id, schedule_decision_id=sd.id, decision=decision, approved_by="tester"))
-            db.commit()
-
-        _job_with_decision("job-appr-red-pending", "team-red", None)
-        _job_with_decision("job-appr-blue-pending", "team-blue", None)
-        _job_with_decision("job-appr-red-declined", "team-red", "DECLINED")
-        _job_with_decision("job-appr-blue-declined", "team-blue", "DECLINED")
+    _job_with_decision("job-appr-red-pending", "team-red", None)
+    _job_with_decision("job-appr-blue-pending", "team-blue", None)
+    _job_with_decision("job-appr-red-declined", "team-red", "DECLINED")
+    _job_with_decision("job-appr-blue-declined", "team-blue", "DECLINED")
 
     return {"admin_headers": admin_headers, "red_user_headers": red_user_headers}
 
@@ -325,3 +324,104 @@ class TestApprovalEndpointsCompanyAdminSeesAllTeams:
 
         history = client.get("/api/v1/approvals/history", headers=headers).json()
         assert {i["job_id"] for i in history} == {"job-appr-red-declined"}
+
+
+class TestNoTeamCompanyUserFailsClosedAcrossApprovalsImpactAndReport:
+    """Regression: get_pending_approvals/get_approval_history
+    (app.approval.service), the inline query in
+    api_get_declined_approvals (app.api.routers.approval),
+    compute_fleet_impact/compute_fleet_actual_impact
+    (app.analytics.fleet_impact/actual_impact), and generate_report/
+    generate_csv (app.trust.report) all previously used `if team_id:` to
+    apply their team filter — which is skipped entirely when a Company
+    User has no team assigned yet (team_id=None), so such a user fell
+    through to seeing/aggregating the WHOLE TENANT across every endpoint
+    instead of nothing. Fixed by applying the filter unconditionally
+    (team_restricted=True) for a team-restricted identity, matching
+    app.api.tenant_scope.get_tenant_jobs's already-correct pattern."""
+
+    def test_pending_approvals_no_team_user_sees_nothing(self, client, db, approvals_setup):
+        no_team_headers = _make_user(
+            db, "appr_no_team_user", "appr_noteam@teamscope.com",
+            UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id=None,
+        )
+        resp = client.get("/api/v1/approvals/pending", headers=no_team_headers)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_declined_approvals_no_team_user_sees_nothing(self, client, db, approvals_setup):
+        no_team_headers = _make_user(
+            db, "appr_no_team_user2", "appr_noteam2@teamscope.com",
+            UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id=None,
+        )
+        resp = client.get("/api/v1/approvals/declined", headers=no_team_headers)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_approval_history_no_team_user_sees_nothing(self, client, db, approvals_setup):
+        no_team_headers = _make_user(
+            db, "appr_no_team_user3", "appr_noteam3@teamscope.com",
+            UserRole.COMPANY_USER, tenant_id="tenant-teamscope", team_id=None,
+        )
+        resp = client.get("/api/v1/approvals/history", headers=no_team_headers)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_fleet_impact_no_team_user_sees_zero_jobs_not_the_tenant(self, client, scoped_setup):
+        resp = client.get("/api/v1/impact/fleet", headers=scoped_setup["no_team_user_headers"])
+        assert resp.status_code == 200
+        assert resp.json()["total_jobs_analyzed"] == 0
+
+    def test_fleet_actual_impact_no_team_user_sees_nothing(self, client, scoped_setup):
+        resp = client.get("/api/v1/impact/fleet/actual", headers=scoped_setup["no_team_user_headers"])
+        assert resp.status_code == 200
+
+    def test_report_summary_no_team_user_sees_zero_jobs_not_the_tenant(self, client, scoped_setup):
+        resp = client.get("/api/v1/report/summary", headers=scoped_setup["no_team_user_headers"])
+        assert resp.status_code == 200
+        assert resp.json()["jobs"] == []
+
+    def test_report_csv_no_team_user_sees_no_data(self, client, scoped_setup):
+        resp = client.get("/api/v1/report/csv", headers=scoped_setup["no_team_user_headers"])
+        assert resp.status_code == 200
+        assert "job-red-001" not in resp.text
+        assert "job-blue-001" not in resp.text
+
+
+class TestNoTeamCompanyUserCannotSubmitJobsForAnyTeam:
+    """Regression: POST /api/v1/jobs only validated body.team_id against
+    current_user.team_id inside `if ... and current_user.team_id:` — so a
+    Company User with no team assigned yet skipped the check entirely
+    (JobSubmitRequest.team_id is required/non-empty, and app.ingest.jobs.
+    submit_job writes body.team_id straight onto JobORM.team_id with no
+    other guard), letting them submit a job under ANY team_id string in
+    their tenant. Must be rejected (403) for every team_id, just like a
+    with-team user submitting for a team that isn't their own."""
+
+    def _submit_payload(self, team_id: str) -> dict:
+        now = datetime.now(timezone.utc)
+        return {
+            "team_id": team_id,
+            "job_type": "TRAINING",
+            "priority": "MEDIUM",
+            "runtime_minutes": 30,
+            "power_kw": 1.0,
+            "region": "IN-TG",
+            "container_image": "python:3.10-slim",
+            "deadline": (now + timedelta(hours=24)).isoformat(),
+        }
+
+    def test_no_team_user_cannot_submit_for_an_existing_team(self, client, scoped_setup):
+        resp = client.post(
+            "/api/v1/jobs", json=self._submit_payload("team-red"),
+            headers=scoped_setup["no_team_user_headers"],
+        )
+        assert resp.status_code == 403
+        assert "cannot submit jobs for team" in resp.json()["detail"].lower()
+
+    def test_no_team_user_cannot_submit_for_an_arbitrary_team_string(self, client, scoped_setup):
+        resp = client.post(
+            "/api/v1/jobs", json=self._submit_payload("totally-made-up-team"),
+            headers=scoped_setup["no_team_user_headers"],
+        )
+        assert resp.status_code == 403

@@ -178,10 +178,17 @@ def compute_fleet_impact(
     region_id: Optional[str] = None,
     job_type: Optional[str] = None,
     experiment_id: Optional[str] = None,
+    team_restricted: bool = False,
 ) -> FleetImpactReport:
     """
     Compute comprehensive fleet impact metrics from ScheduleDecisionORM and JobORM.
     Handles filters, null values, currency conversion, and distribution analysis.
+
+    team_restricted=True (a plain Company User, per
+    app.api.tenant_scope.is_team_restricted) applies the team filter
+    unconditionally — even when team_id is None — so a user with no team
+    assigned yet fails closed instead of silently getting fleet-wide figures
+    for the whole tenant.
     """
     filters_applied: Dict[str, str] = {}
     if tenant_id:
@@ -197,7 +204,9 @@ def compute_fleet_impact(
 
     if tenant_id:
         query = query.filter(JobORM.tenant_id == tenant_id)
-    if team_id:
+    if team_restricted:
+        query = query.filter(JobORM.team_id == team_id)
+    elif team_id:
         query = query.filter(JobORM.team_id == team_id)
     if region_id:
         query = query.filter(
@@ -212,7 +221,9 @@ def compute_fleet_impact(
     job_query = db.query(JobORM)
     if tenant_id:
         job_query = job_query.filter(JobORM.tenant_id == tenant_id)
-    if team_id:
+    if team_restricted:
+        job_query = job_query.filter(JobORM.team_id == team_id)
+    elif team_id:
         job_query = job_query.filter(JobORM.team_id == team_id)
     if region_id:
         job_query = job_query.filter(JobORM.region == region_id)

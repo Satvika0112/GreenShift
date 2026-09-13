@@ -23,6 +23,7 @@ from app.approval.service import (
     get_pending_approvals,
     resubmit_workload,
 )
+from app.api.tenant_scope import is_team_restricted
 from app.shared.auth import get_current_user, is_company_admin, is_platform_admin
 from app.shared.database import get_db
 from app.shared.rate_limiter import limiter
@@ -221,7 +222,10 @@ def api_get_pending_approvals(
             # to their own team — same rule as app.api.tenant_scope.
             effective_team_id = team_id if is_company_admin(current_user) else current_user.team_id
 
-        return get_pending_approvals(db, team_id=effective_team_id, tenant_id=effective_tenant_id)
+        return get_pending_approvals(
+            db, team_id=effective_team_id, tenant_id=effective_tenant_id,
+            team_restricted=is_team_restricted(current_user),
+        )
     except Exception as exc:
         logger.error(f"Error fetching pending approvals: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while retrieving pending approvals.")
@@ -257,11 +261,14 @@ def api_get_declined_approvals(
             if current_user.tenant_id:
                 query = query.filter(JobORM.tenant_id == current_user.tenant_id)
             # Company Admin sees every team in their company; a plain
-            # Company User is locked to their own team.
+            # Company User is locked to their own team — applied
+            # unconditionally (not "elif current_user.team_id:") so a user
+            # with no team assigned yet fails closed to zero rows instead of
+            # silently falling through to every team in the tenant.
             if is_company_admin(current_user):
                 if team_id:
                     query = query.filter(JobORM.team_id == team_id)
-            elif current_user.team_id:
+            else:
                 query = query.filter(JobORM.team_id == current_user.team_id)
 
         approvals = query.order_by(ApprovalORM.created_at.desc()).all()
@@ -308,7 +315,10 @@ def api_get_approval_history(
             effective_tenant_id = current_user.tenant_id
             effective_team_id = team_id if is_company_admin(current_user) else current_user.team_id
 
-        return get_approval_history(db, team_id=effective_team_id, tenant_id=effective_tenant_id)
+        return get_approval_history(
+            db, team_id=effective_team_id, tenant_id=effective_tenant_id,
+            team_restricted=is_team_restricted(current_user),
+        )
     except Exception as exc:
         logger.error(f"Error fetching approval history: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while retrieving approval history.")

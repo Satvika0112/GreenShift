@@ -465,17 +465,28 @@ def get_approval_history(
     db: Session,
     team_id: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    team_restricted: bool = False,
 ) -> List[ApprovalHistoryItem]:
     """
     Retrieve all decided (APPROVED or DECLINED) schedule approvals, most
     recent first, with the same tenant/team isolation as
     get_pending_approvals(). Reuses the existing ApprovalORM ledger — no new
     storage, no separate audit trail.
+
+    team_restricted=True (a plain Company User, per
+    app.api.tenant_scope.is_team_restricted) applies the team filter
+    unconditionally — even when team_id is None — so a user with no team
+    assigned yet fails closed to zero rows instead of silently falling
+    through to every team in the tenant. A Company Admin/Platform Admin
+    (team_restricted=False) may optionally narrow by team_id, but sees every
+    team when it's omitted.
     """
     query = db.query(ApprovalORM).join(ApprovalORM.job)
     if tenant_id:
         query = query.filter(JobORM.tenant_id == tenant_id)
-    if team_id:
+    if team_restricted:
+        query = query.filter(JobORM.team_id == team_id)
+    elif team_id:
         query = query.filter(JobORM.team_id == team_id)
 
     approvals = query.order_by(ApprovalORM.created_at.desc()).all()
@@ -505,11 +516,18 @@ def get_pending_approvals(
     db: Session,
     team_id: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    team_restricted: bool = False,
 ) -> List[PendingApprovalItem]:
     """
     Retrieve all jobs currently awaiting human approval (status == PENDING_APPROVAL)
     with their schedule decisions and converted local/UTC timestamps.
     Optionally filters by team_id and/or tenant_id.
+
+    team_restricted=True (a plain Company User, per
+    app.api.tenant_scope.is_team_restricted) applies the team filter
+    unconditionally — even when team_id is None — so a user with no team
+    assigned yet fails closed to zero rows instead of silently falling
+    through to every team in the tenant.
     """
     query = (
         db.query(JobORM)
@@ -518,7 +536,9 @@ def get_pending_approvals(
     )
     if tenant_id:
         query = query.filter(JobORM.tenant_id == tenant_id)
-    if team_id:
+    if team_restricted:
+        query = query.filter(JobORM.team_id == team_id)
+    elif team_id:
         query = query.filter(JobORM.team_id == team_id)
 
     jobs = query.order_by(JobORM.submitted_at.desc()).all()

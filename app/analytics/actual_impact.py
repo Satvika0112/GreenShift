@@ -173,11 +173,18 @@ def compute_actual_impact(db: Session, job_id: str) -> Optional[ActualImpactResu
 
 def compute_fleet_actual_impact(
     db: Session, tenant_id: Optional[str] = None, team_id: Optional[str] = None,
+    team_restricted: bool = False,
 ) -> FleetActualImpactSummary:
     """Compute actual vs estimated across all jobs with recorded actual execution
     times. `tenant_id`/`team_id` scope the fleet to one company/team — the
     caller (see app.api.routers.impact) is responsible for deriving these
-    from the authenticated identity, never from unauthenticated client input."""
+    from the authenticated identity, never from unauthenticated client input.
+
+    team_restricted=True (a plain Company User, per
+    app.api.tenant_scope.is_team_restricted) applies the team filter
+    unconditionally — even when team_id is None — so a user with no team
+    assigned yet fails closed instead of silently getting fleet-wide figures
+    for the whole tenant."""
     query = (
         db.query(KubernetesExecutionORM)
         .join(JobORM, JobORM.job_id == KubernetesExecutionORM.job_id)
@@ -185,7 +192,9 @@ def compute_fleet_actual_impact(
     )
     if tenant_id:
         query = query.filter(JobORM.tenant_id == tenant_id)
-    if team_id:
+    if team_restricted:
+        query = query.filter(JobORM.team_id == team_id)
+    elif team_id:
         query = query.filter(JobORM.team_id == team_id)
     executions = query.all()
 

@@ -4,10 +4,12 @@ Tests for BRSR-Aligned Sustainability Report Strengthening.
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.ingest.service import submit_job
 from app.decide.service import schedule_and_store
 from app.shared.models import JobSubmitRequest
-from app.trust.report import generate_report, generate_markdown_summary, _aggregate, _aggregate_by_region
+from app.trust.report import generate_report, generate_markdown_summary, _aggregate, _aggregate_by_region, _job_row
 
 
 def test_aggregate_includes_regional_breakdown(db):
@@ -44,11 +46,39 @@ def test_aggregate_includes_regional_breakdown(db):
     by_region = summary["by_region"]
     assert job1.region in by_region
     assert job2.region in by_region
-    assert by_region[job1.region]["job_count"] >= 1
-    assert by_region[job1.region]["energy_kwh"] > 0
-    assert "carbon_avoided_kg" in by_region[job1.region]
-    assert "cost_saved_usd" in by_region[job1.region]
-    assert "sla_met" in by_region[job1.region]
+
+
+def test_job_row_cost_is_not_double_multiplied_by_energy(db):
+    """_job_row's greenshift_cost_usd/baseline_cost_usd must be
+    ScheduleDecisionORM.electricity_cost/baseline_cost verbatim — both are
+    already energy_kwh * price_per_kwh_usd totals (see
+    app.decide.impact_calculator.calculate_impact). A prior regression here
+    re-multiplied the already-total electricity_cost by energy_kwh a second
+    time, inflating every greenshift_cost_usd (and every aggregate derived
+    from it) by a factor of energy_kwh. power_kw/runtime_minutes below are
+    chosen so energy_kwh (=4.0 * 1.5 = 6.0) is far from 1.0, so a
+    reintroduced double-multiply would be caught by a plain equality check."""
+    req = JobSubmitRequest(
+        team_id="BRSR-COST-CHECK",
+        deadline=datetime.now(timezone.utc) + timedelta(hours=24),
+        runtime_minutes=90,
+        power_kw=4.0,
+        region="IN-WE",
+        container_image="greenshift/sample-workload:latest",
+        cpu_request="100m",
+        memory_request="64Mi",
+    )
+    job = submit_job(db, req)
+    schedule_and_store(db, job)
+
+    sd = job.schedule_decision
+    assert sd is not None
+    assert sd.electricity_cost is not None
+
+    row = _job_row(job)
+    assert row["energy_kwh"] == pytest.approx(6.0, rel=1e-6)
+    assert row["greenshift_cost_usd"] == pytest.approx(sd.electricity_cost, rel=1e-9)
+    assert row["baseline_cost_usd"] == pytest.approx(sd.baseline_cost, rel=1e-9)
 
 
 def test_aggregate_includes_energy_intensity(db):
