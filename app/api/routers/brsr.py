@@ -227,17 +227,22 @@ def api_get_report_audit_trail(report_id: int, db: Session = Depends(get_db), cu
         _map_error(exc)
 
     from app.shared.models import AuditEventORM, EventType
+    from app.shared.timezone import ensure_utc
     brsr_event_types = [e for e in EventType if e.value.startswith("BRSR_")]
     rows = (
         db.query(AuditEventORM)
-        .filter(AuditEventORM.event_type.in_(brsr_event_types))
+        # Narrowed to this report's own tenant BEFORE the limit — otherwise
+        # a busy multi-tenant deployment's other companies' BRSR events
+        # could push this (already tenant-authorized, via get_report above)
+        # report's own older events out of the 200-row window.
+        .filter(AuditEventORM.event_type.in_(brsr_event_types), AuditEventORM.tenant_id == report.tenant_id)
         .order_by(AuditEventORM.sequence.desc())
         .limit(200)
         .all()
     )
     return [
         {
-            "event_id": r.event_id, "timestamp": r.timestamp, "event_type": r.event_type.value,
+            "event_id": r.event_id, "timestamp": ensure_utc(r.timestamp), "event_type": r.event_type.value,
             "sequence": r.sequence, "payload": r.payload,
             "actor_username": r.actor_username, "actor_role": r.actor_role, "actor_type": r.actor_type,
             "request_id": r.request_id, "source_service": r.source_service,

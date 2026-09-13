@@ -5,10 +5,14 @@ Tests for BRSR-Aligned Sustainability Report Strengthening.
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.api.main import app
 from app.ingest.service import submit_job
 from app.decide.service import schedule_and_store
-from app.shared.models import JobSubmitRequest
+from app.shared.auth import create_access_token, hash_password
+from app.shared.database import get_db
+from app.shared.models import JobORM, JobStatus, JobSubmitRequest, TenantORM, UserORM, UserRole
 from app.trust.report import generate_report, generate_markdown_summary, _aggregate, _aggregate_by_region, _job_row
 
 
@@ -188,3 +192,164 @@ def test_markdown_includes_methodology_section(db):
     assert "Limitations" in md
     assert "## Regional Breakdown" in md
     assert "BRSR-Aligned" in md
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tenant scoping for the actual HTTP endpoints (GET /report/summary, /report/csv)
+#
+# Everything above this line calls generate_report(db)/_aggregate(...) directly
+# with no tenant_id, so it never exercises app/api/routers/report.py's own
+# 403-on-tenant-mismatch and team_id-clamping logic — only manual code reading
+# guaranteed that behavior was correct. These tests close that gap.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def report_client(db):
+    def _get_test_db():
+        yield db
+
+    app.dependency_overrides[get_db] = _get_test_db
+    yield TestClient(app)
+    app.dependency_overrides.pop(get_db, None)
+
+
+def _report_user(db, username, email, role, tenant_id=None, team_id=None):
+    u = UserORM(
+        username=username,
+        email=email,
+        hashed_password=hash_password("Pass123!"),
+        role=role,
+        tenant_id=tenant_id,
+        team_id=team_id,
+        is_active=True,
+    )
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    token = create_access_token(
+        user_id=u.id, username=u.username,
+        role=u.role.value if hasattr(u.role, "value") else str(u.role),
+        tenant_id=u.tenant_id, team_id=u.team_id,
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _report_job(db, job_id, tenant_id, team_id):
+    now = datetime.now(timezone.utc)
+    db.add(JobORM(
+        job_id=job_id,
+        team_id=team_id,
+        tenant_id=tenant_id,
+        company_name="ReportScope Corp",
+        job_type="TRAINING",
+        priority="HIGH",
+        status=JobStatus.SUBMITTED,
+        submitted_at=now,
+        deadline=now + timedelta(hours=24),
+        runtime_minutes=60,
+        power_kw=10.0,
+        region="IN-TG",
+        container_image="python:3.10-slim",
+    ))
+    db.commit()
+
+
+@pytest.fixture
+def report_scoped_setup(db):
+    db.add_all([
+        TenantORM(id="tenant-report-a", name="Report Corp A", is_active=True),
+        TenantORM(id="tenant-report-b", name="Report Corp B", is_active=True),
+    ])
+    db.commit()
+
+    admin_a = _report_user(db, "rpt_admin_a", "admin_a@report.io", UserRole.COMPANY_ADMIN,
+                            tenant_id="tenant-report-a", team_id="team-red")
+    user_a_red = _report_user(db, "rpt_user_a_red", "red_a@report.io", UserRole.COMPANY_USER,
+                               tenant_id="tenant-report-a", team_id="team-red")
+    user_a_blue = _report_user(db, "rpt_user_a_blue", "blue_a@report.io", UserRole.COMPANY_USER,
+                                tenant_id="tenant-report-a", team_id="team-blue")
+    platform_admin = _report_user(db, "rpt_platform_admin", "pa@report.io", UserRole.PLATFORM_ADMIN,
+                                   tenant_id=None, team_id=None)
+
+    _report_job(db, "rpt-job-a-red", "tenant-report-a", "team-red")
+    _report_job(db, "rpt-job-a-blue", "tenant-report-a", "team-blue")
+    _report_job(db, "rpt-job-b", "tenant-report-b", "team-only")
+
+    return {
+        "admin_a": admin_a,
+        "user_a_red": user_a_red,
+        "user_a_blue": user_a_blue,
+        "platform_admin": platform_admin,
+    }
+
+
+class TestReportSummaryTenantScoping:
+    def test_company_admin_cannot_request_another_tenants_report(self, report_client, report_scoped_setup):
+        resp = report_client.get(
+            "/report/summary?tenant_id=tenant-report-b",
+            headers=report_scoped_setup["admin_a"],
+        )
+        assert resp.status_code == 403
+
+    def test_company_admin_sees_only_own_tenants_jobs(self, report_client, report_scoped_setup):
+        resp = report_client.get("/report/summary", headers=report_scoped_setup["admin_a"])
+        assert resp.status_code == 200
+        job_ids = {j["job_id"] for j in resp.json()["jobs"]}
+        assert "rpt-job-a-red" in job_ids
+        assert "rpt-job-a-blue" in job_ids
+        assert "rpt-job-b" not in job_ids
+
+    def test_company_user_forged_tenant_id_is_ignored(self, report_client, report_scoped_setup):
+        """A Company User's own tenant_id always matches, so the request
+        isn't rejected — but the forged tenant_id must have no effect on
+        which tenant's data is actually returned."""
+        resp = report_client.get(
+            "/report/summary?tenant_id=tenant-report-b",
+            headers=report_scoped_setup["user_a_red"],
+        )
+        assert resp.status_code == 403
+
+    def test_company_user_team_id_is_clamped_to_own_team(self, report_client, report_scoped_setup):
+        """A Company User in team-red requesting team_id=team-blue must still
+        only see their own team's jobs — team_id is never client-controlled
+        for a non-Company-Admin, same fix as /impact/fleet."""
+        resp = report_client.get(
+            "/report/summary?team_id=team-blue",
+            headers=report_scoped_setup["user_a_red"],
+        )
+        assert resp.status_code == 200
+        job_ids = {j["job_id"] for j in resp.json()["jobs"]}
+        assert "rpt-job-a-red" in job_ids
+        assert "rpt-job-a-blue" not in job_ids
+
+    def test_platform_admin_can_filter_by_any_tenant(self, report_client, report_scoped_setup):
+        resp = report_client.get(
+            "/report/summary?tenant_id=tenant-report-b",
+            headers=report_scoped_setup["platform_admin"],
+        )
+        assert resp.status_code == 200
+        job_ids = {j["job_id"] for j in resp.json()["jobs"]}
+        assert job_ids == {"rpt-job-b"}
+
+
+class TestReportCsvTenantScoping:
+    def test_company_admin_cannot_request_another_tenants_csv(self, report_client, report_scoped_setup):
+        resp = report_client.get(
+            "/report/csv?tenant_id=tenant-report-b",
+            headers=report_scoped_setup["admin_a"],
+        )
+        assert resp.status_code == 403
+
+    def test_company_user_team_id_is_clamped_in_csv(self, report_client, report_scoped_setup):
+        resp = report_client.get(
+            "/report/csv?team_id=team-blue",
+            headers=report_scoped_setup["user_a_red"],
+        )
+        assert resp.status_code == 200
+        assert "rpt-job-a-red" in resp.text
+        assert "rpt-job-a-blue" not in resp.text
+
+    def test_csv_never_leaks_another_tenants_job_ids(self, report_client, report_scoped_setup):
+        resp = report_client.get("/report/csv", headers=report_scoped_setup["admin_a"])
+        assert resp.status_code == 200
+        assert "rpt-job-b" not in resp.text

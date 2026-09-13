@@ -26,6 +26,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from app.shared.timezone import ensure_utc
+
 _METHOD_SCOPE2 = (
     "Sum of ScheduleDecisionORM.carbon_emission (kg CO2) for jobs of this tenant "
     "submitted within the reporting period, converted to tCO2e (÷1000). Covers "
@@ -67,8 +69,8 @@ def _scope2_emissions_tco2e(db: Session, tenant_id: str, period_start: datetime,
             "job_count": len(job_ids),
             "job_ids": job_ids[:50],  # cap payload size; full list is derivable from the period filter itself
             "total_kg_co2": round(total_kg, 4),
-            "reporting_period_start": period_start.isoformat(),
-            "reporting_period_end": period_end.isoformat(),
+            "reporting_period_start": ensure_utc(period_start).isoformat(),
+            "reporting_period_end": ensure_utc(period_end).isoformat(),
         },
     }
 
@@ -92,8 +94,8 @@ def _energy_consumption_kwh(db: Session, tenant_id: str, period_start: datetime,
             "methodology": _METHOD_ENERGY,
             "job_count": len(job_ids),
             "job_ids": job_ids[:50],
-            "reporting_period_start": period_start.isoformat(),
-            "reporting_period_end": period_end.isoformat(),
+            "reporting_period_start": ensure_utc(period_start).isoformat(),
+            "reporting_period_end": ensure_utc(period_end).isoformat(),
         },
     }
 
@@ -153,8 +155,8 @@ def _energy_intensity_kwh_per_job(db: Session, tenant_id: str, period_start: dat
             "methodology": _METHOD_ENERGY_INTENSITY,
             "total_jobs": totals["total_jobs"],
             "total_energy_kwh": round(totals["total_energy_kwh"], 4),
-            "reporting_period_start": period_start.isoformat(),
-            "reporting_period_end": period_end.isoformat(),
+            "reporting_period_start": ensure_utc(period_start).isoformat(),
+            "reporting_period_end": ensure_utc(period_end).isoformat(),
         },
     }
 
@@ -169,8 +171,8 @@ def _emission_intensity_kg_per_kwh(db: Session, tenant_id: str, period_start: da
             "methodology": _METHOD_EMISSION_INTENSITY,
             "total_carbon_kg": round(totals["total_carbon_kg"], 4),
             "total_energy_kwh": round(totals["total_energy_kwh"], 4),
-            "reporting_period_start": period_start.isoformat(),
-            "reporting_period_end": period_end.isoformat(),
+            "reporting_period_start": ensure_utc(period_start).isoformat(),
+            "reporting_period_end": ensure_utc(period_end).isoformat(),
         },
     }
 

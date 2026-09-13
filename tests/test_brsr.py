@@ -415,6 +415,69 @@ class TestTenantIsolationAndRBAC:
         )
         assert res.status_code == 422
 
+    def test_direct_api_cross_tenant_idor_sweep_across_every_report_scoped_endpoint(self, db, two_tenants):
+        """Final BRSR Hardening Pass: the router-level wiring for every
+        report_id-scoped endpoint beyond plain GET /reports/{id} was
+        previously verified only at the service-layer (get_report/
+        require_edit_access unit calls), never through an actual HTTP
+        request from a different tenant's token. Sweep every one to prove
+        the router's own Depends()/get_report() wiring — not just the
+        service function in isolation — rejects cross-tenant access."""
+        start, end = _period()
+        admin_a = two_tenants["admin_a"]
+        report = create_report(db, "tenant-brsr-a", "2025-26", start, end, "BRSR-2023", admin_a)
+        token_b = get_token(two_tenants["admin_b"])
+        headers_b = {"Authorization": f"Bearer {token_b}"}
+
+        # Read-only endpoints: cross-tenant -> 404 (never leak existence).
+        assert client.get(f"/brsr/reports/{report.id}/overview", headers=headers_b).status_code == 404
+        assert client.get(f"/brsr/reports/{report.id}/metrics", headers=headers_b).status_code == 404
+        assert client.get(f"/brsr/reports/{report.id}/assessment", headers=headers_b).status_code == 404
+        assert client.get(f"/brsr/reports/{report.id}/validation", headers=headers_b).status_code == 404
+        assert client.get(f"/brsr/reports/{report.id}/audit", headers=headers_b).status_code == 404
+        assert client.get(f"/brsr/reports/{report.id}/export", params={"format": "json"}, headers=headers_b).status_code == 404
+
+        # Mutating endpoints: cross-tenant -> 404 (view-access check runs
+        # before the edit-access check, so a wrong-tenant caller never even
+        # learns the report exists to be told they can't edit it).
+        assert client.put(
+            f"/brsr/reports/{report.id}/metrics/SEC_A_CSR_AMOUNT_SPENT", headers=headers_b, json={"value": 1},
+        ).status_code == 404
+        assert client.post(f"/brsr/reports/{report.id}/apply-greenshift-data", headers=headers_b).status_code == 404
+        assert client.post(f"/brsr/reports/{report.id}/validate", headers=headers_b).status_code == 404
+        assert client.post(
+            f"/brsr/reports/{report.id}/transition", headers=headers_b, json={"target_status": "DATA_COLLECTION"},
+        ).status_code == 404
+        assert client.put(f"/brsr/reports/{report.id}/assessment", headers=headers_b, json={"scope": "x"}).status_code == 404
+
+    def test_direct_api_forged_tenant_id_in_create_report_body_has_no_effect(self, db, two_tenants):
+        """BrsrReportCreateRequest has no tenant_id field at all — Pydantic
+        silently drops it, so the report is always created under the
+        caller's own tenant regardless of what's in the body."""
+        admin_a = two_tenants["admin_a"]
+        token = get_token(admin_a)
+        res = client.post(
+            "/brsr/reports", headers={"Authorization": f"Bearer {token}"},
+            json={
+                "financial_year": "2025-26",
+                "reporting_period_start": "2025-04-01T00:00:00Z",
+                "reporting_period_end": "2026-03-31T00:00:00Z",
+                "tenant_id": "tenant-brsr-b",
+            },
+        )
+        assert res.status_code == 201
+        assert res.json()["tenant_id"] == "tenant-brsr-a"
+
+    def test_direct_api_list_reports_ignores_forged_tenant_id_for_non_platform_admin(self, db, two_tenants):
+        start, end = _period()
+        create_report(db, "tenant-brsr-a", "2025-26", start, end, "BRSR-2023", two_tenants["admin_a"])
+        create_report(db, "tenant-brsr-b", "2025-26", start, end, "BRSR-2023", two_tenants["admin_b"])
+        token_a = get_token(two_tenants["admin_a"])
+        res = client.get("/brsr/reports", params={"tenant_id": "tenant-brsr-b"}, headers={"Authorization": f"Bearer {token_a}"})
+        assert res.status_code == 200
+        tenant_ids = {r["tenant_id"] for r in res.json()}
+        assert tenant_ids == {"tenant-brsr-a"}
+
 
 class TestGreenShiftDerivedCalculations:
     def test_scope2_and_energy_derived_from_real_jobs(self, db, two_tenants):
@@ -788,3 +851,86 @@ class TestReportGeneration:
         assert res.status_code == 200
         events = db.query(AuditEventORM).filter(AuditEventORM.event_type == EventType.BRSR_REPORT_EXPORTED).all()
         assert any(e.payload.get("report_id") == report.id for e in events)
+
+
+class TestBrsrAuditTrailEndpoint:
+    """GET /brsr/reports/{id}/audit — previously had zero test coverage at all."""
+
+    def test_returns_only_this_reports_own_events(self, db, two_tenants):
+        start, end = _period()
+        admin_a, admin_b = two_tenants["admin_a"], two_tenants["admin_b"]
+        report_a = create_report(db, "tenant-brsr-a", "2025-26", start, end, "BRSR-2023", admin_a)
+        report_b = create_report(db, "tenant-brsr-b", "2025-26", start, end, "BRSR-2023", admin_b)
+        token_a = get_token(admin_a)
+
+        res = client.get(f"/brsr/reports/{report_a.id}/audit", headers={"Authorization": f"Bearer {token_a}"})
+        assert res.status_code == 200
+        events = res.json()
+        assert len(events) >= 1
+        assert all(e["payload"].get("report_id") == report_a.id for e in events)
+        assert not any(e["payload"].get("report_id") == report_b.id for e in events)
+
+    def test_cross_tenant_admin_cannot_view_audit_trail(self, db, two_tenants):
+        start, end = _period()
+        admin_a = two_tenants["admin_a"]
+        report = create_report(db, "tenant-brsr-a", "2025-26", start, end, "BRSR-2023", admin_a)
+        token_b = get_token(two_tenants["admin_b"])
+        res = client.get(f"/brsr/reports/{report.id}/audit", headers={"Authorization": f"Bearer {token_b}"})
+        assert res.status_code == 404
+
+    def test_audit_trail_timestamps_are_utc_safe(self, db, two_tenants):
+        """Regression proof for the ensure_utc() fix applied to this
+        endpoint — SQLite (this test's DB) silently drops tzinfo on read;
+        without ensure_utc() this assertion fails."""
+        start, end = _period()
+        admin_a = two_tenants["admin_a"]
+        report = create_report(db, "tenant-brsr-a", "2025-26", start, end, "BRSR-2023", admin_a)
+        token = get_token(admin_a)
+        res = client.get(f"/brsr/reports/{report.id}/audit", headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 200
+        events = res.json()
+        assert len(events) >= 1
+        for e in events:
+            raw = e["timestamp"]
+            assert raw.endswith("+00:00") or raw.endswith("Z"), f"offset-less timestamp: {raw!r}"
+
+
+class TestBrsrTimezoneConsistency:
+    """Regression proof for ensure_utc() applied to every Brsr*Response
+    model (BrsrReportResponse/BrsrValidationRunResponse/etc.) — without the
+    field_validator fix, these assertions fail under SQLite."""
+
+    def test_report_response_timestamps_are_utc_safe(self, db, two_tenants):
+        start, end = _period()
+        admin_a = two_tenants["admin_a"]
+        report = create_report(db, "tenant-brsr-a", "2025-26", start, end, "BRSR-2023", admin_a)
+        token = get_token(admin_a)
+
+        res = client.get(f"/brsr/reports/{report.id}", headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 200
+        body = res.json()
+        for field in ("reporting_period_start", "reporting_period_end", "created_at"):
+            raw = body[field]
+            assert raw.endswith("+00:00") or raw.endswith("Z"), f"{field} offset-less: {raw!r}"
+
+    def test_validation_run_response_timestamp_is_utc_safe(self, db, two_tenants):
+        start, end = _period()
+        admin_a = two_tenants["admin_a"]
+        report = create_report(db, "tenant-brsr-a", "2025-26", start, end, "BRSR-2023", admin_a)
+        token = get_token(admin_a)
+
+        res = client.post(f"/brsr/reports/{report.id}/validate", headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 200
+        raw = res.json()["run_at"]
+        assert raw.endswith("+00:00") or raw.endswith("Z"), f"run_at offset-less: {raw!r}"
+
+    def test_json_export_period_timestamps_are_utc_safe(self, db, two_tenants):
+        report = TestReportGeneration()._approved_report(db, two_tenants)
+        token = get_token(two_tenants["admin_a"])
+        res = client.get(f"/brsr/reports/{report.id}/export", params={"format": "json"}, headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 200
+        meta = res.json()["metadata"]
+        for field in ("reporting_period_start", "reporting_period_end", "generated_at"):
+            raw = meta[field]
+            assert raw is not None
+            assert raw.endswith("+00:00") or raw.endswith("Z"), f"{field} offset-less: {raw!r}"

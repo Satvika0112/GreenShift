@@ -40,6 +40,7 @@ from app.shared.models import (
     ScheduleDecisionORM,
 )
 from app.trust.ledger import verify_chain
+from app.shared.timezone import ensure_utc
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +110,8 @@ def _job_row(job: JobORM) -> dict:
         "team_id":              job.team_id,
         "status":               job.status.value,
         "region":               job.region,
-        "submitted_at":         job.submitted_at.isoformat() if job.submitted_at else None,
-        "deadline":             job.deadline.isoformat() if job.deadline else None,
+        "submitted_at":         ensure_utc(job.submitted_at).isoformat() if job.submitted_at else None,
+        "deadline":             ensure_utc(job.deadline).isoformat() if job.deadline else None,
 
         # Workload specs
         "runtime_minutes":      job.runtime_minutes,
@@ -122,8 +123,8 @@ def _job_row(job: JobORM) -> dict:
         "carbon_budget_kg":     job.carbon_budget_kg,
 
         # Schedule decision
-        "selected_start":       sd.selected_start.isoformat() if sd else None,
-        "selected_end":         sd.selected_end.isoformat() if sd else None,
+        "selected_start":       ensure_utc(sd.selected_start).isoformat() if sd else None,
+        "selected_end":         ensure_utc(sd.selected_end).isoformat() if sd else None,
         "carbon_intensity_gco2_kwh": sd.carbon_intensity if sd else None,
         # sd.electricity_cost is already a TOTAL (energy_kwh * price_per_kwh_usd
         # — see app.shared.models.ScheduleDecision.electricity_cost), so the
@@ -162,9 +163,9 @@ def _job_row(job: JobORM) -> dict:
         "k8s_job_name":         ke.kubernetes_job_name if ke else None,
         "k8s_namespace":        ke.kubernetes_namespace if ke else None,
         "pod_name":             ke.pod_name if ke else None,
-        "planned_start":        ke.planned_start.isoformat() if ke else None,
-        "actual_start":         ke.actual_start.isoformat() if ke and ke.actual_start else None,
-        "actual_end":           ke.actual_end.isoformat() if ke and ke.actual_end else None,
+        "planned_start":        ensure_utc(ke.planned_start).isoformat() if ke and ke.planned_start else None,
+        "actual_start":         ensure_utc(ke.actual_start).isoformat() if ke and ke.actual_start else None,
+        "actual_end":           ensure_utc(ke.actual_end).isoformat() if ke and ke.actual_end else None,
         "k8s_status":           ke.k8s_status if ke else None,
 
         # SLA

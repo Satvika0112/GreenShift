@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.brsr.service import compute_overview, get_metric_values
 from app.shared.models import BrsrAssessmentORM, BrsrCompanyProfileORM, BrsrMetricDefinitionORM, BrsrReportORM
+from app.shared.timezone import ensure_utc
 
 ASSURANCE_DISCLAIMER = (
     "GreenShift prepares traceable ESG information for reporting; it does not "
@@ -90,7 +91,10 @@ def generate_json(db: Session, report: BrsrReportORM) -> Dict[str, Any]:
     profile = ctx["company_profile"]
 
     def _dt(v):
-        return v.isoformat() if isinstance(v, datetime) else v
+        # ensure_utc() guards against SQLite (dev/test) silently dropping
+        # tzinfo on read — without it an exported timestamp would lack a UTC
+        # offset and be ambiguous to whatever reads this JSON export.
+        return ensure_utc(v).isoformat() if isinstance(v, datetime) else v
 
     return {
         "metadata": {

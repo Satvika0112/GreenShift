@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.shared.timezone import ensure_utc
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -2103,6 +2105,11 @@ class BrsrCompanyProfileResponse(BaseModel):
     source_type: str
     updated_at: Optional[datetime] = None
 
+    @field_validator("updated_at", mode="before")
+    @classmethod
+    def _normalize_utc(cls, v):
+        return ensure_utc(v) if isinstance(v, datetime) else v
+
 
 class BrsrCompanyProfileUpdateRequest(BaseModel):
     """
@@ -2155,6 +2162,19 @@ class BrsrReportResponse(BaseModel):
     validated_at: Optional[datetime] = None
     approved_at: Optional[datetime] = None
     generated_at: Optional[datetime] = None
+
+    # ensure_utc() guards against SQLite (dev/test) silently dropping tzinfo
+    # on read — without it a browser's `new Date(...)` would reinterpret an
+    # offset-less ISO string in its own local timezone (Time Consistency
+    # Hardening, extended to the BRSR response surface).
+    @field_validator(
+        "reporting_period_start", "reporting_period_end", "created_at",
+        "updated_at", "validated_at", "approved_at", "generated_at",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_utc(cls, v):
+        return ensure_utc(v) if isinstance(v, datetime) else v
 
 
 class BrsrStatusTransitionRequest(BaseModel):
@@ -2223,6 +2243,11 @@ class BrsrMetricValueResponse(BaseModel):
     conversion_source: Optional[str] = None
     converted_value: Optional[float] = None
     updated_at: Optional[datetime] = None
+
+    @field_validator("exchange_rate_date", "updated_at", mode="before")
+    @classmethod
+    def _normalize_utc(cls, v):
+        return ensure_utc(v) if isinstance(v, datetime) else v
 
 
 class BrsrMetricValueWithDefinition(BrsrMetricValueResponse):
@@ -2299,6 +2324,11 @@ class BrsrValidationRunResponse(BaseModel):
     info_count: int
     issues: List[BrsrValidationIssueResponse] = []
 
+    @field_validator("run_at", mode="before")
+    @classmethod
+    def _normalize_utc(cls, v):
+        return ensure_utc(v) if isinstance(v, datetime) else v
+
 
 class BrsrAssessmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -2313,6 +2343,11 @@ class BrsrAssessmentResponse(BaseModel):
     evidence_reference: Optional[str] = None
     source_type: str
     updated_at: Optional[datetime] = None
+
+    @field_validator("assessment_date", "updated_at", mode="before")
+    @classmethod
+    def _normalize_utc(cls, v):
+        return ensure_utc(v) if isinstance(v, datetime) else v
 
 
 class BrsrAssessmentUpdateRequest(BaseModel):
