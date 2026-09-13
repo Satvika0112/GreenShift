@@ -310,7 +310,14 @@ def test_email_health_configured_when_enabled_with_host():
         result = check_email_health()
     finally:
         settings.smtp_enabled, settings.smtp_host = original_enabled, original_host
-    assert result == {"status": "configured"}
+    assert result["status"] == "configured"
+    # P0 Email Delivery Functionalization Pass: delivery-queue visibility —
+    # read from the already-persisted NotificationORM columns, no new table.
+    assert "pending_count" in result
+    assert "failed_count" in result
+    assert "last_sent_at" in result
+    assert isinstance(result["pending_count"], int)
+    assert isinstance(result["failed_count"], int)
 
 
 def test_health_endpoint_includes_email_delivery_component_without_credentials():

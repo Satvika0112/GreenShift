@@ -19,6 +19,7 @@ import { sustainabilityApi, monitoringApi, notificationsApi, companiesApi } from
 import { NotificationPreferencesUpdate, CompanyProfile, CompanyProfileUpdate } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 import { useRealtimeNotifications } from '../context/RealtimeNotificationContext';
+import { formatRegionalDateTime } from '../utils/dateTime';
 
 const PREFERENCE_TOGGLES: { field: keyof NotificationPreferencesUpdate; label: string; helper: string }[] = [
   { field: 'email_workload', label: 'Workload', helper: 'Submitted, cancelled' },
@@ -446,19 +447,33 @@ export const SettingsPage: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.85rem' }}>
             <span style={{ color: 'var(--text-secondary)' }}>Email Delivery</span>
             {(() => {
-              const emailStatus = healthStatus?.components?.email_delivery?.status;
+              const emailDelivery = healthStatus?.components?.email_delivery;
+              const emailStatus = emailDelivery?.status;
               const label =
                 emailStatus === 'configured' ? 'CONFIGURED' :
                 emailStatus === 'disabled' ? 'DISABLED (SMTP_ENABLED=false)' :
                 emailStatus === 'unconfigured' ? 'NOT CONFIGURED (SMTP_HOST unset)' :
                 'UNKNOWN';
               const color = emailStatus === 'configured' ? '#10b981' : 'var(--text-muted)';
+              const pending = emailDelivery?.pending_count;
+              const failed = emailDelivery?.failed_count;
+              const lastSent = emailDelivery?.last_sent_at;
               return (
                 <span style={{ fontWeight: 600, color, textAlign: 'right' }}>
                   {label}
                   <div style={{ fontSize: '0.68rem', fontWeight: 400, color: 'var(--text-muted)' }}>
                     In-app notifications always work regardless.
                   </div>
+                  {(pending !== undefined || failed !== undefined) && (
+                    <div style={{ fontSize: '0.68rem', fontWeight: 400, color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                      {pending !== undefined && <>Pending: {pending}</>}
+                      {pending !== undefined && failed !== undefined && ' · '}
+                      {failed !== undefined && (
+                        <span style={{ color: failed > 0 ? '#f59e0b' : 'var(--text-muted)' }}>Failed: {failed}</span>
+                      )}
+                      {lastSent && <> · Last sent: {formatRegionalDateTime(lastSent, 'UTC')}</>}
+                    </div>
+                  )}
                 </span>
               );
             })()}

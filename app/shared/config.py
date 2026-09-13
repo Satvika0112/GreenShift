@@ -211,7 +211,14 @@ class Settings(BaseSettings):
     smtp_username: str = Field(default="")
     smtp_password: str = Field(default="")
     smtp_use_tls: bool = Field(default=True)
-    smtp_from_address: str = Field(default="noreply@greenshift.local")
+    smtp_from_address: str = Field(
+        default="",
+        description="Verified sender address for outbound notification email. "
+        "Falls back to SMTP_USERNAME at send time when unset (see "
+        "app.notify.email.send_email) — most SMTP providers reject a From "
+        "address that isn't the authenticated account or a verified alias, "
+        "so a fake/unowned domain default would silently fail delivery.",
+    )
     notification_email_max_attempts: int = Field(default=5)
     notification_poll_interval_seconds: int = Field(default=15)
     frontend_base_url: str = Field(

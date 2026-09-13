@@ -36,7 +36,11 @@ data:
   SMTP_ENABLED: "false"
   SMTP_PORT: "587"
   SMTP_USE_TLS: "true"
-  SMTP_FROM_ADDRESS: "noreply@greenshift.local"
+  # Verified sender address for this deployment. Leave blank to fall back to
+  # SMTP_USERNAME (a secret, in secrets.yaml) at send time — most providers
+  # reject a From address that isn't the authenticated account or a verified
+  # alias, so don't set this to a domain you don't own.
+  SMTP_FROM_ADDRESS: ""
   NOTIFICATION_EMAIL_MAX_ATTEMPTS: "5"
   NOTIFICATION_POLL_INTERVAL_SECONDS: "15"
   FRONTEND_BASE_URL: "http://localhost:3000"

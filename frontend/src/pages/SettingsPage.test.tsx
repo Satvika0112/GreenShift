@@ -175,6 +175,30 @@ describe('SettingsPage', () => {
     expect(document.body.innerHTML.toLowerCase()).not.toContain('smtp_password');
   });
 
+  it('shows pending/failed email delivery counters and last-sent time without exposing credentials', async () => {
+    mockIsCompanyAdmin = true;
+    (sustainabilityApi.getDataSourcesStatus as any).mockResolvedValue({});
+    (monitoringApi.getSystemHealth as any).mockResolvedValue({
+      service: 'greenshift-api',
+      status: 'healthy',
+      components: {
+        email_delivery: {
+          status: 'configured',
+          pending_count: 3,
+          failed_count: 1,
+          last_sent_at: '2026-09-13T09:00:00+00:00',
+        },
+      },
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText('CONFIGURED')).toBeInTheDocument());
+    expect(screen.getByText(/Pending: 3/)).toBeInTheDocument();
+    expect(screen.getByText(/Failed: 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Last sent:/)).toBeInTheDocument();
+    expect(document.body.innerHTML.toLowerCase()).not.toContain('smtp_password');
+    expect(document.body.innerHTML.toLowerCase()).not.toContain('smtp_username');
+  });
+
   it('persists client preferences to local storage on save', async () => {
     const user = userEvent.setup();
     renderPage();

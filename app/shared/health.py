@@ -101,12 +101,48 @@ def check_email_health() -> Dict[str, Any]:
     is not a failure: in-app real-time notifications work regardless (see
     app.notify.email), this exists purely so an admin can see *why* emails
     aren't arriving without anyone exposing secrets in a UI or a log.
+
+    Also surfaces the already-persisted NotificationORM delivery counters
+    (pending_count/failed_count/last_sent_at) — no new table, no new
+    tracking mechanism, just a read of columns app.notify.email already
+    maintains — so an admin can see queue health without a DB console.
     """
     if not settings.smtp_enabled:
-        return {"status": "disabled", "reason": "SMTP_ENABLED is false"}
-    if not settings.smtp_host:
-        return {"status": "unconfigured", "reason": "SMTP_HOST is not set"}
-    return {"status": "configured"}
+        result: Dict[str, Any] = {"status": "disabled", "reason": "SMTP_ENABLED is false"}
+    elif not settings.smtp_host:
+        result = {"status": "unconfigured", "reason": "SMTP_HOST is not set"}
+    else:
+        result = {"status": "configured"}
+
+    try:
+        from sqlalchemy.orm import Session
+        from app.shared.models import NotificationORM
+        from app.shared.timezone import ensure_utc
+
+        with Session(engine) as db:
+            pending_count = (
+                db.query(NotificationORM)
+                .filter(NotificationORM.email_required == True, NotificationORM.email_status == "PENDING")  # noqa: E712
+                .count()
+            )
+            failed_count = (
+                db.query(NotificationORM)
+                .filter(NotificationORM.email_required == True, NotificationORM.email_status == "FAILED")  # noqa: E712
+                .count()
+            )
+            last_sent = (
+                db.query(NotificationORM.email_sent_at)
+                .filter(NotificationORM.email_status == "SENT")
+                .order_by(NotificationORM.email_sent_at.desc())
+                .first()
+            )
+        result["pending_count"] = pending_count
+        result["failed_count"] = failed_count
+        result["last_sent_at"] = ensure_utc(last_sent[0]).isoformat() if last_sent and last_sent[0] else None
+    except Exception as exc:
+        logger.warning("Email delivery counters unavailable: %s", exc)
+
+    return result
 
 
 def check_carbon_data_health() -> Dict[str, Any]:

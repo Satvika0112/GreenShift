@@ -49,9 +49,18 @@ def send_email(to_address: str, subject: str, body: str) -> None:
     if not settings.smtp_host:
         raise RuntimeError("SMTP_HOST is not configured")
 
+    # SMTP_FROM_ADDRESS falls back to the authenticated SMTP_USERNAME when
+    # unset — most real providers (Gmail included) reject a From address
+    # that isn't the authenticated account or one of its verified aliases,
+    # so defaulting to an unowned/fake domain would silently fail delivery
+    # rather than actually send anything.
+    from_address = settings.smtp_from_address or settings.smtp_username
+    if not from_address:
+        raise RuntimeError("SMTP_FROM_ADDRESS/SMTP_USERNAME is not configured")
+
     msg = EmailMessage()
     msg["Subject"] = _sanitize_header_value(subject)
-    msg["From"] = settings.smtp_from_address
+    msg["From"] = from_address
     msg["To"] = _sanitize_header_value(to_address)
     msg.set_content(body)
 

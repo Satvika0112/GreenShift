@@ -266,6 +266,146 @@ class TestEmailFailureIsolation:
         count = process_pending_emails(db, limit=10)
         assert count == 0
 
+    def test_smtp_disabled_notification_still_works_in_app(self, db, two_users):
+        """P0 Email Delivery Functionalization Pass: with SMTP disabled, the
+        in-app notification (bell/toast/GET /notifications) must still be
+        fully created and readable — only the email channel is gated."""
+        alice = two_users["alice"]
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.K8S_JOB_FAILED,
+            category="EXECUTION", severity="CRITICAL", title="Workload failed", message="It failed.",
+            tenant_id=alice.tenant_id, job_id="JOB-INAPP-NOSMTP", email_required=True,
+        )
+        assert notif is not None
+        assert notif.title == "Workload failed"
+        fetched = get_notifications(db, recipient_user_id=alice.id)
+        assert any(n.id == notif.id for n in fetched)
+
+    def test_successful_delivery_marks_sent_and_records_timestamp(self, db, two_users):
+        """P0 Email Delivery Functionalization Pass: with SMTP enabled/configured
+        and a mocked transport that succeeds, process_pending_emails() must
+        mark the notification SENT with a populated email_sent_at and exactly
+        one recorded attempt — proving the PENDING -> SENT transition the
+        real end-to-end flow relies on, without a real SMTP server."""
+        alice = two_users["alice"]
+        job = JobORM(
+            job_id="JOB-EMAIL-SENT", team_id="team-x", tenant_id=alice.tenant_id,
+            submitted_by_user_id=alice.id, submitted_at=utcnow(),
+            deadline=utcnow() + timedelta(hours=2), runtime_minutes=10, power_kw=1.0,
+            region="IN-TG", container_image="greenshift/sample:v1", status=JobStatus.SUBMITTED,
+        )
+        db.add(job)
+        db.commit()
+
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.JOB_SUBMITTED,
+            category="WORKLOAD", severity="INFO", title="Workload submitted", message="fallback",
+            tenant_id=alice.tenant_id, job_id=job.job_id, email_required=True,
+        )
+        assert notif.email_status == "PENDING"
+
+        from app.shared.config import settings
+        original_enabled, original_host = settings.smtp_enabled, settings.smtp_host
+        settings.smtp_enabled = True
+        settings.smtp_host = "smtp.example.com"
+        try:
+            with patch("app.notify.email.send_email", return_value=None) as mock_send:
+                process_pending_emails(db, limit=10)
+        finally:
+            settings.smtp_enabled, settings.smtp_host = original_enabled, original_host
+
+        db.refresh(notif)
+        assert mock_send.called
+        # The real recipient address was used — not a client-suppliable value.
+        assert mock_send.call_args.args[0] == alice.email
+        assert notif.email_status == "SENT"
+        assert notif.email_attempts == 1
+        assert notif.email_sent_at is not None
+        assert notif.last_error is None
+        # SMTP success must never touch the job's own business state.
+        db.refresh(job)
+        assert job.status == JobStatus.SUBMITTED
+
+    def test_missing_recipient_email_is_handled_safely(self, db, two_users):
+        """A recipient row with no email on file (blank string — UserORM.email
+        is NOT NULL but not otherwise validated) must fail the email channel
+        cleanly, without crashing the processor or touching job state."""
+        alice = two_users["alice"]
+        alice.email = ""
+        db.commit()
+
+        job = JobORM(
+            job_id="JOB-NO-EMAIL", team_id="team-x", tenant_id=alice.tenant_id,
+            submitted_by_user_id=alice.id, submitted_at=utcnow(),
+            deadline=utcnow() + timedelta(hours=2), runtime_minutes=10, power_kw=1.0,
+            region="IN-TG", container_image="greenshift/sample:v1", status=JobStatus.SUBMITTED,
+        )
+        db.add(job)
+        db.commit()
+
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.JOB_SUBMITTED,
+            category="WORKLOAD", severity="INFO", title="Workload submitted", message="fallback",
+            tenant_id=alice.tenant_id, job_id=job.job_id, email_required=True,
+        )
+
+        from app.shared.config import settings
+        original_enabled, original_host = settings.smtp_enabled, settings.smtp_host
+        settings.smtp_enabled = True
+        settings.smtp_host = "smtp.example.com"
+        try:
+            with patch("app.notify.email.send_email") as mock_send:
+                process_pending_emails(db, limit=10)
+        finally:
+            settings.smtp_enabled, settings.smtp_host = original_enabled, original_host
+
+        db.refresh(notif)
+        db.refresh(job)
+        assert not mock_send.called
+        assert notif.email_status == "FAILED"
+        assert "no email" in (notif.last_error or "").lower()
+        assert job.status == JobStatus.SUBMITTED
+
+
+class TestCrossTenantRecipientDeliverySafety:
+    """P0 Email Delivery Functionalization Pass: the actual SMTP send target
+    is always resolved from the notification's own recipient_user_id — never
+    something a client, or a different tenant's data, could influence."""
+
+    def test_company_a_notification_is_never_delivered_to_company_b_recipient(self, db, two_users):
+        alice, bob = two_users["alice"], two_users["bob"]  # tenant-a, tenant-b respectively
+        job_a = JobORM(
+            job_id="JOB-TENANT-A-MAIL", team_id="team-a", tenant_id=alice.tenant_id,
+            submitted_by_user_id=alice.id, submitted_at=utcnow(),
+            deadline=utcnow() + timedelta(hours=2), runtime_minutes=10, power_kw=1.0,
+            region="IN-TG", container_image="greenshift/sample:v1", status=JobStatus.SUBMITTED,
+        )
+        db.add(job_a)
+        db.commit()
+
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.JOB_SUBMITTED,
+            category="WORKLOAD", severity="INFO", title="Workload submitted", message="fallback",
+            tenant_id=alice.tenant_id, job_id=job_a.job_id, email_required=True,
+        )
+
+        from app.shared.config import settings
+        original_enabled, original_host = settings.smtp_enabled, settings.smtp_host
+        settings.smtp_enabled = True
+        settings.smtp_host = "smtp.example.com"
+        try:
+            with patch("app.notify.email.send_email", return_value=None) as mock_send:
+                process_pending_emails(db, limit=10)
+        finally:
+            settings.smtp_enabled, settings.smtp_host = original_enabled, original_host
+
+        db.refresh(notif)
+        assert notif.email_status == "SENT"
+        assert mock_send.call_count == 1
+        sent_to = mock_send.call_args.args[0]
+        assert sent_to == alice.email
+        assert sent_to != bob.email
+
 
 class TestNotificationPreferences:
     """GET/PUT /notifications/preferences: lazily created, self-scoped,
@@ -1399,3 +1539,162 @@ class TestUnauthorizedEmailTriggeringActionRejected:
             .first()
             is None
         )
+
+
+class TestSendEmailTransportAndConfig:
+    """Real SMTP Email-Delivery Integration pass: exercises app.notify.email
+    .send_email()'s own transport logic directly (mocking smtplib.SMTP one
+    level deeper than TestEmailFailureIsolation's tests, which mock
+    send_email() itself) — the from-address fallback, TLS/login sequencing,
+    and that credentials never leak into anything persisted or raised."""
+
+    def _mock_smtp_server(self):
+        from unittest.mock import MagicMock
+        server = MagicMock()
+        server.__enter__.return_value = server
+        server.__exit__.return_value = False
+        return server
+
+    def test_from_address_falls_back_to_username_when_unset(self, db):
+        from app.notify.email import send_email
+        from app.shared.config import settings
+
+        original = (settings.smtp_enabled, settings.smtp_host, settings.smtp_username,
+                    settings.smtp_password, settings.smtp_from_address)
+        settings.smtp_enabled = True
+        settings.smtp_host = "smtp.example.com"
+        settings.smtp_username = "sender@example.com"
+        settings.smtp_password = "app-specific-password"
+        settings.smtp_from_address = ""  # deliberately unset
+        try:
+            server = self._mock_smtp_server()
+            with patch("smtplib.SMTP", return_value=server) as mock_smtp_cls:
+                send_email("recipient@example.com", "Subject", "Body")
+            sent_msg = server.send_message.call_args.args[0]
+            assert sent_msg["From"] == "sender@example.com"
+            mock_smtp_cls.assert_called_once_with("smtp.example.com", settings.smtp_port, timeout=10)
+            server.login.assert_called_once_with("sender@example.com", "app-specific-password")
+        finally:
+            (settings.smtp_enabled, settings.smtp_host, settings.smtp_username,
+             settings.smtp_password, settings.smtp_from_address) = original
+
+    def test_explicit_from_address_is_used_when_set(self, db):
+        from app.notify.email import send_email
+        from app.shared.config import settings
+
+        original = (settings.smtp_enabled, settings.smtp_host, settings.smtp_username,
+                    settings.smtp_from_address)
+        settings.smtp_enabled = True
+        settings.smtp_host = "smtp.example.com"
+        settings.smtp_username = "sender@example.com"
+        settings.smtp_from_address = "notifications@greenshift-verified.example.com"
+        try:
+            server = self._mock_smtp_server()
+            with patch("smtplib.SMTP", return_value=server):
+                send_email("recipient@example.com", "Subject", "Body")
+            sent_msg = server.send_message.call_args.args[0]
+            assert sent_msg["From"] == "notifications@greenshift-verified.example.com"
+        finally:
+            (settings.smtp_enabled, settings.smtp_host, settings.smtp_username,
+             settings.smtp_from_address) = original
+
+    def test_missing_from_address_and_username_raises_clear_error(self, db):
+        from app.notify.email import send_email
+        from app.shared.config import settings
+
+        original = (settings.smtp_enabled, settings.smtp_host, settings.smtp_username,
+                    settings.smtp_from_address)
+        settings.smtp_enabled = True
+        settings.smtp_host = "smtp.example.com"
+        settings.smtp_username = ""
+        settings.smtp_from_address = ""
+        try:
+            with pytest.raises(RuntimeError, match="SMTP_FROM_ADDRESS"):
+                send_email("recipient@example.com", "Subject", "Body")
+        finally:
+            (settings.smtp_enabled, settings.smtp_host, settings.smtp_username,
+             settings.smtp_from_address) = original
+
+    def test_tls_started_when_configured(self, db):
+        from app.notify.email import send_email
+        from app.shared.config import settings
+
+        original = (settings.smtp_enabled, settings.smtp_host, settings.smtp_username,
+                    settings.smtp_from_address, settings.smtp_use_tls)
+        settings.smtp_enabled = True
+        settings.smtp_host = "smtp.example.com"
+        settings.smtp_username = "sender@example.com"
+        settings.smtp_from_address = "sender@example.com"
+        settings.smtp_use_tls = True
+        try:
+            server = self._mock_smtp_server()
+            with patch("smtplib.SMTP", return_value=server):
+                send_email("recipient@example.com", "Subject", "Body")
+            server.starttls.assert_called_once()
+        finally:
+            (settings.smtp_enabled, settings.smtp_host, settings.smtp_username,
+             settings.smtp_from_address, settings.smtp_use_tls) = original
+
+    def test_credential_never_appears_in_recorded_last_error(self, db, two_users):
+        """Even if the underlying SMTP exception message happened to echo the
+        password (some servers include the failed credential in an auth
+        error), _deliver_one() only ever stores type(exc).__name__ — never
+        str(exc) — so a secret can never end up in a persisted last_error."""
+        alice = two_users["alice"]
+        secret_password = "S3cr3t-App-Password-Do-Not-Leak"
+        job = JobORM(
+            job_id="JOB-CRED-LEAK-CHECK", team_id="team-x", tenant_id=alice.tenant_id,
+            submitted_by_user_id=alice.id, submitted_at=utcnow(),
+            deadline=utcnow() + timedelta(hours=2), runtime_minutes=10, power_kw=1.0,
+            region="IN-TG", container_image="greenshift/sample:v1", status=JobStatus.SUBMITTED,
+        )
+        db.add(job)
+        db.commit()
+
+        notif = create_notification(
+            db, recipient_user_id=alice.id, event_type=EventType.JOB_SUBMITTED,
+            category="WORKLOAD", severity="INFO", title="Workload submitted", message="fallback",
+            tenant_id=alice.tenant_id, job_id=job.job_id, email_required=True,
+        )
+
+        from app.shared.config import settings
+        original_enabled, original_host = settings.smtp_enabled, settings.smtp_host
+        settings.smtp_enabled = True
+        settings.smtp_host = "smtp.example.com"
+        try:
+            with patch(
+                "app.notify.email.send_email",
+                side_effect=RuntimeError(f"Authentication failed for password={secret_password}"),
+            ):
+                process_pending_emails(db, limit=10)
+        finally:
+            settings.smtp_enabled, settings.smtp_host = original_enabled, original_host
+
+        db.refresh(notif)
+        assert secret_password not in (notif.last_error or "")
+        assert "RuntimeError" in (notif.last_error or "")
+
+
+def test_settings_loads_smtp_env_vars(monkeypatch):
+    """Settings (pydantic-settings) must pick up the documented SMTP_* env
+    var names verbatim — reusing the existing configuration mechanism, not a
+    second/renamed one — without ever needing a restart-time code change."""
+    monkeypatch.setenv("SMTP_ENABLED", "true")
+    monkeypatch.setenv("SMTP_HOST", "smtp.testprovider.example.com")
+    monkeypatch.setenv("SMTP_PORT", "2525")
+    monkeypatch.setenv("SMTP_USERNAME", "test-account@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "irrelevant-for-this-test")
+    monkeypatch.setenv("SMTP_USE_TLS", "false")
+    monkeypatch.setenv("SMTP_FROM_ADDRESS", "verified-sender@example.com")
+    monkeypatch.setenv("FRONTEND_BASE_URL", "https://app.example.com")
+
+    from app.shared.config import Settings
+    fresh = Settings()
+
+    assert fresh.smtp_enabled is True
+    assert fresh.smtp_host == "smtp.testprovider.example.com"
+    assert fresh.smtp_port == 2525
+    assert fresh.smtp_username == "test-account@example.com"
+    assert fresh.smtp_use_tls is False
+    assert fresh.smtp_from_address == "verified-sender@example.com"
+    assert fresh.frontend_base_url == "https://app.example.com"
