@@ -207,6 +207,7 @@ def list_all_jobs(
     """List jobs with strict tenant isolation. Platform Admins can see all or filter by tenant."""
     try:
         from app.api.tenant_scope import get_tenant_jobs
+        from app.shared.timezone import ensure_utc
         jobs = get_tenant_jobs(
             db=db,
             identity=current_user,
@@ -226,9 +227,11 @@ def list_all_jobs(
                 "job_type": j.job_type,
                 "priority": j.priority,
                 "status": j.status,
-                "submitted_at": j.submitted_at.isoformat(),
-                "earliest_start_time": j.earliest_start_time.isoformat() if j.earliest_start_time else None,
-                "deadline": j.deadline.isoformat(),
+                # ensure_utc() guards against SQLite (dev/test) silently dropping
+                # tzinfo on read — see get_job_detail below for the full rationale.
+                "submitted_at": ensure_utc(j.submitted_at).isoformat(),
+                "earliest_start_time": ensure_utc(j.earliest_start_time).isoformat() if j.earliest_start_time else None,
+                "deadline": ensure_utc(j.deadline).isoformat(),
                 "runtime_minutes": j.runtime_minutes,
                 "power_kw": j.power_kw,
                 "energy_kwh": j.energy_kwh,
@@ -238,8 +241,8 @@ def list_all_jobs(
                 "cpu_request": j.cpu_request,
                 "memory_request": j.memory_request,
                 "carbon_budget_kg": j.carbon_budget_kg,
-                "selected_start": j.schedule_decision.selected_start.isoformat() if j.schedule_decision else None,
-                "selected_end": j.schedule_decision.selected_end.isoformat() if j.schedule_decision else None,
+                "selected_start": ensure_utc(j.schedule_decision.selected_start).isoformat() if j.schedule_decision else None,
+                "selected_end": ensure_utc(j.schedule_decision.selected_end).isoformat() if j.schedule_decision else None,
                 "carbon_intensity": j.schedule_decision.carbon_intensity if j.schedule_decision else None,
                 "carbon_emission": j.schedule_decision.carbon_emission if j.schedule_decision else None,
                 "electricity_cost": j.schedule_decision.electricity_cost if j.schedule_decision else None,
@@ -249,8 +252,8 @@ def list_all_jobs(
                 "kubernetes_namespace": j.kubernetes_execution.kubernetes_namespace if j.kubernetes_execution else None,
                 "k8s_status": j.kubernetes_execution.k8s_status if j.kubernetes_execution else None,
                 "pod_name": j.kubernetes_execution.pod_name if j.kubernetes_execution else None,
-                "actual_start": j.kubernetes_execution.actual_start.isoformat() if j.kubernetes_execution and j.kubernetes_execution.actual_start else None,
-                "actual_end": j.kubernetes_execution.actual_end.isoformat() if j.kubernetes_execution and j.kubernetes_execution.actual_end else None,
+                "actual_start": ensure_utc(j.kubernetes_execution.actual_start).isoformat() if j.kubernetes_execution and j.kubernetes_execution.actual_start else None,
+                "actual_end": ensure_utc(j.kubernetes_execution.actual_end).isoformat() if j.kubernetes_execution and j.kubernetes_execution.actual_end else None,
             }
             res.append(item)
         return res

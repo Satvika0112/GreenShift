@@ -1,5 +1,5 @@
 import React from 'react';
-import { Navigate, Outlet, useNavigate } from 'react-router-dom';
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ShieldAlert } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { UserRole } from '../types/api';
@@ -12,6 +12,7 @@ interface ProtectedRouteProps {
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ allowedRoles }) => {
   const { isAuthenticated, isLoading, hasRole } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   // A token can exist in storage while the authenticated user is still being
   // fetched from the backend (page refresh, tab reopen). Without this guard,
@@ -35,7 +36,9 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ allowedRoles }) 
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    // Preserve the originally-requested URL so LoginPage can return the
+    // user there after a successful sign-in, instead of always landing on /.
+    return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
   // The user is authenticated but their backend-assigned role doesn't allow

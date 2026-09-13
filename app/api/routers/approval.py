@@ -36,6 +36,7 @@ from app.shared.models import (
     UserORM,
     UserRole,
 )
+from app.shared.timezone import ensure_utc
 from app.shared.utils import get_logger
 
 logger = get_logger(__name__)
@@ -270,7 +271,7 @@ def api_get_declined_approvals(
                 "team_id": a.job.team_id if a.job else "N/A",
                 "tenant_id": a.job.tenant_id if a.job else None,
                 "company_name": a.job.company_name if a.job else None,
-                "declined_at": a.created_at.isoformat() if a.created_at else "",
+                "declined_at": ensure_utc(a.created_at).isoformat() if a.created_at else "",
                 "declined_by": a.approved_by,
                 "reason": a.reason,
                 "status": "DECLINED",

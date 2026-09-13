@@ -57,13 +57,18 @@ def render_scheduling_engine_view() -> None:
         cost_usd = float(dec.get("electricity_cost") or 0.045)
         carbon_avoided = float(dec.get("carbon_avoided") or 0.012)
         reason = dec.get("reason") or "Lowest-carbon feasible window within deadline"
+        # Currency Consistency: prefer the execution region's real native_cost +
+        # currency — electricity_cost is always USD internally and must never be
+        # shown as "$" for an INR/AUD/SEK region.
+        native_cost, currency = dec.get("native_cost"), dec.get("currency")
+        cost_display = f"{native_cost:.4f} {currency}" if native_cost is not None and currency else f"{cost_usd:.4f} USD"
 
         # Decision Metrics (Carbon, Cost, Window, Slot Contention)
         m1, m2, m3, m4 = st.columns(4)
         with m1:
             st.markdown(render_metric_card("Carbon Intensity", f"{carbon_intensity:.1f} gCO₂/kWh", f"{carbon_avoided:.4f} kg avoided", accent=True), unsafe_allow_html=True)
         with m2:
-            st.markdown(render_metric_card("Electricity Cost", f"${cost_usd:.4f}", "Time-of-Day rate applied"), unsafe_allow_html=True)
+            st.markdown(render_metric_card("Electricity Cost", cost_display, "Time-of-Day rate applied"), unsafe_allow_html=True)
         with m3:
             st.markdown(render_metric_card("Scheduling Window", f"{sel_start}", f"Duration: {job_data.get('runtime_minutes', 30)} min"), unsafe_allow_html=True)
         with m4:
@@ -133,7 +138,10 @@ def render_scheduling_engine_view() -> None:
             slots_data.append({
                 "Candidate Window (UTC)": f"{slot_iso} → {(slot_time + timedelta(minutes=job_data.get('runtime_minutes', 30))).strftime('%H:%M')}",
                 "Carbon Intensity": f"{c_val:.1f} gCO₂/kWh",
-                "Estimated Cost": f"${cost_usd * (1.0 + abs(offset_h)*0.1):.4f}",
+                "Estimated Cost": (
+                    f"{native_cost * (1.0 + abs(offset_h) * 0.1):.4f} {currency}" if native_cost is not None and currency
+                    else f"{cost_usd * (1.0 + abs(offset_h)*0.1):.4f} USD"
+                ),
                 "Deadline Feasible": "✓ Yes",
                 "Cluster Capacity": "✓ Available",
                 "Decision": status_text,

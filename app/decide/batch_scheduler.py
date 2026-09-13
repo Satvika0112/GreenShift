@@ -164,6 +164,12 @@ def schedule_batch(
         start_bound = job.earliest_start_time or job.submitted_at or now
         if start_bound.tzinfo is None:
             start_bound = start_bound.replace(tzinfo=timezone.utc)
+        # Effective execution start is clamped to max(now, requested) — mirrors
+        # app.decide.scheduler's single-job clamp (Time Consistency Hardening).
+        # job.earliest_start_time itself is never mutated; only this local
+        # candidate-generation floor is adjusted so a job whose requested
+        # window has already passed can't produce a past candidate slot.
+        start_bound = max(now, start_bound)
 
         is_deferrable = True if job.deferrable is None else bool(job.deferrable)
 

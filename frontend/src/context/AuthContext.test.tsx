@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './AuthContext';
 import { authApi } from '../api/endpoints';
 
@@ -35,11 +36,17 @@ function Probe() {
 }
 
 function renderProbe() {
-  return render(
-    <AuthProvider>
-      <Probe />
-    </AuthProvider>
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>
+    </QueryClientProvider>
   );
+  return { ...view, queryClient };
 }
 
 describe('AuthContext', () => {
@@ -125,6 +132,22 @@ describe('AuthContext', () => {
     expect(screen.getByTestId('authed').textContent).toBe('false');
     expect(sessionStorage.getItem('greenshift_token')).toBeNull();
     expect(sessionStorage.getItem('greenshift_user')).toBeNull();
+  });
+
+  it('logout clears the React Query cache, so the next signed-in user never sees stale tenant data from cache', async () => {
+    const user = userEvent.setup();
+    sessionStorage.setItem('greenshift_token', 'stored-jwt');
+    (authApi.getCurrentUser as any).mockResolvedValue(companyUser);
+    const { queryClient } = renderProbe();
+    await waitFor(() => expect(screen.getByTestId('authed').textContent).toBe('true'));
+
+    // Simulate data some other page fetched during the session (e.g. workloads).
+    queryClient.setQueryData(['workloads', 'tenant-a'], [{ job_id: 'JOB-1' }]);
+    expect(queryClient.getQueryCache().getAll().length).toBeGreaterThan(0);
+
+    await user.click(screen.getByText('do-logout'));
+
+    expect(queryClient.getQueryCache().getAll().length).toBe(0);
   });
 
   it('reacts to a global auth-expired event by logging out', async () => {

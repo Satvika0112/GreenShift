@@ -21,7 +21,7 @@ from app.shared.models import (
     UserORM,
     UserRole,
 )
-from app.shared.timezone import to_regional_time
+from app.shared.timezone import ensure_utc, to_regional_time
 from app.shared.utils import utcnow
 from app.shared.metrics import (
     record_approval_pending,
@@ -547,16 +547,16 @@ def get_pending_approvals(
                 region=j.region,
                 timezone=j.timezone or "Asia/Kolkata",
                 schedule_id=sd.id,
-                selected_start_utc=sd.selected_start,
+                selected_start_utc=ensure_utc(sd.selected_start),
                 selected_start_local=start_local,
-                selected_end_utc=sd.selected_end,
+                selected_end_utc=ensure_utc(sd.selected_end),
                 selected_end_local=end_local,
                 runtime_minutes=j.runtime_minutes,
                 power_kw=j.power_kw,
                 carbon_intensity=sd.carbon_intensity,
                 carbon_emission_kg=sd.carbon_emission,
                 electricity_cost_usd=sd.electricity_cost,
-                deadline_utc=j.deadline,
+                deadline_utc=ensure_utc(j.deadline),
                 deadline_local=deadline_local,
                 status=j.status,
                 tariff_plan=sd.tariff_plan,

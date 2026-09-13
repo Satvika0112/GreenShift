@@ -27,7 +27,19 @@ def render_carbon_cost_view(active_region: str = "IN-TG") -> None:
     current_val = carbon_points[0].get("carbon_gco2_kwh", 320.0) if carbon_points else 320.0
     min_carbon = min((p.get("carbon_gco2_kwh", 999.0) for p in carbon_points), default=280.0)
     max_carbon = max((p.get("carbon_gco2_kwh", 0.0) for p in carbon_points), default=420.0)
-    current_price = tariff_points[0].get("price_per_kwh_usd", 0.085) if tariff_points else 0.085
+    # Currency Consistency: prefer the tariff record's real native rate +
+    # currency (electricity_rate/currency, per app.ingest.regional_tariff_loader)
+    # over the USD-normalized price_per_kwh_usd — a "$" tariff card must never
+    # be shown for an INR/AUD/SEK region.
+    current_currency = tariff_points[0].get("currency") if tariff_points else None
+    current_price = (
+        tariff_points[0].get("electricity_rate") if tariff_points and current_currency
+        else (tariff_points[0].get("price_per_kwh_usd", 0.085) if tariff_points else 0.085)
+    )
+    if current_price is None:
+        current_price = tariff_points[0].get("price_per_kwh_usd", 0.085) if tariff_points else 0.085
+        current_currency = None
+    tariff_unit_label = f"{current_currency}/kWh" if current_currency else "USD/kWh"
 
     # Top Metric Cards
     c1, c2, c3, c4 = st.columns(4)
@@ -36,7 +48,7 @@ def render_carbon_cost_view(active_region: str = "IN-TG") -> None:
     with c2:
         st.markdown(render_metric_card("24h Forecast Low", f"{min_carbon:.1f} gCO₂/kWh", f"Peak: {max_carbon:.1f} gCO₂/kWh", accent=True), unsafe_allow_html=True)
     with c3:
-        st.markdown(render_metric_card("Electricity Tariff", f"${current_price:.4f}/kWh", "Time-of-Day rate"), unsafe_allow_html=True)
+        st.markdown(render_metric_card("Electricity Tariff", f"{current_price:.4f} {tariff_unit_label}", "Time-of-Day rate"), unsafe_allow_html=True)
     with c4:
         st.markdown(render_metric_card("Telemetry Source", "ELECTRICITY MAPS", "Multi-tier Cache/CSV fallback", tag="LIVE"), unsafe_allow_html=True)
 
@@ -84,7 +96,7 @@ def render_carbon_cost_view(active_region: str = "IN-TG") -> None:
             f'<div class="gs-card-header" style="margin-bottom: 8px;">'
             f'<div>'
             f'<div class="gs-card-title">⚡ Time-of-Day (ToD) Tariff Curve</div>'
-            f'<div class="gs-card-subtitle">{active_region} standardized pricing ($/kWh)</div>'
+            f'<div class="gs-card-subtitle">{active_region} native pricing ({tariff_unit_label})</div>'
             f'</div>'
             f'</div>',
             unsafe_allow_html=True,
@@ -93,10 +105,14 @@ def render_carbon_cost_view(active_region: str = "IN-TG") -> None:
         if tariff_points:
             df_t = pd.DataFrame(tariff_points)
             df_t["timestamp"] = pd.to_datetime(df_t["timestamp"])
+            # Plot the region's real native rate (matches the "native pricing"
+            # label above) rather than the USD-normalized figure — falls back
+            # to price_per_kwh_usd only if electricity_rate isn't populated.
+            tariff_y_field = "electricity_rate" if "electricity_rate" in df_t.columns else "price_per_kwh_usd"
             fig_t = px.line(
                 df_t,
                 x="timestamp",
-                y="price_per_kwh_usd",
+                y=tariff_y_field,
                 template="plotly_dark",
             )
             fig_t.update_traces(

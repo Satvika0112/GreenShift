@@ -7,11 +7,10 @@ P0-BE-4: Consolidate User Creation into Authoritative POST /admin/users
 import pytest
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
-from sqlalchemy import text
 
 from app.api.main import app
 from app.shared.config import settings
-from app.shared.database import SessionLocal, engine
+from app.shared.database import get_db
 from app.shared.models import (
     AuditEventORM,
     EventType,
@@ -22,32 +21,38 @@ from app.shared.models import (
 )
 from app.shared.auth import hash_password, create_access_token
 
+# Final Consistency Audit: this file previously seeded/queried the real,
+# on-disk greenshift.db directly via app.shared.database.SessionLocal (the
+# same database a running dev server uses) — same root cause and same fix as
+# tests/test_login_hardening.py. Switched to the isolated in-memory `db`
+# fixture (tests/conftest.py) every other test file already uses, wired into
+# the app via the standard `get_db` override. No test assertions changed;
+# audit-event assertions (`len(events) >= 1`) remain correct — and are now
+# more precise, since a fresh in-memory DB has no cross-test accumulation to
+# begin with.
+
 
 @pytest.fixture(autouse=True)
-def clean_db(monkeypatch):
+def clean_db(db, monkeypatch):
+    def _get_test_db():
+        yield db
+
+    app.dependency_overrides[get_db] = _get_test_db
+    # Use monkeypatch (not a manual save/restore) so this composes correctly
+    # with the individual tests below that also call
+    # monkeypatch.setattr(settings, "auth_enabled", True) — monkeypatch's own
+    # stack-based undo always restores the true original value regardless of
+    # how many times/where the attribute was patched, which a manual
+    # save-current/restore-after-yield pattern here would get wrong once a
+    # test's own monkeypatch call captures this fixture's already-patched
+    # value as its own "original".
     monkeypatch.setattr(settings, "auth_enabled", True)
-    app.dependency_overrides.clear()
-    with SessionLocal() as db:
-        # audit_events is append-only at the DB level (Trust/Audit P0) — never
-        # deleted, including in test cleanup. Tests below filter by unique
-        # job_id/username/event_type, so accumulated rows across the shared
-        # file-backed test DB do not affect their assertions.
-        db.query(UserORM).delete()
-        db.query(TenantORM).delete()
-        # Seed test tenants
-        db.add(TenantORM(id="tenant-alpha", name="Alpha Corp", is_active=True))
-        db.add(TenantORM(id="tenant-beta", name="Beta Corp", is_active=True))
-        db.commit()
+    # Seed test tenants
+    db.add(TenantORM(id="tenant-alpha", name="Alpha Corp", is_active=True))
+    db.add(TenantORM(id="tenant-beta", name="Beta Corp", is_active=True))
+    db.commit()
     yield
-    app.dependency_overrides.clear()
-    with SessionLocal() as db:
-        # audit_events is append-only at the DB level (Trust/Audit P0) — never
-        # deleted, including in test cleanup. Tests below filter by unique
-        # job_id/username/event_type, so accumulated rows across the shared
-        # file-backed test DB do not affect their assertions.
-        db.query(UserORM).delete()
-        db.query(TenantORM).delete()
-        db.commit()
+    app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.fixture
@@ -56,53 +61,52 @@ def client():
 
 
 @pytest.fixture
-def seed_admins():
-    with SessionLocal() as db:
-        # Platform Admin (no tenant)
-        p_admin = UserORM(
-            username="p_admin",
-            email="padmin@greenshift.dev",
-            hashed_password=hash_password("PlatformAdmin123!"),
-            role=UserRole.PLATFORM_ADMIN,
-            is_active=True,
-            approval_status=UserApprovalStatus.APPROVED.value,
-        )
-        # Company Admin for tenant-alpha
-        c_admin = UserORM(
-            username="alpha_admin",
-            email="admin@alpha.com",
-            hashed_password=hash_password("CompanyAdmin123!"),
-            role=UserRole.COMPANY_ADMIN,
-            tenant_id="tenant-alpha",
-            is_active=True,
-            approval_status=UserApprovalStatus.APPROVED.value,
-        )
-        db.add_all([p_admin, c_admin])
-        db.commit()
-        db.refresh(p_admin)
-        db.refresh(c_admin)
+def seed_admins(db):
+    # Platform Admin (no tenant)
+    p_admin = UserORM(
+        username="p_admin",
+        email="padmin@greenshift.dev",
+        hashed_password=hash_password("PlatformAdmin123!"),
+        role=UserRole.PLATFORM_ADMIN,
+        is_active=True,
+        approval_status=UserApprovalStatus.APPROVED.value,
+    )
+    # Company Admin for tenant-alpha
+    c_admin = UserORM(
+        username="alpha_admin",
+        email="admin@alpha.com",
+        hashed_password=hash_password("CompanyAdmin123!"),
+        role=UserRole.COMPANY_ADMIN,
+        tenant_id="tenant-alpha",
+        is_active=True,
+        approval_status=UserApprovalStatus.APPROVED.value,
+    )
+    db.add_all([p_admin, c_admin])
+    db.commit()
+    db.refresh(p_admin)
+    db.refresh(c_admin)
 
-        return {
-            "platform_admin_token": create_access_token(
-                user_id=p_admin.id,
-                username=p_admin.username,
-                role=UserRole.PLATFORM_ADMIN.value,
-            ),
-            "company_admin_token": create_access_token(
-                user_id=c_admin.id,
-                username=c_admin.username,
-                role=UserRole.COMPANY_ADMIN.value,
-                tenant_id="tenant-alpha",
-            ),
-            "company_admin_id": c_admin.id,
-        }
+    return {
+        "platform_admin_token": create_access_token(
+            user_id=p_admin.id,
+            username=p_admin.username,
+            role=UserRole.PLATFORM_ADMIN.value,
+        ),
+        "company_admin_token": create_access_token(
+            user_id=c_admin.id,
+            username=c_admin.username,
+            role=UserRole.COMPANY_ADMIN.value,
+            tenant_id="tenant-alpha",
+        ),
+        "company_admin_id": c_admin.id,
+    }
 
 
 # ==============================================================================
 # P0-BE-1: Public Registration Gating & Pending Approval Lifecycle
 # ==============================================================================
 
-def test_public_registration_creates_inactive_pending_user_when_auth_enabled(client, monkeypatch):
+def test_public_registration_creates_inactive_pending_user_when_auth_enabled(client, db, monkeypatch):
     """When AUTH_ENABLED=true, public registration MUST create inactive user with PENDING approval."""
     monkeypatch.setattr(settings, "auth_enabled", True)
 
@@ -119,16 +123,15 @@ def test_public_registration_creates_inactive_pending_user_when_auth_enabled(cli
     assert data["approval_status"] == "PENDING"
 
     # Verify in DB
-    with SessionLocal() as db:
-        user = db.query(UserORM).filter(UserORM.username == "candidate_alice").first()
-        assert user is not None
-        assert user.is_active is False
-        assert user.approval_status == "PENDING"
+    user = db.query(UserORM).filter(UserORM.username == "candidate_alice").first()
+    assert user is not None
+    assert user.is_active is False
+    assert user.approval_status == "PENDING"
 
-        # Verify audit event emitted
-        events = db.query(AuditEventORM).filter(AuditEventORM.event_type == EventType.AUTH_USER_REGISTERED).all()
-        assert len(events) >= 1
-        assert any("candidate_alice" in (e.payload_json or "") for e in events)
+    # Verify audit event emitted
+    events = db.query(AuditEventORM).filter(AuditEventORM.event_type == EventType.AUTH_USER_REGISTERED).all()
+    assert len(events) >= 1
+    assert any("candidate_alice" in (e.payload_json or "") for e in events)
 
 
 def test_pending_user_cannot_login(client, monkeypatch):
@@ -159,7 +162,7 @@ def test_pending_user_cannot_login(client, monkeypatch):
     assert "pending approval" in resp_email.json()["detail"].lower()
 
 
-def test_admin_activates_user_and_user_can_then_login(client, seed_admins, monkeypatch):
+def test_admin_activates_user_and_user_can_then_login(client, db, seed_admins, monkeypatch):
     """Admin activates pending user via /admin/users/{id}/status; user can then log in successfully."""
     monkeypatch.setattr(settings, "auth_enabled", True)
 
@@ -172,10 +175,9 @@ def test_admin_activates_user_and_user_can_then_login(client, seed_admins, monke
     user_id = reg.json()["id"]
 
     # Assign user to tenant-alpha in DB so company admin can manage
-    with SessionLocal() as db:
-        u = db.get(UserORM, user_id)
-        u.tenant_id = "tenant-alpha"
-        db.commit()
+    u = db.get(UserORM, user_id)
+    u.tenant_id = "tenant-alpha"
+    db.commit()
 
     # 2. Company Admin approves and activates user
     headers = {"Authorization": f"Bearer {seed_admins['company_admin_token']}"}
@@ -196,28 +198,26 @@ def test_admin_activates_user_and_user_can_then_login(client, seed_admins, monke
     assert "access_token" in login_resp.json()
 
     # 4. Verify AUTH_USER_ACTIVATED audit event
-    with SessionLocal() as db:
-        activated_events = db.query(AuditEventORM).filter(AuditEventORM.event_type == EventType.AUTH_USER_ACTIVATED).all()
-        assert len(activated_events) >= 1
-        assert any("candidate_charlie" in (e.payload_json or "") for e in activated_events)
+    activated_events = db.query(AuditEventORM).filter(AuditEventORM.event_type == EventType.AUTH_USER_ACTIVATED).all()
+    assert len(activated_events) >= 1
+    assert any("candidate_charlie" in (e.payload_json or "") for e in activated_events)
 
 
-def test_deactivated_user_login_rejected_with_clear_message(client, seed_admins, monkeypatch):
+def test_deactivated_user_login_rejected_with_clear_message(client, db, seed_admins, monkeypatch):
     """Deactivated user login rejected with 403 'User account is deactivated'."""
     monkeypatch.setattr(settings, "auth_enabled", True)
 
-    with SessionLocal() as db:
-        user = UserORM(
-            username="deact_user",
-            email="deact@alpha.com",
-            hashed_password=hash_password("Password123!"),
-            role=UserRole.COMPANY_USER,
-            tenant_id="tenant-alpha",
-            is_active=False,
-            approval_status=UserApprovalStatus.APPROVED.value,
-        )
-        db.add(user)
-        db.commit()
+    user = UserORM(
+        username="deact_user",
+        email="deact@alpha.com",
+        hashed_password=hash_password("Password123!"),
+        role=UserRole.COMPANY_USER,
+        tenant_id="tenant-alpha",
+        is_active=False,
+        approval_status=UserApprovalStatus.APPROVED.value,
+    )
+    db.add(user)
+    db.commit()
 
     resp = client.post("/auth/login", json={
         "username": "deact_user",
@@ -324,23 +324,22 @@ def test_platform_admin_can_create_user_in_any_tenant(client, seed_admins):
 # Inactive company (tenant) blocks authentication
 # ==============================================================================
 
-def test_inactive_company_blocks_login(client, monkeypatch):
+def test_inactive_company_blocks_login(client, db, monkeypatch):
     """A user whose company/tenant has been deactivated cannot log in, even with
     correct credentials and an otherwise-active, approved account."""
     monkeypatch.setattr(settings, "auth_enabled", True)
 
-    with SessionLocal() as db:
-        db.query(TenantORM).filter(TenantORM.id == "tenant-alpha").update({"is_active": False})
-        db.add(UserORM(
-            username="alpha_user_inactive_co",
-            email="user@alpha-inactive.com",
-            hashed_password=hash_password("Password123!"),
-            role=UserRole.COMPANY_USER,
-            tenant_id="tenant-alpha",
-            is_active=True,
-            approval_status=UserApprovalStatus.APPROVED.value,
-        ))
-        db.commit()
+    db.query(TenantORM).filter(TenantORM.id == "tenant-alpha").update({"is_active": False})
+    db.add(UserORM(
+        username="alpha_user_inactive_co",
+        email="user@alpha-inactive.com",
+        hashed_password=hash_password("Password123!"),
+        role=UserRole.COMPANY_USER,
+        tenant_id="tenant-alpha",
+        is_active=True,
+        approval_status=UserApprovalStatus.APPROVED.value,
+    ))
+    db.commit()
 
     resp = client.post("/auth/login", json={
         "username": "alpha_user_inactive_co",
@@ -350,21 +349,20 @@ def test_inactive_company_blocks_login(client, monkeypatch):
     assert "inactive" in resp.json()["detail"].lower()
 
 
-def test_active_company_user_login_still_works(client, monkeypatch):
+def test_active_company_user_login_still_works(client, db, monkeypatch):
     """Sanity check: a user in a company that IS active can still log in normally."""
     monkeypatch.setattr(settings, "auth_enabled", True)
 
-    with SessionLocal() as db:
-        db.add(UserORM(
-            username="alpha_user_active_co",
-            email="user@alpha-active.com",
-            hashed_password=hash_password("Password123!"),
-            role=UserRole.COMPANY_USER,
-            tenant_id="tenant-alpha",
-            is_active=True,
-            approval_status=UserApprovalStatus.APPROVED.value,
-        ))
-        db.commit()
+    db.add(UserORM(
+        username="alpha_user_active_co",
+        email="user@alpha-active.com",
+        hashed_password=hash_password("Password123!"),
+        role=UserRole.COMPANY_USER,
+        tenant_id="tenant-alpha",
+        is_active=True,
+        approval_status=UserApprovalStatus.APPROVED.value,
+    ))
+    db.commit()
 
     resp = client.post("/auth/login", json={
         "username": "alpha_user_active_co",
@@ -374,11 +372,10 @@ def test_active_company_user_login_still_works(client, monkeypatch):
     assert "access_token" in resp.json()
 
 
-def test_platform_admin_login_unaffected_by_tenant_status(client, seed_admins):
+def test_platform_admin_login_unaffected_by_tenant_status(client, db, seed_admins):
     """Platform Admin has no tenant_id, so no company can ever block their login."""
-    with SessionLocal() as db:
-        db.query(TenantORM).update({"is_active": False})
-        db.commit()
+    db.query(TenantORM).update({"is_active": False})
+    db.commit()
 
     resp = client.post("/auth/login", json={
         "username": "p_admin",
@@ -387,40 +384,38 @@ def test_platform_admin_login_unaffected_by_tenant_status(client, seed_admins):
     assert resp.status_code == 200
 
 
-def test_deactivating_company_revokes_access_for_already_issued_token(client, monkeypatch):
+def test_deactivating_company_revokes_access_for_already_issued_token(client, db, monkeypatch):
     """A token issued while the company was active must stop working once the
     company is deactivated — the check must be re-evaluated per-request, not
     only at login time."""
     monkeypatch.setattr(settings, "auth_enabled", True)
 
-    with SessionLocal() as db:
-        user = UserORM(
-            username="alpha_user_revoke",
-            email="user@alpha-revoke.com",
-            hashed_password=hash_password("Password123!"),
-            role=UserRole.COMPANY_USER,
-            tenant_id="tenant-alpha",
-            is_active=True,
-            approval_status=UserApprovalStatus.APPROVED.value,
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        token = create_access_token(
-            user_id=user.id,
-            username=user.username,
-            role=UserRole.COMPANY_USER.value,
-            tenant_id="tenant-alpha",
-        )
+    user = UserORM(
+        username="alpha_user_revoke",
+        email="user@alpha-revoke.com",
+        hashed_password=hash_password("Password123!"),
+        role=UserRole.COMPANY_USER,
+        tenant_id="tenant-alpha",
+        is_active=True,
+        approval_status=UserApprovalStatus.APPROVED.value,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    token = create_access_token(
+        user_id=user.id,
+        username=user.username,
+        role=UserRole.COMPANY_USER.value,
+        tenant_id="tenant-alpha",
+    )
 
     # Token works while the company is active.
     resp = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
 
     # Deactivate the company; the same token must now be rejected.
-    with SessionLocal() as db:
-        db.query(TenantORM).filter(TenantORM.id == "tenant-alpha").update({"is_active": False})
-        db.commit()
+    db.query(TenantORM).filter(TenantORM.id == "tenant-alpha").update({"is_active": False})
+    db.commit()
 
     resp = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 403

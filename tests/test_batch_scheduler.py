@@ -168,7 +168,13 @@ def test_contention_batch_spillover(db_session: Session):
     Test that when multiple jobs compete for a single slot,
     jobs spill to subsequent feasible slots once capacity is full.
     """
-    now = datetime(2026, 9, 10, 10, 0, 0, tzinfo=timezone.utc)
+    # A future-relative timestamp, not a hardcoded absolute date: since
+    # app.decide.batch_scheduler now clamps its effective start floor to
+    # max(real_now, requested) (Time Consistency Hardening, matching the
+    # single-job scheduler's existing clamp), a fixed past calendar date here
+    # would collapse every candidate onto the real current instant instead of
+    # spreading across this test's intended multi-slot contention window.
+    now = datetime.now(timezone.utc) + timedelta(hours=1)
     deadline = now + timedelta(hours=12)
 
     # Cluster capacity with only 2.0 CPU cores max

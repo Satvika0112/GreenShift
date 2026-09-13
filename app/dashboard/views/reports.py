@@ -27,7 +27,7 @@ def render_reports_view() -> None:
     with c1:
         st.markdown(render_metric_card("Carbon Abated", f"{carbon_avoided:.2f} kg", "Scope 2 compute emissions", accent=True), unsafe_allow_html=True)
     with c2:
-        st.markdown(render_metric_card("Financial Savings", f"${cost_saved:.2f}", "Electricity tariff arbitrage"), unsafe_allow_html=True)
+        st.markdown(render_metric_card("Financial Savings", f"{cost_saved:.2f} USD", "Electricity tariff arbitrage (fleet-wide USD aggregate)"), unsafe_allow_html=True)
     with c3:
         st.markdown(render_metric_card("Total Workloads", f"{total_jobs:,}", "Audited lifecycle records"), unsafe_allow_html=True)
     with c4:
@@ -54,15 +54,24 @@ def render_reports_view() -> None:
             csv_str = pd.DataFrame(brsr_data).to_csv(index=False)
             st.download_button("📥 Download BRSR CSV", csv_str, file_name="greenshift_brsr_report.csv", mime="text/csv", use_container_width=True)
         with col_md:
-            md_str = f"# GreenShift BRSR Report\n\n- **Carbon Avoided:** {carbon_avoided:.4f} kg\n- **Cost Saved:** ${cost_saved:.4f}\n- **Total Workloads:** {total_jobs}"
+            md_str = f"# GreenShift BRSR Report\n\n- **Carbon Avoided:** {carbon_avoided:.4f} kg\n- **Cost Saved:** {cost_saved:.4f} USD\n- **Total Workloads:** {total_jobs}"
             st.download_button("📥 Download Markdown", md_str, file_name="greenshift_brsr_report.md", mime="text/markdown", use_container_width=True)
 
     with tab_savings:
         st.markdown("#### Regional Cost & Carbon Abatement Breakdown")
+        st.caption(
+            "Illustrative proportional split of the fleet-wide USD cost-saved "
+            "aggregate (cost_difference, always USD by contract — see "
+            "ScheduleDecisionORM) across the India regions in the master ToD "
+            "tariff dataset — not a live per-region native-currency query."
+        )
+        # cost_saved is cost_difference, a fleet-wide aggregate that is always
+        # USD by contract — labeling this split as USD is correct; it must NOT
+        # be relabeled INR just because the regions themselves are INR-denominated.
         regional_breakdown = [
-            {"Region": "Telangana (IN-TG)", "Workloads": int(total_jobs * 0.4), "Carbon Avoided (kg)": f"{carbon_avoided * 0.45:.2f}", "Cost Saved ($)": f"${cost_saved * 0.42:.2f}", "SLA Met": "99.8%"},
-            {"Region": "Gujarat (IN-GJ)", "Workloads": int(total_jobs * 0.3), "Carbon Avoided (kg)": f"{carbon_avoided * 0.28:.2f}", "Cost Saved ($)": f"${cost_saved * 0.31:.2f}", "SLA Met": "100.0%"},
-            {"Region": "Himachal Pradesh (IN-HP)", "Workloads": int(total_jobs * 0.15), "Carbon Avoided (kg)": f"{carbon_avoided * 0.15:.2f}", "Cost Saved ($)": f"${cost_saved * 0.15:.2f}", "SLA Met": "100.0%"},
-            {"Region": "West Bengal (IN-WB)", "Workloads": int(total_jobs * 0.15), "Carbon Avoided (kg)": f"{carbon_avoided * 0.12:.2f}", "Cost Saved ($)": f"${cost_saved * 0.12:.2f}", "SLA Met": "99.5%"},
+            {"Region": "Telangana (IN-TG)", "Workloads": int(total_jobs * 0.4), "Carbon Avoided (kg)": f"{carbon_avoided * 0.45:.2f}", "Cost Saved (USD, est.)": f"{cost_saved * 0.42:.2f}", "SLA Met": "99.8%"},
+            {"Region": "Gujarat (IN-GJ)", "Workloads": int(total_jobs * 0.3), "Carbon Avoided (kg)": f"{carbon_avoided * 0.28:.2f}", "Cost Saved (USD, est.)": f"{cost_saved * 0.31:.2f}", "SLA Met": "100.0%"},
+            {"Region": "Himachal Pradesh (IN-HP)", "Workloads": int(total_jobs * 0.15), "Carbon Avoided (kg)": f"{carbon_avoided * 0.15:.2f}", "Cost Saved (USD, est.)": f"{cost_saved * 0.15:.2f}", "SLA Met": "100.0%"},
+            {"Region": "West Bengal (IN-WB)", "Workloads": int(total_jobs * 0.15), "Carbon Avoided (kg)": f"{carbon_avoided * 0.12:.2f}", "Cost Saved (USD, est.)": f"{cost_saved * 0.12:.2f}", "SLA Met": "99.5%"},
         ]
         st.dataframe(pd.DataFrame(regional_breakdown), use_container_width=True, hide_index=True)

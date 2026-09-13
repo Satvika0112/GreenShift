@@ -347,7 +347,7 @@ def render_dashboard_overview(active_region: str = "IN-TG") -> None:
         with r1:
             st.markdown(render_metric_card("Carbon Abated", f"{carbon_avoided2:.3f} kg", "Scope 2 compute emissions", accent=True), unsafe_allow_html=True)
         with r2:
-            st.markdown(render_metric_card("Financial Savings", f"${cost_saved2:.4f}", "Electricity tariff arbitrage"), unsafe_allow_html=True)
+            st.markdown(render_metric_card("Financial Savings", f"{cost_saved2:.4f} USD", "Electricity tariff arbitrage (fleet-wide USD aggregate)"), unsafe_allow_html=True)
         with r3:
             st.markdown(render_metric_card("Total Workloads", f"{total_jobs2:,}", "Audited lifecycle records"), unsafe_allow_html=True)
         with r4:
@@ -369,11 +369,21 @@ def render_dashboard_overview(active_region: str = "IN-TG") -> None:
 
         with savings_tab:
             st.markdown("#### Regional Cost & Carbon Abatement Breakdown")
+            st.caption(
+                "Illustrative proportional split of the fleet-wide USD cost-saved "
+                "aggregate (cost_difference, always USD by contract — see "
+                "ScheduleDecisionORM) across the India regions in the master ToD "
+                "tariff dataset — not a live per-region native-currency query."
+            )
+            # cost_saved2 is cost_difference, a fleet-wide aggregate that is
+            # always USD by contract (see ScheduleDecisionORM.cost_difference) —
+            # labeling this split as USD is correct; it must NOT be relabeled
+            # INR just because the regions themselves are INR-denominated.
             regional_breakdown = [
-                {"Region": "Telangana (IN-TG)", "Workloads": int(total_jobs2 * 0.4), "Carbon Avoided (kg)": f"{carbon_avoided2 * 0.45:.3f}", "Cost Saved ($)": f"${cost_saved2 * 0.42:.4f}", "SLA Met": "99.8%"},
-                {"Region": "Gujarat (IN-GJ)", "Workloads": int(total_jobs2 * 0.3), "Carbon Avoided (kg)": f"{carbon_avoided2 * 0.28:.3f}", "Cost Saved ($)": f"${cost_saved2 * 0.31:.4f}", "SLA Met": "100.0%"},
-                {"Region": "Himachal Pradesh (IN-HP)", "Workloads": int(total_jobs2 * 0.15), "Carbon Avoided (kg)": f"{carbon_avoided2 * 0.15:.3f}", "Cost Saved ($)": f"${cost_saved2 * 0.15:.4f}", "SLA Met": "100.0%"},
-                {"Region": "West Bengal (IN-WB)", "Workloads": int(total_jobs2 * 0.15), "Carbon Avoided (kg)": f"{carbon_avoided2 * 0.12:.3f}", "Cost Saved ($)": f"${cost_saved2 * 0.12:.4f}", "SLA Met": "99.5%"},
+                {"Region": "Telangana (IN-TG)", "Workloads": int(total_jobs2 * 0.4), "Carbon Avoided (kg)": f"{carbon_avoided2 * 0.45:.3f}", "Cost Saved (USD, est.)": f"{cost_saved2 * 0.42:.4f}", "SLA Met": "99.8%"},
+                {"Region": "Gujarat (IN-GJ)", "Workloads": int(total_jobs2 * 0.3), "Carbon Avoided (kg)": f"{carbon_avoided2 * 0.28:.3f}", "Cost Saved (USD, est.)": f"{cost_saved2 * 0.31:.4f}", "SLA Met": "100.0%"},
+                {"Region": "Himachal Pradesh (IN-HP)", "Workloads": int(total_jobs2 * 0.15), "Carbon Avoided (kg)": f"{carbon_avoided2 * 0.15:.3f}", "Cost Saved (USD, est.)": f"{cost_saved2 * 0.15:.4f}", "SLA Met": "100.0%"},
+                {"Region": "West Bengal (IN-WB)", "Workloads": int(total_jobs2 * 0.15), "Carbon Avoided (kg)": f"{carbon_avoided2 * 0.12:.3f}", "Cost Saved (USD, est.)": f"{cost_saved2 * 0.12:.4f}", "SLA Met": "99.5%"},
             ]
             st.dataframe(pd.DataFrame(regional_breakdown), use_container_width=True, hide_index=True)
 

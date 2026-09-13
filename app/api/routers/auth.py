@@ -34,6 +34,7 @@ from app.shared.auth import (
     is_platform_admin,
     is_company_admin,
     user_company_is_inactive,
+    DUMMY_PASSWORD_HASH,
 )
 from app.trust.service import (
     record_login_success,
@@ -240,7 +241,12 @@ def login(
         or_(UserORM.username == body.username, UserORM.email == body.username)
     ).first()
 
-    if not user or not verify_password(body.password, user.hashed_password):
+    # Always run a bcrypt comparison, even for a nonexistent user, so the
+    # response time doesn't reveal whether the username exists (see
+    # DUMMY_PASSWORD_HASH's docstring in app.shared.auth).
+    password_ok = verify_password(body.password, user.hashed_password if user else DUMMY_PASSWORD_HASH)
+
+    if not user or not password_ok:
         try:
             record_login_failure(db, username_attempted=body.username, ip_address=client_ip)
         except Exception:
@@ -345,6 +351,7 @@ def list_users_legacy(
     response_model=LoginResponse,
     summary="Authenticate via email + password (multi-tenant)",
 )
+@limiter.limit("10/minute")
 def login_email(
     request: Request,
     body: LoginRequest,
@@ -357,7 +364,10 @@ def login_email(
     client_ip = getattr(request.client, "host", None) if request.client else None
     user = db.query(UserORM).filter(UserORM.email == body.email).first()
 
-    if not user or not verify_password(body.password, user.hashed_password):
+    # See app.api.routers.auth.login for why this always runs bcrypt.
+    password_ok = verify_password(body.password, user.hashed_password if user else DUMMY_PASSWORD_HASH)
+
+    if not user or not password_ok:
         try:
             record_login_failure(db, username_attempted=body.email, ip_address=client_ip)
         except Exception:

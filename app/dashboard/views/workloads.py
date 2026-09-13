@@ -151,7 +151,12 @@ def _render_queue_tab():
             if dec:
                 st.markdown(f"- **Selected Window:** `{dec.get('selected_start', '')[:16]} → {dec.get('selected_end', '')[:16]}`")
                 st.markdown(f"- **Carbon Intensity:** `{dec.get('carbon_intensity', 0.0)} gCO₂/kWh`")
-                st.markdown(f"- **Electricity Cost:** `${dec.get('electricity_cost', 0.0):.4f}`")
+                _native_cost, _currency = dec.get("native_cost"), dec.get("currency")
+                _cost_display = (
+                    f"{_native_cost:.4f} {_currency}" if _native_cost is not None and _currency
+                    else f"{dec.get('electricity_cost', 0.0):.4f} USD"
+                )
+                st.markdown(f"- **Electricity Cost:** `{_cost_display}`")
                 st.markdown(f"- **Carbon Avoided:** `{dec.get('carbon_avoided', 0.0):.4f} kg`")
                 st.markdown(f"- **Optimization Reason:** *{dec.get('reason', 'N/A')}*")
             else:
@@ -284,12 +289,18 @@ def _render_scheduling_tab():
         cost_usd = float(dec.get("electricity_cost") or 0.045)
         carbon_avoided = float(dec.get("carbon_avoided") or 0.012)
         reason = dec.get("reason") or "Lowest-carbon feasible window within deadline"
+        # Currency Consistency: prefer the execution region's real native_cost +
+        # currency (matches the React app's utils/workloadDisplay.formatCost) —
+        # electricity_cost is always USD internally and must never be shown as "$"
+        # for an INR/AUD/SEK region.
+        native_cost, currency = dec.get("native_cost"), dec.get("currency")
+        cost_display = f"{native_cost:.4f} {currency}" if native_cost is not None and currency else f"{cost_usd:.4f} USD"
 
         ms1, ms2, ms3 = st.columns(3)
         with ms1:
             st.markdown(render_metric_card("Carbon Intensity", f"{carbon_intensity:.1f} gCO₂/kWh", f"{carbon_avoided:.4f} kg avoided", accent=True), unsafe_allow_html=True)
         with ms2:
-            st.markdown(render_metric_card("Electricity Cost", f"${cost_usd:.4f}", "Time-of-Day rate applied"), unsafe_allow_html=True)
+            st.markdown(render_metric_card("Electricity Cost", cost_display, "Time-of-Day rate applied"), unsafe_allow_html=True)
         with ms3:
             st.markdown(render_metric_card("Scheduling Window", f"{sel_start}", f"Duration: {job_data.get('runtime_minutes', 30)} min"), unsafe_allow_html=True)
 
@@ -330,7 +341,10 @@ def _render_scheduling_tab():
             slots_data.append({
                 "Candidate Window (UTC)": f"{slot_iso} → {(slot_time + timedelta(minutes=job_data.get('runtime_minutes', 30))).strftime('%H:%M')}",
                 "Carbon Intensity": f"{c_val:.1f} gCO₂/kWh",
-                "Estimated Cost": f"${cost_usd * (1.0 + abs(offset_h) * 0.1):.4f}",
+                "Estimated Cost": (
+                    f"{native_cost * (1.0 + abs(offset_h) * 0.1):.4f} {currency}" if native_cost is not None and currency
+                    else f"{cost_usd * (1.0 + abs(offset_h) * 0.1):.4f} USD"
+                ),
                 "Deadline Feasible": "✓ Yes",
                 "Cluster Capacity": "✓ Available",
                 "Decision": status_text,

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { User, UserRole, AuthTokenResponse } from '../types/api';
 import { authApi } from '../api/endpoints';
 
@@ -27,13 +28,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return saved ? JSON.parse(saved) : null;
   });
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const queryClient = useQueryClient();
 
   const logout = useCallback(() => {
     setUser(null);
     setToken(null);
     sessionStorage.removeItem('greenshift_token');
     sessionStorage.removeItem('greenshift_user');
-  }, []);
+    // Every cached query (workloads, approvals, notifications, dashboard,
+    // impact, ...) was fetched under the outgoing user's tenant/team scope.
+    // Without this, a different user logging in afterward in the same tab
+    // could briefly see that data rendered from cache before it refetches —
+    // the backend itself remains correctly tenant-scoped, but the cache
+    // must never outlive the session that populated it.
+    queryClient.clear();
+  }, [queryClient]);
 
   const refreshUser = useCallback(async () => {
     const currentToken = sessionStorage.getItem('greenshift_token');

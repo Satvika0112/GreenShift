@@ -18,6 +18,7 @@ from app.ingest.jobs import get_job
 from app.shared.auth import get_current_user
 from app.shared.database import get_db
 from app.shared.models import JobStatus, UserORM
+from app.shared.timezone import ensure_utc
 
 from app.shared.utils import get_logger
 
@@ -100,14 +101,14 @@ def get_dispatch_status(
         "kubernetes_job_name": execution.kubernetes_job_name,
         "namespace": execution.kubernetes_namespace,
         "pod_name": execution.pod_name,
-        "planned_start": execution.planned_start.isoformat(),
-        "actual_start": execution.actual_start.isoformat() if execution.actual_start else None,
-        "actual_end": execution.actual_end.isoformat() if execution.actual_end else None,
+        "planned_start": ensure_utc(execution.planned_start).isoformat(),
+        "actual_start": ensure_utc(execution.actual_start).isoformat() if execution.actual_start else None,
+        "actual_end": ensure_utc(execution.actual_end).isoformat() if execution.actual_end else None,
         "k8s_status": execution.k8s_status,
         "gs_status": execution.gs_status,
         "error_message": execution.error_message,
-        "created_at": execution.created_at.isoformat() if execution.created_at else None,
-        "updated_at": execution.updated_at.isoformat() if execution.updated_at else None,
+        "created_at": ensure_utc(execution.created_at).isoformat() if execution.created_at else None,
+        "updated_at": ensure_utc(execution.updated_at).isoformat() if execution.updated_at else None,
     }
 
 
@@ -126,14 +127,14 @@ def list_dispatch_executions(
             "kubernetes_job_name": e.kubernetes_job_name,
             "namespace": e.kubernetes_namespace,
             "pod_name": e.pod_name,
-            "planned_start": e.planned_start.isoformat() if e.planned_start else None,
-            "actual_start": e.actual_start.isoformat() if e.actual_start else None,
-            "actual_end": e.actual_end.isoformat() if e.actual_end else None,
+            "planned_start": ensure_utc(e.planned_start).isoformat() if e.planned_start else None,
+            "actual_start": ensure_utc(e.actual_start).isoformat() if e.actual_start else None,
+            "actual_end": ensure_utc(e.actual_end).isoformat() if e.actual_end else None,
             "k8s_status": e.k8s_status,
             "gs_status": e.gs_status,
             "error_message": e.error_message,
-            "created_at": e.created_at.isoformat() if e.created_at else None,
-            "updated_at": e.updated_at.isoformat() if e.updated_at else None,
+            "created_at": ensure_utc(e.created_at).isoformat() if e.created_at else None,
+            "updated_at": ensure_utc(e.updated_at).isoformat() if e.updated_at else None,
         }
         for e in executions
     ]
@@ -176,7 +177,7 @@ def get_cluster_state(
             "allocatable_gpus": snapshot.allocatable_gpus,
             "used_gpus": snapshot.used_gpus,
             "free_gpus": snapshot.free_gpus,
-            "timestamp": snapshot.timestamp.isoformat(),
+            "timestamp": ensure_utc(snapshot.timestamp).isoformat(),
             "nodes": [
                 {
                     "name": n.name,
@@ -229,7 +230,7 @@ def get_active_workers(
             {
                 "worker_id": w.claimed_by,
                 "active_claims": w.active_claims,
-                "oldest_claim": w.oldest_claim.isoformat() if w.oldest_claim else None,
+                "oldest_claim": ensure_utc(w.oldest_claim).isoformat() if w.oldest_claim else None,
             }
             for w in workers
         ],

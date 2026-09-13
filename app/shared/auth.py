@@ -61,6 +61,17 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
+# Fixed, precomputed bcrypt hash (cost=12, matching hash_password's real cost)
+# of an arbitrary value nobody's real password will ever equal. Login Flow
+# Hardening: run verify_password against this whenever no matching user row
+# exists, so an unknown-username login pays the same bcrypt cost as a
+# known-username-wrong-password login — otherwise the code path that skips
+# bcrypt entirely for a nonexistent user is a measurable timing oracle an
+# attacker can use to enumerate valid usernames even though the error
+# message itself is already generic.
+DUMMY_PASSWORD_HASH = "$2b$12$Vx1IKopV15bpDxY6mGKQO.dxh15puMR7.tR0HlotPUnr.SVCgWrpm"
+
+
 def create_access_token(
     user_id: int,
     username: str,

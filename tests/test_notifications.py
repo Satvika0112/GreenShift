@@ -1288,3 +1288,114 @@ class TestNotificationStreamEndpoint:
         assert "for alice" in frame
         assert "for bob" not in frame
         await alice_gen.aclose()
+
+
+class TestEmailContentIsolationAcrossTenants:
+    """Email Consistency & Security Hardening Pass: with two tenants' jobs
+    persisted simultaneously (not just one tenant per test, as elsewhere in
+    this file), confirm render_email() for one tenant's notification never
+    includes the other tenant's workload name, job id, or cost — closing the
+    literal "email content cannot contain another tenant's data" requirement
+    with a genuine multi-tenant-contention test, not just single-tenant
+    template-correctness tests."""
+
+    def test_render_email_for_one_tenant_never_leaks_the_others_job_data(self, db, two_users):
+        from app.notify.templates import render_email
+
+        alice, bob = two_users["alice"], two_users["bob"]
+        # Captured as plain values up front — create_notification() commits
+        # internally (once per recipient), which expires every ORM instance
+        # in the session; re-touching alice/bob's attributes afterward would
+        # force an unrelated mid-test reload, so route through plain ids/
+        # strings instead of the ORM objects from here on.
+        alice_id, alice_tenant_id = alice.id, alice.tenant_id
+        bob_id, bob_tenant_id = bob.id, bob.tenant_id
+        job_a_id, job_b_id = "JOB-ISO-TENANT-A", "JOB-ISO-TENANT-B"
+
+        job_a = JobORM(
+            job_id=job_a_id, team_id="team-a", tenant_id=alice_tenant_id,
+            submitted_by_user_id=alice_id, submitted_at=utcnow(),
+            deadline=utcnow() + timedelta(hours=2), runtime_minutes=15, power_kw=2.0,
+            region="IN-TG", container_image="greenshift/sample:v1",
+            status=JobStatus.PENDING_APPROVAL, workload_name="Tenant-A Confidential Forecast Job",
+            job_type="DATA_PROCESSING",
+        )
+        job_b = JobORM(
+            job_id=job_b_id, team_id="team-b", tenant_id=bob_tenant_id,
+            submitted_by_user_id=bob_id, submitted_at=utcnow(),
+            deadline=utcnow() + timedelta(hours=2), runtime_minutes=15, power_kw=2.0,
+            region="AU-SA-Small", container_image="greenshift/sample:v1",
+            status=JobStatus.PENDING_APPROVAL, workload_name="Tenant-B Payroll Batch Job",
+            job_type="ETL",
+        )
+        db.add_all([job_a, job_b])
+        db.commit()
+
+        notif_a = create_notification(
+            db, recipient_user_id=alice_id, event_type=EventType.JOB_SUBMITTED,
+            category="WORKLOAD", severity="INFO", title="Workload submitted", message="fallback",
+            tenant_id=alice_tenant_id, job_id=job_a_id, email_required=True,
+        )
+        notif_b = create_notification(
+            db, recipient_user_id=bob_id, event_type=EventType.JOB_SUBMITTED,
+            category="WORKLOAD", severity="INFO", title="Workload submitted", message="fallback",
+            tenant_id=bob_tenant_id, job_id=job_b_id, email_required=True,
+        )
+
+        _, body_a = render_email(db, notif_a)
+        _, body_b = render_email(db, notif_b)
+
+        assert "Tenant-A Confidential Forecast Job" in body_a
+        assert job_a_id in body_a
+        assert "Tenant-B Payroll Batch Job" not in body_a
+        assert job_b_id not in body_a
+
+        assert "Tenant-B Payroll Batch Job" in body_b
+        assert job_b_id in body_b
+        assert "Tenant-A Confidential Forecast Job" not in body_b
+        assert job_a_id not in body_b
+
+
+class TestUnauthorizedEmailTriggeringActionRejected:
+    """An approval decision fans out an APPROVAL_GRANTED/DECLINED email-eligible
+    notification (app.approval.service) — that trigger path must require the
+    same authentication as the underlying business action, and a rejected,
+    unauthenticated attempt must leave zero trace (no ApprovalORM row, no
+    notification, no job status change)."""
+
+    def test_unauthenticated_approve_request_is_rejected_and_creates_no_notification(self, db, two_users):
+        from app.shared.models import ApprovalORM, ScheduleDecisionORM
+
+        alice = two_users["alice"]
+        job = JobORM(
+            job_id="JOB-UNAUTH-APPROVE", team_id="team-a", tenant_id=alice.tenant_id,
+            submitted_by_user_id=alice.id, submitted_at=utcnow(),
+            deadline=utcnow() + timedelta(hours=2), runtime_minutes=15, power_kw=2.0,
+            region="IN-TG", container_image="greenshift/sample:v1",
+            status=JobStatus.PENDING_APPROVAL,
+        )
+        db.add(job)
+        db.commit()
+
+        decision = ScheduleDecisionORM(
+            job_id=job.job_id,
+            selected_start=utcnow() + timedelta(minutes=30),
+            selected_end=utcnow() + timedelta(minutes=60),
+            carbon_intensity=400.0, carbon_emission=4.0, electricity_cost=1.0, reason="test",
+        )
+        db.add(decision)
+        db.commit()
+        db.refresh(decision)
+
+        res = client.post(f"/approval/{job.job_id}/approve", json={"schedule_id": decision.id})
+        assert res.status_code == 401
+
+        db.refresh(job)
+        assert job.status == JobStatus.PENDING_APPROVAL
+        assert db.query(ApprovalORM).filter(ApprovalORM.job_id == job.job_id).first() is None
+        assert (
+            db.query(NotificationORM)
+            .filter(NotificationORM.job_id == job.job_id, NotificationORM.event_type == EventType.APPROVAL_GRANTED)
+            .first()
+            is None
+        )
