@@ -324,6 +324,7 @@ def get_job_detail(
             "budget_remaining": sd.budget_remaining,
             "objective": getattr(sd, "scheduler_objective", "CARBON_FIRST") or "CARBON_FIRST",
             "scheduler_objective": getattr(sd, "scheduler_objective", "CARBON_FIRST") or "CARBON_FIRST",
+            "carbon_tolerance_pct": getattr(sd, "carbon_tolerance_pct", None),
             "candidates_evaluated": getattr(sd, "candidates_evaluated", 0) or 0,
             "feasible_candidates_count": getattr(sd, "feasible_candidates_count", 0) or 0,
             "rejection_summary": getattr(sd, "rejection_summary", {}) or {},
@@ -343,6 +344,16 @@ def get_job_detail(
             "candidates": getattr(sd, "candidates_json", None),
             "rejected_candidates": getattr(sd, "rejected_candidates_json", None),
             "recommended_candidate": getattr(sd, "recommended_candidate_json", None),
+            # Contention-aware batch scheduling metadata — these columns
+            # already exist on ScheduleDecisionORM (see
+            # app.decide.batch_scheduler) but were never exposed by this
+            # endpoint, so the dashboard could never actually receive real
+            # slot-utilization/ML-advisor data through it.
+            "scheduling_method": getattr(sd, "scheduling_method", None),
+            "slot_utilization_pct": getattr(sd, "slot_utilization_pct", None),
+            "demand_predicted": getattr(sd, "demand_predicted", None),
+            "spilled_from_preferred": getattr(sd, "spilled_from_preferred", False),
+            "ml_advisor_used": getattr(sd, "ml_advisor_used", False),
         }
 
     if job.kubernetes_execution:

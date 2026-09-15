@@ -5,7 +5,6 @@ Merges: workloads + scheduling_engine + job_monitoring + approvals.
 4 inner tabs: Queue & List | Scheduling Decisions | Live Monitoring | Approval Queue
 """
 
-from datetime import datetime, timedelta, timezone
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -14,7 +13,6 @@ from app.dashboard.api_client import (
     fetch_jobs,
     fetch_job_detail,
     fetch_schedule_decisions,
-    fetch_carbon_curve,
     fetch_pending_approvals,
     fetch_declined_approvals,
     schedule_job_api,
@@ -30,6 +28,12 @@ from app.dashboard.components import (
     render_status_badge,
     render_execution_timeline,
     render_decision_factor,
+)
+from app.dashboard.scheduling_explainability import (
+    NA,
+    compute_decision_factors,
+    format_candidate_table,
+    format_scheduler_objective,
 )
 
 
@@ -149,16 +153,21 @@ def _render_queue_tab():
         with col_sched:
             st.markdown("#### 🌿 Scheduling Decision")
             if dec:
-                st.markdown(f"- **Selected Window:** `{dec.get('selected_start', '')[:16]} → {dec.get('selected_end', '')[:16]}`")
-                st.markdown(f"- **Carbon Intensity:** `{dec.get('carbon_intensity', 0.0)} gCO₂/kWh`")
+                _ci = dec.get("carbon_intensity")
+                _ca = dec.get("carbon_avoided")
+                st.markdown(f"- **Selected Window:** `{(dec.get('selected_start') or '')[:16]} → {(dec.get('selected_end') or '')[:16]}`")
+                st.markdown(f"- **Carbon Intensity:** `{f'{_ci} gCO₂/kWh' if _ci is not None else NA}`")
                 _native_cost, _currency = dec.get("native_cost"), dec.get("currency")
-                _cost_display = (
-                    f"{_native_cost:.4f} {_currency}" if _native_cost is not None and _currency
-                    else f"{dec.get('electricity_cost', 0.0):.4f} USD"
-                )
+                _electricity_cost = dec.get("electricity_cost")
+                if _native_cost is not None and _currency:
+                    _cost_display = f"{_native_cost:.4f} {_currency}"
+                elif _electricity_cost is not None:
+                    _cost_display = f"{_electricity_cost:.4f} USD"
+                else:
+                    _cost_display = NA
                 st.markdown(f"- **Electricity Cost:** `{_cost_display}`")
-                st.markdown(f"- **Carbon Avoided:** `{dec.get('carbon_avoided', 0.0):.4f} kg`")
-                st.markdown(f"- **Optimization Reason:** *{dec.get('reason', 'N/A')}*")
+                st.markdown(f"- **Carbon Avoided:** `{f'{_ca:.4f} kg' if _ca is not None else NA}`")
+                st.markdown(f"- **Optimization Reason:** *{dec.get('reason') or NA}*")
             else:
                 st.caption("No scheduling decision generated yet.")
 
@@ -249,7 +258,11 @@ def _render_scheduling_tab():
     render_section_header("⚙️ Scheduling Engine & Explainability", "Deep inspection into Carbon-First mathematical optimization and candidate slot evaluation")
 
     jobs = fetch_jobs(limit=100)
-    scheduled_jobs = [j for j in jobs if j.get("schedule_decision") is not None]
+    # GET /api/v1/jobs flattens schedule_decision fields directly onto the
+    # job item (there is no "schedule_decision" key on this list endpoint —
+    # see app/api/routers/ingest.py) — "selected_start" is the real signal
+    # a decision exists.
+    scheduled_jobs = [j for j in jobs if j.get("selected_start") is not None]
     if not scheduled_jobs:
         scheduled_jobs = [j for j in jobs if j.get("status") not in ("SUBMITTED", "VALIDATED")][:10]
     if not scheduled_jobs:
@@ -272,84 +285,107 @@ def _render_scheduling_tab():
         job_data = fetch_job_detail(selected_job_id) if selected_job_id else {}
         dec = job_data.get("schedule_decision") or {}
 
+        if not dec:
+            st.info("No scheduling decision available for this workload yet.")
+            return
+
         st.markdown(
             f'<div class="gs-card-header" style="margin-bottom:12px;">'
             f'<div>'
             f'<div class="gs-card-title">Optimal Execution Window</div>'
-            f'<div class="gs-card-subtitle">Workload: <code>{selected_job_id}</code> | Objective: <strong>CARBON_FIRST</strong></div>'
+            f'<div class="gs-card-subtitle">Workload: <code>{selected_job_id}</code> | Objective: <strong>{format_scheduler_objective(dec)}</strong></div>'
             f'</div>'
             f'<div>{render_status_badge(job_data.get("status", "SCHEDULED"))}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
 
-        sel_start = dec.get("selected_start", "")[:16].replace("T", " ")
-        sel_end = dec.get("selected_end", "")[:16].replace("T", " ")
-        carbon_intensity = float(dec.get("carbon_intensity") or 310.0)
-        cost_usd = float(dec.get("electricity_cost") or 0.045)
-        carbon_avoided = float(dec.get("carbon_avoided") or 0.012)
-        reason = dec.get("reason") or "Lowest-carbon feasible window within deadline"
+        sel_start = (dec.get("selected_start") or "")[:16].replace("T", " ")
+        carbon_intensity = dec.get("carbon_intensity")
+        cost_usd = dec.get("electricity_cost")
+        carbon_avoided = dec.get("carbon_avoided")
+        reason = dec.get("reason") or NA
         # Currency Consistency: prefer the execution region's real native_cost +
         # currency (matches the React app's utils/workloadDisplay.formatCost) —
         # electricity_cost is always USD internally and must never be shown as "$"
         # for an INR/AUD/SEK region.
         native_cost, currency = dec.get("native_cost"), dec.get("currency")
-        cost_display = f"{native_cost:.4f} {currency}" if native_cost is not None and currency else f"{cost_usd:.4f} USD"
+        if native_cost is not None and currency:
+            cost_display = f"{native_cost:.4f} {currency}"
+        elif cost_usd is not None:
+            cost_display = f"{cost_usd:.4f} USD"
+        else:
+            cost_display = NA
 
         ms1, ms2, ms3 = st.columns(3)
         with ms1:
-            st.markdown(render_metric_card("Carbon Intensity", f"{carbon_intensity:.1f} gCO₂/kWh", f"{carbon_avoided:.4f} kg avoided", accent=True), unsafe_allow_html=True)
+            carbon_str = f"{carbon_intensity:.1f} gCO₂/kWh" if carbon_intensity is not None else NA
+            avoided_str = f"{carbon_avoided:.4f} kg avoided" if carbon_avoided is not None else NA
+            st.markdown(render_metric_card("Carbon Intensity", carbon_str, avoided_str, accent=True), unsafe_allow_html=True)
         with ms2:
             st.markdown(render_metric_card("Electricity Cost", cost_display, "Time-of-Day rate applied"), unsafe_allow_html=True)
         with ms3:
-            st.markdown(render_metric_card("Scheduling Window", f"{sel_start}", f"Duration: {job_data.get('runtime_minutes', 30)} min"), unsafe_allow_html=True)
+            runtime_min = job_data.get("runtime_minutes")
+            duration_str = f"Duration: {runtime_min} min" if runtime_min is not None else NA
+            st.markdown(render_metric_card("Scheduling Window", sel_start or NA, duration_str), unsafe_allow_html=True)
 
+        baseline_carbon = dec.get("baseline_carbon_emission")
+        carbon_bullet = (
+            f"• Carbon intensity in this slot avoided <strong>{carbon_avoided:.4f} kg CO₂</strong> "
+            f"({dec.get('carbon_reduction_pct'):.1f}% reduction) versus the immediate-execution baseline.<br>"
+            if baseline_carbon is not None and baseline_carbon > 0
+            and carbon_avoided is not None and dec.get("carbon_reduction_pct") is not None
+            else ""
+        )
         st.markdown("#### 💡 Why this slot was selected:")
         st.markdown(
             f'<div style="background:#041315;border:1px solid #0E383C;border-left:4px solid #00E599;padding:14px 18px;border-radius:8px;margin-bottom:20px;">'
             f'<div style="color:#FFFFFF;font-weight:600;margin-bottom:6px;">✓ Primary Objective: {reason}</div>'
             f'<div style="font-size:0.85rem;color:#94A3B8;">'
-            f'• Carbon intensity in this slot represents a significant reduction vs baseline arrival.<br>'
-            f'• Hard deadline constraints satisfied.<br>'
-            f'• Sufficient cluster CPU & RAM capacity verified via Kubernetes collector.</div>'
+            f'{carbon_bullet}'
+            f'• Hard deadline and cluster capacity constraints were satisfied at decision time '
+            f'(a schedule is only ever stored for a workload that passed every hard constraint).</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
 
+        # Decision Factors — same derivation as
+        # app.dashboard.views.scheduling_engine (both views consume
+        # app.dashboard.scheduling_explainability.compute_decision_factors
+        # so they can never disagree); N/A when source data is unavailable,
+        # never a fabricated 88/74/82/95.
+        factors = compute_decision_factors(dec, job_data.get("deadline"))
         st.markdown("#### 📊 Decision Factors")
-        st.markdown(render_decision_factor("Carbon Abatement Score", 88.0, "88%"), unsafe_allow_html=True)
-        st.markdown(render_decision_factor("Electricity Tariff Score", 74.0, "74%"), unsafe_allow_html=True)
-        st.markdown(render_decision_factor("Cluster Resource Fit", 95.0, "95%"), unsafe_allow_html=True)
-        st.markdown(render_decision_factor("SLA Margin / Buffer", 82.0, "82%"), unsafe_allow_html=True)
+        st.caption("Carbon Abatement = improvement vs. immediate-execution baseline · Cost Score = improvement vs. baseline electricity cost · SLA Margin = actual remaining buffer before deadline")
 
-        # Candidate Slot Comparison Table
+        carbon_pct = factors["carbon_abatement_pct"]
+        st.markdown(
+            render_decision_factor("Carbon Abatement Score", carbon_pct if carbon_pct is not None else 0.0, f"{carbon_pct:.1f}%" if carbon_pct is not None else NA),
+            unsafe_allow_html=True,
+        )
+        cost_pct = factors["cost_score_pct"]
+        st.markdown(
+            render_decision_factor("Cost Reduction Score", cost_pct if cost_pct is not None else 0.0, f"{cost_pct:.1f}%" if cost_pct is not None else NA),
+            unsafe_allow_html=True,
+        )
+        headroom_pct = factors["slot_headroom_pct"]
+        st.markdown(
+            render_decision_factor("Slot Capacity Headroom", headroom_pct if headroom_pct is not None else 0.0, f"{headroom_pct:.0f}% free" if headroom_pct is not None else NA),
+            unsafe_allow_html=True,
+        )
+        sla_hours = factors["sla_buffer_hours"]
+        sla_str = f"{sla_hours:.1f}h before deadline" if sla_hours is not None else NA
+        st.markdown(render_metric_card("SLA Margin / Buffer", sla_str, "Actual remaining time before the job's deadline"), unsafe_allow_html=True)
+
+        # Candidate Slot Comparison Table — the scheduler's own recorded
+        # candidate evaluations (candidates_json / rejected_candidates_json),
+        # never a synthetic +/-1h/+/-2h sweep with a fabricated formula.
         st.markdown("#### 🔍 Candidate Slot Comparison")
-        base_dt = datetime.fromisoformat(
-            dec.get("selected_start", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-        ) if dec.get("selected_start") else datetime.now(timezone.utc)
-        region_id = dec.get("region_id", job_data.get("region", "IN-TG"))
-        c_curve = fetch_carbon_curve(region_id)
-        c_map = {cp.get("timestamp", "")[:13]: float(cp.get("carbon_gco2_kwh", carbon_intensity)) for cp in c_curve}
-
-        slots_data = []
-        for offset_h in [-2, -1, 0, 1, 2]:
-            slot_time = base_dt + timedelta(hours=offset_h)
-            slot_iso = slot_time.strftime("%Y-%m-%d %H:00")
-            slot_key = slot_time.strftime("%Y-%m-%dT%H")
-            c_val = c_map.get(slot_key, carbon_intensity + abs(offset_h) * 25.0)
-            status_text = "✅ SELECTED (Lowest Carbon)" if offset_h == 0 else "✗ REJECTED (Higher Carbon)"
-            slots_data.append({
-                "Candidate Window (UTC)": f"{slot_iso} → {(slot_time + timedelta(minutes=job_data.get('runtime_minutes', 30))).strftime('%H:%M')}",
-                "Carbon Intensity": f"{c_val:.1f} gCO₂/kWh",
-                "Estimated Cost": (
-                    f"{native_cost * (1.0 + abs(offset_h) * 0.1):.4f} {currency}" if native_cost is not None and currency
-                    else f"{cost_usd * (1.0 + abs(offset_h) * 0.1):.4f} USD"
-                ),
-                "Deadline Feasible": "✓ Yes",
-                "Cluster Capacity": "✓ Available",
-                "Decision": status_text,
-            })
-        st.dataframe(pd.DataFrame(slots_data), use_container_width=True, hide_index=True)
+        table_rows = format_candidate_table(dec)
+        if not table_rows:
+            st.info("No candidate data available for this decision.")
+        else:
+            st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
     # ── Baseline vs GreenShift Impact ──────────────────────────────────────────
     st.markdown("---")
@@ -395,11 +431,23 @@ def _render_scheduling_tab():
                 b_c_vals = []
                 gs_c_vals = []
                 for r_name, r_data in by_reg.items():
-                    reg_names.append(r_name)
                     c_av = float(r_data.get("total_carbon_avoided_kg", 0.0))
                     r_pct = float(r_data.get("avg_carbon_reduction_pct", 0.0))
-                    base_est = (c_av / (r_pct / 100.0)) if r_pct > 0 else (c_av * 1.5)
+                    # Baseline carbon isn't stored per-region — it is
+                    # recovered exactly (not estimated) from the two real
+                    # aggregate fields the backend does return:
+                    # carbon_avoided = baseline - selected, and
+                    # reduction_pct = carbon_avoided / baseline * 100, so
+                    # baseline = carbon_avoided / (reduction_pct / 100).
+                    # When reduction_pct is 0 (no carbon was ever avoided
+                    # in this region) that division is undefined — the
+                    # region is left out of this chart entirely rather
+                    # than filled in with a fabricated multiplier.
+                    if r_pct <= 0:
+                        continue
+                    base_est = c_av / (r_pct / 100.0)
                     gs_est = max(0.0, base_est - c_av)
+                    reg_names.append(r_name)
                     b_c_vals.append(round(base_est, 1))
                     gs_c_vals.append(round(gs_est, 1))
 
@@ -473,49 +521,70 @@ def _render_scheduling_tab():
         if imp_sel:
             imp_job = fetch_job_detail(imp_sel)
             imp_dec = imp_job.get("schedule_decision") or {}
+            imp_energy_kwh = imp_job.get("energy_kwh")
 
-            carbon_avoided_i = float(imp_dec.get("carbon_avoided") or 0.012)
-            cost_diff_i = float(imp_dec.get("cost_difference") or imp_dec.get("electricity_cost") or 0.01)
-            carbon_intensity_i = float(imp_dec.get("carbon_intensity") or 310.0)
-            baseline_intensity_i = float(imp_dec.get("baseline_carbon") or carbon_intensity_i * 1.3)
-            cost_i = float(imp_dec.get("electricity_cost") or 0.045)
-            baseline_cost_i = cost_i * 1.2
+            # Every value below is a real ScheduleDecision field — no
+            # fabricated fallback (former: 0.012/0.01/310.0/*1.3/*1.2).
+            carbon_avoided_i = imp_dec.get("carbon_avoided")
+            cost_diff_i = imp_dec.get("cost_difference")
+            carbon_intensity_i = imp_dec.get("carbon_intensity")
+            cost_i = imp_dec.get("electricity_cost")
+            baseline_cost_i = imp_dec.get("baseline_cost")
+            baseline_emission_i = imp_dec.get("baseline_carbon_emission")
+            # Baseline carbon intensity isn't stored directly — only
+            # baseline_carbon_emission (kg) is. Deriving intensity from it
+            # is an exact unit conversion (kg = kWh * gCO2/kWh / 1000,
+            # inverted), not an estimate, and only computed when both real
+            # inputs exist.
+            baseline_intensity_i = (
+                (baseline_emission_i * 1000.0 / imp_energy_kwh)
+                if baseline_emission_i is not None and imp_energy_kwh is not None and imp_energy_kwh > 0
+                else None
+            )
 
             im1, im2, im3, im4 = st.columns(4)
             with im1:
-                st.markdown(render_metric_card("Carbon Avoided", f"{carbon_avoided_i:.4f} kg", "vs immediate baseline", accent=True), unsafe_allow_html=True)
+                st.markdown(render_metric_card("Carbon Avoided", f"{carbon_avoided_i:.4f} kg" if carbon_avoided_i is not None else NA, "vs immediate baseline", accent=True), unsafe_allow_html=True)
             with im2:
-                st.markdown(render_metric_card("Cost Reduction", f"${cost_diff_i:.4f}", "vs arrival scheduling"), unsafe_allow_html=True)
+                st.markdown(render_metric_card("Cost Reduction", f"{cost_diff_i:.4f} USD" if cost_diff_i is not None else NA, "vs arrival scheduling"), unsafe_allow_html=True)
             with im3:
-                st.markdown(render_metric_card("GreenShift Carbon", f"{carbon_intensity_i:.1f} gCO₂/kWh", "Scheduled optimal window"), unsafe_allow_html=True)
+                st.markdown(render_metric_card("GreenShift Carbon Intensity", f"{carbon_intensity_i:.1f} gCO₂/kWh" if carbon_intensity_i is not None else NA, "Scheduled optimal window"), unsafe_allow_html=True)
             with im4:
-                st.markdown(render_metric_card("Baseline Carbon", f"{baseline_intensity_i:.1f} gCO₂/kWh", "Immediate arrival slot"), unsafe_allow_html=True)
+                st.markdown(render_metric_card("Baseline Carbon Intensity", f"{baseline_intensity_i:.1f} gCO₂/kWh" if baseline_intensity_i is not None else NA, "Immediate arrival slot (derived: baseline emission ÷ energy)"), unsafe_allow_html=True)
 
-            # Comparison bar charts
+            # Comparison bar charts — rendered only when both real values
+            # needed for that comparison exist; otherwise an explicit
+            # unavailable state, never a fabricated baseline.
             fig_col1, fig_col2 = st.columns(2)
             with fig_col1:
-                fig_c = px.bar(
-                    x=["Baseline (Immediate)", "GreenShift (Optimal)"],
-                    y=[baseline_intensity_i, carbon_intensity_i],
-                    labels={"x": "Scheduling Mode", "y": "gCO₂/kWh"},
-                    title="Carbon Intensity Comparison",
-                    template="plotly_dark",
-                    color_discrete_sequence=["#EF4444", "#00E599"],
-                )
-                fig_c.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#f0f6fc"), height=280, margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
-                st.plotly_chart(fig_c, use_container_width=True, config={"displayModeBar": False})
+                if carbon_intensity_i is not None and baseline_intensity_i is not None:
+                    fig_c = px.bar(
+                        x=["Baseline (Immediate)", "GreenShift (Optimal)"],
+                        y=[baseline_intensity_i, carbon_intensity_i],
+                        labels={"x": "Scheduling Mode", "y": "gCO₂/kWh"},
+                        title="Carbon Intensity Comparison",
+                        template="plotly_dark",
+                        color_discrete_sequence=["#EF4444", "#00E599"],
+                    )
+                    fig_c.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#f0f6fc"), height=280, margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
+                    st.plotly_chart(fig_c, use_container_width=True, config={"displayModeBar": False})
+                else:
+                    st.info("Carbon intensity comparison unavailable — missing baseline emission or energy data for this workload.")
 
             with fig_col2:
-                fig_co = px.bar(
-                    x=["Baseline (Immediate)", "GreenShift (Optimal)"],
-                    y=[baseline_cost_i, cost_i],
-                    labels={"x": "Scheduling Mode", "y": "Cost ($/kWh)"},
-                    title="Electricity Cost Comparison",
-                    template="plotly_dark",
-                    color_discrete_sequence=["#EF4444", "#00E599"],
-                )
-                fig_co.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#f0f6fc"), height=280, margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
-                st.plotly_chart(fig_co, use_container_width=True, config={"displayModeBar": False})
+                if cost_i is not None and baseline_cost_i is not None:
+                    fig_co = px.bar(
+                        x=["Baseline (Immediate)", "GreenShift (Optimal)"],
+                        y=[baseline_cost_i, cost_i],
+                        labels={"x": "Scheduling Mode", "y": "Total Electricity Cost (USD)"},
+                        title="Electricity Cost Comparison",
+                        template="plotly_dark",
+                        color_discrete_sequence=["#EF4444", "#00E599"],
+                    )
+                    fig_co.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#f0f6fc"), height=280, margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
+                    st.plotly_chart(fig_co, use_container_width=True, config={"displayModeBar": False})
+                else:
+                    st.info("Cost comparison unavailable — missing baseline cost data for this workload.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -607,13 +676,17 @@ def _render_monitoring_tab():
         with mm2:
             st.markdown(render_metric_card("Runtime", f"{job_info.get('runtime_minutes', 30)} min", "Duration"), unsafe_allow_html=True)
         with mm3:
-            st.markdown(render_metric_card("Carbon", f"{dec.get('carbon_intensity', 0.0):.1f}", "gCO₂/kWh", accent=True), unsafe_allow_html=True)
+            _mm_ci = dec.get("carbon_intensity")
+            st.markdown(render_metric_card("Carbon", f"{_mm_ci:.1f}" if _mm_ci is not None else NA, "gCO₂/kWh", accent=True), unsafe_allow_html=True)
         with mm4:
             _native_cost, _currency = dec.get("native_cost"), dec.get("currency")
-            _cost_display = (
-                f"{_native_cost:.4f} {_currency}" if _native_cost is not None and _currency
-                else f"{dec.get('electricity_cost', 0.0):.4f} USD"
-            )
+            _mm_cost = dec.get("electricity_cost")
+            if _native_cost is not None and _currency:
+                _cost_display = f"{_native_cost:.4f} {_currency}"
+            elif _mm_cost is not None:
+                _cost_display = f"{_mm_cost:.4f} USD"
+            else:
+                _cost_display = NA
             st.markdown(render_metric_card("Cost", _cost_display, "Estimated"), unsafe_allow_html=True)
 
         ms1, ms2 = st.columns(2)
@@ -625,10 +698,23 @@ def _render_monitoring_tab():
             st.markdown(f"- **Deadline:** `{job_info.get('deadline', 'N/A')}`")
         with ms2:
             st.markdown("#### ⏱️ Timing & SLA Compliance")
-            st.markdown(f"- **Submitted At:** `{job_info.get('submitted_at', 'N/A')}`")
-            st.markdown(f"- **Scheduled Window:** `{dec.get('selected_start', 'N/A')[:16]} → {dec.get('selected_end', 'N/A')[:16]}`")
-            st.markdown(f"- **Carbon Avoided:** `{dec.get('carbon_avoided', 0.0):.4f} kg`")
-            st.markdown(f"- **SLA Status:** `MET (Within Deadline)`")
+            st.markdown(f"- **Submitted At:** `{job_info.get('submitted_at') or NA}`")
+            _ms_start = (dec.get("selected_start") or "")[:16]
+            _ms_end = (dec.get("selected_end") or "")[:16]
+            st.markdown(f"- **Scheduled Window:** `{_ms_start or NA} → {_ms_end or NA}`")
+            _ms_ca = dec.get("carbon_avoided")
+            st.markdown(f"- **Carbon Avoided:** `{f'{_ms_ca:.4f} kg' if _ms_ca is not None else NA}`")
+            # sla_met is a real backend field (app.decide.impact_calculator
+            # .calculate_impact) — never hardcoded to "MET" regardless of
+            # the actual outcome.
+            _sla_met = dec.get("sla_met")
+            if _sla_met is True:
+                _sla_str = "MET (Within Deadline)"
+            elif _sla_met is False:
+                _sla_str = "MISSED (Past Deadline)"
+            else:
+                _sla_str = NA
+            st.markdown(f"- **SLA Status:** `{_sla_str}`")
 
         st.markdown("---")
         col_act1, col_act2 = st.columns([1.5, 1])
@@ -719,27 +805,39 @@ def _render_approvals_tab():
                 schedule_id = item.get("schedule_id", 0)
                 team_id = item.get("team_id", "N/A")
                 region = item.get("region", "IN-TG")
-                start_time = item.get("selected_start", "N/A")
-                runtime = item.get("runtime_minutes", 30)
-                carbon_intensity = item.get("carbon_intensity", 0.0)
-                cost_usd = item.get("electricity_cost_usd", 0.0)
-                carbon_emission = item.get("carbon_emission_kg", 0.0)
-                reason = item.get("reason", "Lowest carbon intensity window")
+                start_time = item.get("selected_start")
+                runtime = item.get("runtime_minutes")
+                carbon_intensity = item.get("carbon_intensity")
+                carbon_emission = item.get("carbon_emission_kg")
+                native_cost, item_currency = item.get("native_cost"), item.get("currency")
+                cost_usd = item.get("electricity_cost_usd")
+                if native_cost is not None and item_currency:
+                    cost_display = f"{native_cost:.4f} {item_currency}"
+                elif cost_usd is not None:
+                    cost_display = f"{cost_usd:.4f} USD"
+                else:
+                    cost_display = NA
+                # reason is optional on PendingApprovalItem — a missing
+                # value is shown as N/A, never a fabricated generic
+                # explanation that may not even match the applied policy
+                # (e.g. a COST_FIRST decision falsely described as
+                # "lowest carbon").
+                reason = item.get("reason") or NA
 
                 st.markdown(
                     f'<div class="gs-card" style="margin-bottom:12px;">'
                     f'<div class="gs-card-header">'
                     f'<div>'
                     f'<div class="gs-card-title">Job: <code>{job_id}</code></div>'
-                    f'<div class="gs-card-subtitle">Team: <strong>{team_id}</strong> | Region: <strong>{region}</strong> | Runtime: <strong>{runtime} min</strong></div>'
+                    f'<div class="gs-card-subtitle">Team: <strong>{team_id}</strong> | Region: <strong>{region}</strong> | Runtime: <strong>{f"{runtime} min" if runtime is not None else NA}</strong></div>'
                     f'</div>'
                     f'<div>{render_status_badge("PENDING_APPROVAL")}</div>'
                     f'</div>'
                     f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;font-size:0.85rem;">'
-                    f'<div>Proposed Start: <strong style="color:#00E599;">{str(start_time)[:16]} UTC</strong></div>'
-                    f'<div>Carbon: <strong>{carbon_intensity:.1f} gCO₂/kWh</strong></div>'
-                    f'<div>Cost: <strong>${cost_usd:.4f}</strong></div>'
-                    f'<div>Emissions: <strong>{carbon_emission:.4f} kg</strong></div>'
+                    f'<div>Proposed Start: <strong style="color:#00E599;">{(str(start_time)[:16] + " UTC") if start_time else NA}</strong></div>'
+                    f'<div>Carbon: <strong>{f"{carbon_intensity:.1f} gCO₂/kWh" if carbon_intensity is not None else NA}</strong></div>'
+                    f'<div>Cost: <strong>{cost_display}</strong></div>'
+                    f'<div>Emissions: <strong>{f"{carbon_emission:.4f} kg" if carbon_emission is not None else NA}</strong></div>'
                     f'</div>'
                     f'<div style="font-size:0.82rem;color:#94A3B8;background:#041315;padding:10px 14px;border-radius:6px;">'
                     f'<strong>Scheduler Reason:</strong> {reason}</div>'
@@ -782,9 +880,9 @@ def _render_approvals_tab():
                 table_rows.append({
                     "Job ID": d.get("job_id"),
                     "Team": d.get("team_id"),
-                    "Declined At": d.get("declined_at", "")[:19].replace("T", " "),
-                    "Declined By": d.get("declined_by", "operator"),
-                    "Decline Reason": d.get("reason", "N/A"),
+                    "Declined At": (d.get("declined_at") or "")[:19].replace("T", " ") or NA,
+                    "Declined By": d.get("declined_by") or NA,
+                    "Decline Reason": d.get("reason") or NA,
                     "Status": "DECLINED",
                 })
             st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
