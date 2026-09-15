@@ -113,6 +113,8 @@ class EventType(str, enum.Enum):
     # ── Company / Organization onboarding events ──
     COMPANY_CREATED           = "COMPANY_CREATED"
     COMPANY_ADMIN_CREATED     = "COMPANY_ADMIN_CREATED"
+    # ── GreenShift Policy-Aware Optimization events ──
+    OPTIMIZATION_POLICY_CHANGED = "OPTIMIZATION_POLICY_CHANGED"
 
 
 class ActorType(str, enum.Enum):
@@ -467,6 +469,8 @@ class ScheduleDecisionORM(Base):
     feasible_candidates_count = Column(Integer, nullable=True, default=0)
     rejection_summary         = Column(JSON, nullable=True)
     scheduler_objective       = Column(String, nullable=True, default="CARBON_FIRST")
+    # Only meaningful (non-NULL) when scheduler_objective == "CARBON_CONSTRAINED".
+    carbon_tolerance_pct      = Column(Float, nullable=True)
     deterministic_rank        = Column(Integer, nullable=True, default=1)
     candidates_json           = Column(JSON, nullable=True)
     rejected_candidates_json  = Column(JSON, nullable=True)
@@ -888,6 +892,45 @@ class NotificationPreferenceORM(Base):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SQLAlchemy ORM — GreenShift Policy-Aware Optimization
+#
+# Backend-owned, one active company-level default policy per tenant (never
+# frontend localStorage — see app.decide.optimization_policy for the
+# canonical OptimizationPolicy enum both this table and the scheduler use).
+# `is_active`/`created_at` are carried now so a future team/workload-level
+# override or a policy-change history could reuse this same table without a
+# schema change, but this pass only ever has exactly one row per tenant,
+# always active — see app.settings.optimization_policy_service.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class OptimizationPolicyORM(Base):
+    """One company's (tenant's) active scheduling optimization policy."""
+
+    __tablename__ = "optimization_policies"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_optimization_policies_tenant_id"),
+        CheckConstraint(
+            "policy IN ('CARBON_FIRST', 'COST_FIRST', 'CARBON_CONSTRAINED')",
+            name="ck_optimization_policies_policy_valid",
+        ),
+        CheckConstraint(
+            "carbon_tolerance_pct IS NULL OR (carbon_tolerance_pct >= 0 AND carbon_tolerance_pct <= 100)",
+            name="ck_optimization_policies_tolerance_range",
+        ),
+    )
+
+    id                   = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id            = Column(String, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    policy               = Column(String(20), nullable=False, default="CARBON_FIRST")
+    # Only meaningful when policy == "CARBON_CONSTRAINED"; NULL otherwise.
+    carbon_tolerance_pct = Column(Float, nullable=True)
+    is_active            = Column(Boolean, nullable=False, default=True)
+    created_at           = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at           = Column(DateTime(timezone=True), nullable=True, onupdate=utcnow)
+    updated_by_user_id   = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Pydantic Schemas — Request / Response & Regional Common Schema
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1116,6 +1159,10 @@ class ScheduleDecision(BaseModel):
     # Decision Explainability
     objective:                 Optional[str] = "CARBON_FIRST"
     scheduler_objective:       Optional[str] = "CARBON_FIRST"
+    # Only meaningful (non-None) when scheduler_objective == "CARBON_CONSTRAINED" —
+    # the resolved carbon tolerance percentage actually applied by
+    # app.decide.optimization_policy for this decision.
+    carbon_tolerance_pct:      Optional[float] = None
     candidates_evaluated:      Optional[int] = 0
     feasible_candidates_count: Optional[int] = 0
     rejection_summary:         Optional[Dict[str, int]] = Field(default_factory=dict)
@@ -1306,6 +1353,7 @@ class PendingApprovalItem(BaseModel):
     tariff_plan: Optional[str] = None
     scheduler_objective: Optional[str] = "CARBON_FIRST"
     objective: Optional[str] = "CARBON_FIRST"
+    carbon_tolerance_pct: Optional[float] = None
     reason: Optional[str] = None
     candidates_evaluated: Optional[int] = 0
     feasible_candidates_count: Optional[int] = 0
@@ -1771,3 +1819,55 @@ class NotificationPreferenceUpdateRequest(BaseModel):
     email_scheduling: Optional[bool] = None
     email_approval: Optional[bool] = None
     email_execution: Optional[bool] = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pydantic Schemas — GreenShift Policy-Aware Optimization
+# ─────────────────────────────────────────────────────────────────────────────
+
+class OptimizationPolicyResponse(BaseModel):
+    """GET/PUT /settings/optimization-policy response — the authenticated
+    caller's own company's active scheduling optimization policy. Built
+    explicitly by app.settings.optimization_policy_service (not a bare
+    `model_validate(orm)`), since `updated_by` is a resolved username, not
+    the ORM row's raw `updated_by_user_id` foreign key."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    policy: str
+    carbon_tolerance_pct: Optional[float] = None
+    updated_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+    @field_validator("updated_at", mode="before")
+    @classmethod
+    def _normalize_utc(cls, v):
+        return ensure_utc(v) if isinstance(v, datetime) else v
+
+
+class OptimizationPolicyUpdateRequest(BaseModel):
+    """
+    PUT /settings/optimization-policy request body.
+
+    `policy` must be exactly one of app.decide.optimization_policy.
+    OptimizationPolicy's values — never silently substituted for an
+    invalid one. `carbon_tolerance_pct` is only required/meaningful when
+    policy == CARBON_CONSTRAINED; that cross-field check lives in
+    app.settings.optimization_policy_service (a Pydantic field validator
+    can't see sibling fields as cleanly), which also always re-validates it
+    against the shared [0, 100] range via
+    app.decide.optimization_policy.validate_carbon_tolerance_pct.
+    """
+
+    policy: str
+    carbon_tolerance_pct: Optional[float] = None
+
+    @field_validator("policy")
+    @classmethod
+    def validate_policy_value(cls, v: str) -> str:
+        from app.decide.optimization_policy import OptimizationPolicy
+        try:
+            return OptimizationPolicy(str(v).strip().upper()).value
+        except (ValueError, AttributeError):
+            valid = ", ".join(p.value for p in OptimizationPolicy)
+            raise ValueError(f"policy must be one of: {valid}")

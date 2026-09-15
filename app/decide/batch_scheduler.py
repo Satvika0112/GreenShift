@@ -20,6 +20,12 @@ from sqlalchemy.orm import Session
 
 from app.decide.demand_forecaster import DemandForecaster, get_demand_forecaster
 from app.decide.impact_calculator import calculate_impact
+from app.decide.optimization_policy import (
+    OptimizationPolicy,
+    build_policy_reason,
+    min_carbon_kg as _min_carbon_kg,
+    rank_feasible_candidates,
+)
 from app.decide.scheduler import (
     CandidateRejectionReason,
     _generate_candidate_slots,
@@ -29,8 +35,6 @@ from app.decide.scheduler import (
     _interpolate_carbon,
     _interpolate_tariff,
     _get_native_rate_at_slot,
-    CARBON_EPSILON,
-    COST_EPSILON,
 )
 from app.decide.slot_capacity import SlotCapacityRegistry
 from app.dispatch.k8s_state_collector import (
@@ -44,6 +48,7 @@ from app.ingest.regional_registry import (
     resolve_region_id,
     select_tariff_plan_for_job,
 )
+from app.settings.optimization_policy_service import resolve_effective_policy
 from app.shared.models import JobORM, ScheduleDecision
 from app.shared.utils import utcnow
 
@@ -154,9 +159,21 @@ def schedule_batch(
     carbon_cache: Dict[str, Any] = {}
     tariff_cache: Dict[Tuple[str, Optional[str], Optional[str]], Any] = {}
 
+    # Company optimization policy is resolved per-tenant (a single batch can
+    # span multiple companies), cached so a batch with many jobs for the
+    # same tenant only queries the policy table once per tenant.
+    policy_cache: Dict[Optional[str], Tuple[OptimizationPolicy, Optional[float]]] = {}
+
+    def _policy_for(tenant_id: Optional[str]) -> Tuple[OptimizationPolicy, Optional[float]]:
+        if tenant_id not in policy_cache:
+            policy_cache[tenant_id] = resolve_effective_policy(db, tenant_id)
+        return policy_cache[tenant_id]
+
     decisions: List[ScheduleDecision] = []
 
     for job in sorted_jobs:
+        effective_policy, carbon_tolerance_pct = _policy_for(job.tenant_id)
+
         deadline = job.deadline
         if deadline.tzinfo is None:
             deadline = deadline.replace(tzinfo=timezone.utc)
@@ -267,14 +284,13 @@ def schedule_batch(
             # Fallback: keep job scheduled at earliest start bound rather than dropping
             feasible_unconstrained = evaluations[:1]
 
-        # Preferred slot (unconstrained best based on carbon-first, base cost, start time)
-        preferred_sorted = sorted(
-            feasible_unconstrained,
-            key=lambda c: (
-                round((c.carbon_emission_kg or 0.0) / CARBON_EPSILON) * CARBON_EPSILON,
-                round((c.electricity_cost or 0.0) / COST_EPSILON) * COST_EPSILON,
-                c.start_time,
-            )
+        # Preferred slot: unconstrained best under the company's policy,
+        # ranked on base (non-ML-adjusted) cost — this represents what the
+        # policy would pick absent any capacity contention, used below only
+        # to detect/report spillover.
+        preferred_sorted = rank_feasible_candidates(
+            feasible_unconstrained, effective_policy, carbon_tolerance_pct,
+            cost_of=lambda c: c.electricity_cost,
         )
         preferred_candidate = preferred_sorted[0]
         preferred_start = preferred_candidate.start_time
@@ -284,27 +300,35 @@ def schedule_batch(
 
         spilled_from_preferred = False
         if capacity_feasible:
-            # Rank capacity-feasible candidates by Carbon-first, effective cost (including ML penalty), start time
-            capacity_feasible.sort(
-                key=lambda c: (
-                    round((c.carbon_emission_kg or 0.0) / CARBON_EPSILON) * CARBON_EPSILON,
-                    round((c.effective_cost or 0.0) / COST_EPSILON) * COST_EPSILON,
-                    c.start_time,
-                )
+            # Rank capacity-feasible candidates under the company's policy,
+            # using effective_cost (includes the capped ML contention
+            # penalty) so the ML advisor's soft nudge still participates in
+            # the actual selection exactly as it did before policies existed.
+            capacity_feasible = rank_feasible_candidates(
+                capacity_feasible, effective_policy, carbon_tolerance_pct,
+                cost_of=lambda c: c.effective_cost,
             )
             chosen = capacity_feasible[0]
             if chosen.start_time != preferred_start:
                 spilled_from_preferred = True
         else:
-            # Fallback: All candidate slots are at capacity.
-            # Select least-loaded slot in window to minimize peak violation.
+            # Fallback: All candidate slots are at capacity. Select the
+            # least-loaded slot in the window to minimize peak violation —
+            # capacity utilization remains the primary key (unaffected by
+            # policy); the company's policy only breaks ties among
+            # equally-loaded slots, replacing the previous hardcoded
+            # carbon-first tie-break.
             spilled_from_preferred = True
+            policy_ranked = rank_feasible_candidates(
+                feasible_unconstrained, effective_policy, carbon_tolerance_pct,
+                cost_of=lambda c: c.electricity_cost,
+            )
+            policy_rank = {id(c): idx for idx, c in enumerate(policy_ranked)}
             chosen = min(
                 feasible_unconstrained,
                 key=lambda c: (
                     registry.utilization_at(region_id, c.start_time),
-                    round((c.carbon_emission_kg or 0.0) / CARBON_EPSILON) * CARBON_EPSILON,
-                    c.start_time,
+                    policy_rank[id(c)],
                 )
             )
             logger.warning(
@@ -356,20 +380,28 @@ def schedule_batch(
         tariff_inr = chosen_native_rate if cfg and cfg.currency == "INR" else None
 
         method_str = "batch_contention_aware_ml" if ml_active else "batch_contention_aware"
+        policy_label = effective_policy.value.replace("_", " ").title()
 
         if spilled_from_preferred:
             reason = (
-                f"Contention-aware batch schedule: Preferred slot {preferred_start.isoformat()} reached "
-                f"capacity; job spilled to next optimal feasible slot ({slot_util:.1f}% slot util). "
-                f"Carbon: {chosen.carbon_emission_kg:.4f} kg CO2."
+                f"Contention-aware batch schedule ({policy_label} policy): Preferred slot "
+                f"{preferred_start.isoformat()} reached capacity; job spilled to next optimal "
+                f"feasible slot ({slot_util:.1f}% slot util). Carbon: {chosen.carbon_emission_kg:.4f} kg CO2, "
+                f"Cost: ${chosen.electricity_cost:.4f}."
             )
         elif not is_deferrable:
             reason = f"Non-deferrable workload allocated at earliest slot ({slot_util:.1f}% slot util)."
         else:
             reason = (
-                f"Contention-aware optimal slot selected ({chosen.carbon_emission_kg:.4f} kg CO2, "
+                f"Contention-aware {policy_label} slot selected ({chosen.carbon_emission_kg:.4f} kg CO2, "
                 f"${chosen.electricity_cost:.4f}, {slot_util:.1f}% slot util)."
             )
+            if effective_policy == OptimizationPolicy.CARBON_CONSTRAINED:
+                min_c = _min_carbon_kg(capacity_feasible, carbon_of=lambda c: c.carbon_emission_kg)
+                reason += (
+                    f" Within {carbon_tolerance_pct:g}% of the minimum achievable carbon "
+                    f"({min_c:.4f} kg CO2) among capacity-feasible slots."
+                )
 
         decision = ScheduleDecision(
             job_id=job.job_id,
@@ -387,8 +419,11 @@ def schedule_batch(
             tariff_category=plan,
             reason=reason,
             budget_remaining=budget_remaining,
-            objective="CARBON_FIRST",
-            scheduler_objective="CARBON_FIRST",
+            objective=effective_policy.value,
+            scheduler_objective=effective_policy.value,
+            carbon_tolerance_pct=(
+                carbon_tolerance_pct if effective_policy == OptimizationPolicy.CARBON_CONSTRAINED else None
+            ),
             candidates_evaluated=len(evaluations),
             feasible_candidates_count=len(feasible_unconstrained),
             rejection_summary={},

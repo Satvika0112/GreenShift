@@ -11,12 +11,15 @@ import {
   Server,
   Database,
   RefreshCw,
+  Leaf,
+  DollarSign,
+  Scale,
 } from 'lucide-react';
 import { PageHeader } from '../components/layout/PageHeader';
 import { GlassCard } from '../components/common/GlassCard';
 import { InlineBanner } from '../components/common/InlineBanner';
-import { sustainabilityApi, monitoringApi, notificationsApi, companiesApi } from '../api/endpoints';
-import { NotificationPreferencesUpdate, CompanyProfile, CompanyProfileUpdate } from '../types/api';
+import { sustainabilityApi, monitoringApi, notificationsApi, companiesApi, optimizationPolicyApi } from '../api/endpoints';
+import { NotificationPreferencesUpdate, CompanyProfile, CompanyProfileUpdate, OptimizationPolicy, OptimizationPolicyUpdate } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 import { useRealtimeNotifications } from '../context/RealtimeNotificationContext';
 import { formatRegionalDateTime } from '../utils/dateTime';
@@ -26,6 +29,17 @@ const PREFERENCE_TOGGLES: { field: keyof NotificationPreferencesUpdate; label: s
   { field: 'email_scheduling', label: 'Scheduling', helper: 'No feasible schedule found' },
   { field: 'email_approval', label: 'Approval', helper: 'Approval required, approved, declined' },
   { field: 'email_execution', label: 'Execution', helper: 'Execution completed, execution failed' },
+];
+
+const POLICY_OPTIONS: { value: OptimizationPolicy; icon: typeof Leaf; label: string; helper: string }[] = [
+  { value: 'CARBON_FIRST', icon: Leaf, label: 'Carbon First', helper: 'Prioritize minimum carbon emissions.' },
+  { value: 'COST_FIRST', icon: DollarSign, label: 'Cost First', helper: 'Prioritize minimum electricity cost.' },
+  {
+    value: 'CARBON_CONSTRAINED',
+    icon: Scale,
+    label: 'Balanced — Carbon Constrained',
+    helper: 'Minimize electricity cost while staying within the configured percentage of the greenest feasible schedule.',
+  },
 ];
 
 export const SettingsPage: React.FC = () => {
@@ -72,14 +86,53 @@ export const SettingsPage: React.FC = () => {
     setCompanyDraft((d) => ({ ...d, [key]: e.target.value }));
   };
 
+  // GreenShift Policy-Aware Optimization — backend-owned company scheduling
+  // policy (GET/PUT /api/v1/settings/optimization-policy). This is the
+  // authoritative source; it is never read from or written to
+  // localStorage. Any authenticated company member can read it; only a
+  // Company Admin may change it (enforced server-side — this gate is UX
+  // only, not the security boundary).
+  const policyQ = useQuery({
+    queryKey: ['optimizationPolicy'],
+    queryFn: () => optimizationPolicyApi.getPolicy(),
+    enabled: isAuthenticated && !!user?.tenant_id,
+  });
+  const [policyDraft, setPolicyDraft] = useState<OptimizationPolicy | null>(null);
+  const [toleranceDraft, setToleranceDraft] = useState<number | null>(null);
+  const [policySaved, setPolicySaved] = useState(false);
+  const policyMutation = useMutation({
+    mutationFn: (update: OptimizationPolicyUpdate) => optimizationPolicyApi.updatePolicy(update),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['optimizationPolicy'], data);
+      setPolicyDraft(null);
+      setToleranceDraft(null);
+      setPolicySaved(true);
+      setTimeout(() => setPolicySaved(false), 3000);
+    },
+  });
+  const effectivePolicy: OptimizationPolicy = policyDraft ?? policyQ.data?.policy ?? 'CARBON_FIRST';
+  const effectiveTolerance: number =
+    toleranceDraft ?? policyQ.data?.carbon_tolerance_pct ?? 5;
+  const policyDirty =
+    policyDraft !== null ||
+    (effectivePolicy === 'CARBON_CONSTRAINED' && toleranceDraft !== null);
+  const handleSavePolicy = () => {
+    const update: OptimizationPolicyUpdate = { policy: effectivePolicy };
+    if (effectivePolicy === 'CARBON_CONSTRAINED') {
+      update.carbon_tolerance_pct = effectiveTolerance;
+    }
+    policyMutation.mutate(update);
+  };
+
   const [dataSources, setDataSources] = useState<any | null>(null);
   const [healthStatus, setHealthStatus] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Client-side UI control preferences (saved in localStorage)
-  const [defaultObjective, setDefaultObjective] = useState(() => {
-    return localStorage.getItem('gs_pref_objective') || 'carbon';
-  });
+  // Client-side UI control preference (saved in localStorage) — purely the
+  // dashboard auto-refresh cadence. The scheduling optimization policy
+  // above used to live here too (as `gs_pref_objective`) but was UI-only
+  // and never actually reached the backend scheduler; it has been fully
+  // replaced by the backend-owned policy above.
   const [pollInterval, setPollInterval] = useState(() => {
     return parseInt(localStorage.getItem('gs_pref_poll_interval') || '15', 10);
   });
@@ -117,7 +170,6 @@ export const SettingsPage: React.FC = () => {
 
   const handleSavePreferences = (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem('gs_pref_objective', defaultObjective);
     localStorage.setItem('gs_pref_poll_interval', String(pollInterval));
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
@@ -290,6 +342,121 @@ export const SettingsPage: React.FC = () => {
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                     Read-only — only a Company Admin can edit these details.
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+        </GlassCard>
+      )}
+
+      {/* Scheduling Optimization Policy — backend-owned (GET/PUT
+          /api/v1/settings/optimization-policy), never localStorage. Any
+          company member can see the active policy; only a Company Admin
+          can change it (server-enforced — see api_update_optimization_policy). */}
+      {!!user?.tenant_id && (
+        <GlassCard title="Scheduling Optimization Policy">
+          {policyQ.isLoading ? (
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading optimization policy…</div>
+          ) : policyQ.isError ? (
+            <InlineBanner
+              variant="error"
+              action={
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => policyQ.refetch()}>
+                  <RefreshCw size={13} />
+                  <span>Retry</span>
+                </button>
+              }
+            >
+              Couldn't load the scheduling optimization policy.
+            </InlineBanner>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
+                Controls how GreenShift's scheduler prioritizes carbon emissions vs. electricity cost when
+                choosing an execution window. Hard constraints (deadlines, SLA, resource availability, and any
+                workload's own carbon budget) are always enforced first and are never affected by this policy.
+              </p>
+
+              {policySaved && <InlineBanner variant="success">Scheduling optimization policy saved.</InlineBanner>}
+              {policyMutation.isError && (
+                <InlineBanner variant="error">
+                  {(policyMutation.error as any)?.response?.data?.detail || 'Failed to save the scheduling optimization policy.'}
+                </InlineBanner>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                {POLICY_OPTIONS.map(({ value, icon: Icon, label, helper }) => (
+                  <label
+                    key={value}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '0.65rem',
+                      padding: '0.7rem 0.85rem',
+                      borderRadius: 'var(--radius-sm)',
+                      border: `1px solid ${effectivePolicy === value ? '#10b981' : 'var(--border-subtle)'}`,
+                      background: effectivePolicy === value ? 'rgba(16, 185, 129, 0.06)' : 'transparent',
+                      cursor: isCompanyAdminRole ? 'pointer' : 'default',
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="optimization-policy"
+                      value={value}
+                      checked={effectivePolicy === value}
+                      disabled={!isCompanyAdminRole || policyMutation.isPending}
+                      onChange={() => setPolicyDraft(value)}
+                      style={{ marginTop: '0.2rem' }}
+                    />
+                    <Icon size={16} color={effectivePolicy === value ? '#10b981' : 'var(--text-muted)'} style={{ marginTop: '0.1rem', flexShrink: 0 }} />
+                    <div>
+                      <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{helper}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              {effectivePolicy === 'CARBON_CONSTRAINED' && (
+                <div className="form-group" style={{ marginBottom: 0, paddingLeft: '0.1rem' }}>
+                  <label className="form-label" htmlFor="carbon-tolerance-pct">Carbon Tolerance (%)</label>
+                  <input
+                    id="carbon-tolerance-pct"
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.5}
+                    className="input"
+                    value={effectiveTolerance}
+                    disabled={!isCompanyAdminRole || policyMutation.isPending}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setToleranceDraft(Number.isFinite(v) ? v : 0);
+                    }}
+                    style={{ maxWidth: '160px' }}
+                  />
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    Candidates within this percentage of the minimum achievable carbon emissions are eligible;
+                    among those, GreenShift picks the cheapest.
+                  </span>
+                </div>
+              )}
+
+              {isCompanyAdminRole ? (
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={!policyDirty || policyMutation.isPending}
+                    onClick={handleSavePolicy}
+                  >
+                    <Save size={13} />
+                    <span>{policyMutation.isPending ? 'Saving…' : 'Save Optimization Policy'}</span>
+                  </button>
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  Read-only — only a Company Admin can change the scheduling optimization policy.
                 </div>
               )}
             </div>
@@ -497,22 +664,10 @@ export const SettingsPage: React.FC = () => {
       {/* Client-Side Preferences */}
       <form onSubmit={handleSavePreferences} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         <GlassCard title="Client Control-Plane Preferences (Local Profile)">
-          <div className="form-group">
-            <label className="form-label">Preferred Scheduling Objective in UI</label>
-            <select
-              className="select"
-              value={defaultObjective}
-              onChange={(e) => setDefaultObjective(e.target.value)}
-            >
-              <option value="carbon">Carbon Minimization (Default - Highest Green Priority)</option>
-              <option value="cost">Electricity Cost Minimization (Spot / ToD Tariff Priority)</option>
-              <option value="balanced">Balanced Pareto Frontier (Multi-Objective Optimization)</option>
-            </select>
-          </div>
-
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Telemetry Auto-Refresh Interval (Seconds)</label>
+            <label className="form-label" htmlFor="telemetry-poll-interval">Telemetry Auto-Refresh Interval (Seconds)</label>
             <input
+              id="telemetry-poll-interval"
               type="number"
               min="5"
               max="300"
@@ -536,7 +691,7 @@ export const SettingsPage: React.FC = () => {
               lineHeight: 1.45,
             }}
           >
-            <strong style={{ color: '#38bdf8' }}>Local Scope Notice:</strong> These preferences apply only to this client browser session (e.g. initial view preference and dashboard refresh cadence). They do not alter backend server-side scheduling policies, deadlines, or constraints.
+            <strong style={{ color: '#38bdf8' }}>Local Scope Notice:</strong> This preference (dashboard refresh cadence) applies only to this client browser session. It does not alter backend server-side scheduling policies, deadlines, or constraints — the scheduling optimization policy above is the actual backend setting that does.
           </div>
         </GlassCard>
 

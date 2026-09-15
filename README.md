@@ -81,6 +81,8 @@ Carbon intensity data comes directly from Electricity Maps' real-time grid measu
 > **Citable One-Liner for Evaluators & Judges:**  
 > *"GreenShift reduced carbon emissions by 5.2% and avoided 188.3 kg CO₂ across 548 compute workloads spanning 10 grid regions, while maintaining 100.0% SLA compliance."*
 
+**Policy comparison**: the table above uses the default `CARBON_FIRST` policy (§3). Running the same real dataset under `COST_FIRST` and `CARBON_CONSTRAINED` produces different, genuinely adapted decisions — see [`results/policy_comparison_2026-09-15/COMPARISON.md`](results/policy_comparison_2026-09-15/COMPARISON.md) for the full A/B/C comparison (not a claim that any one policy is universally better — see GreenShift Policy-Aware Optimization, §3, and `docs/DECISIONS.md` ADR-014).
+
 ---
 
 ## 3. Regional Data Layer & Canonical Common Schema
@@ -136,16 +138,20 @@ The DECIDE agent evaluates candidate start windows across the workload's lifetim
    - **GPU Availability**: Cluster allocatable GPU >= workload GPU request (evaluated against current cluster capacity)
    - **Carbon Budget (STRICT when specified)**: `carbon_emission_kg <= carbon_budget_kg`. If specified and no candidate satisfies it, the job is marked INFEASIBLE with an explicit reason (no silent relaxation).
 
-2. **Optimization Hierarchy**:
-   - **Primary Objective**: **Minimize Total Workload Carbon Emissions** (`carbon_emission_kg`)
-   - **Secondary Objective**: **Minimize Electricity Cost** (`electricity_cost` USD)
-   - **Final Tie-Breaker**: **Earliest Start Time** (`selected_start` UTC)
+2. **Policy-Specific Optimization** — which hard-constraint-feasible candidate wins is decided by the company's **GreenShift Policy-Aware Optimization** policy (backend-owned per tenant, `GET/PUT /api/v1/settings/optimization-policy` — see `app/decide/optimization_policy.py`; never frontend `localStorage`):
+   - **`CARBON_FIRST`** (default — the platform's original, only behavior before policies existed): minimize carbon emissions, then electricity cost, then earliest start.
+   - **`COST_FIRST`**: minimize electricity cost, then carbon emissions, then earliest start.
+   - **`CARBON_CONSTRAINED`**: find the minimum achievable carbon among the feasible candidates, admit every candidate within a configurable `carbon_tolerance_pct` of it (`carbon_limit = min_carbon * (1 + carbon_tolerance_pct / 100)`), then minimize electricity cost among those, then earliest start. The tolerance is never silently relaxed and the policy never silently substitutes another one.
+   - **Final Tie-Breaker (every policy)**: **Earliest Start Time** (`selected_start` UTC)
+
+A tenant with no policy configured resolves to `CARBON_FIRST`, so introducing this policy layer does not change any existing company's scheduling outcomes until it explicitly opts into a different one. Hard constraints above are evaluated identically regardless of policy — a policy can never make an infeasible candidate feasible, and it never overrides a workload's own carbon budget (the two are deliberately independent: "how should carbon and cost be prioritized" vs. "what is the maximum carbon this workload may emit"). The same resolved policy applies to both single-job (`app.decide.scheduler`) and contention-aware batch (`app.decide.batch_scheduler`) scheduling; the Layer 2 ML Demand Forecaster (§9) remains a strictly advisory soft cost nudge on top of whichever policy is active.
 
 Concepts:
-- Deterministic lexicographic sort: `(carbon_emission_kg, electricity_cost, selected_start)`.
-- No arbitrary weights, no weighted CCS score.
+- Deterministic lexicographic sort, e.g. for `CARBON_FIRST`: `(carbon_emission_kg, electricity_cost, selected_start)`.
+- No arbitrary weights, no weighted CCS score, no Pareto/multi-objective blending as an operational policy (Pareto remains a possible future analytics-only feature).
 - Rejection tracking: Infeasible candidates are tracked with structured rejection reasons (`DEADLINE_VIOLATION`, `CARBON_BUDGET_EXCEEDED`, `INSUFFICIENT_CPU`, `INSUFFICIENT_MEMORY`, `INSUFFICIENT_GPU`, `REGION_INELIGIBLE`, `SLA_VIOLATION`, `CARBON_DATA_UNAVAILABLE`, `COST_DATA_UNAVAILABLE`).
 - Resource feasibility is evaluated against current Kubernetes cluster capacity. Future capacity forecasting is outside the current MVP scope.
+- A company policy change is recorded via the existing Trust/Audit mechanism (`OPTIMIZATION_POLICY_CHANGED`), capturing the previous/new policy and tolerance and the authenticated actor — the hash-chain algorithm itself is untouched.
 
 ---
 

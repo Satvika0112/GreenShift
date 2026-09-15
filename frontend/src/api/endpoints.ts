@@ -37,6 +37,8 @@ import {
   CompanyTeam,
   CompanyTeamCreate,
   CompanyUserCreate,
+  OptimizationPolicyResponse,
+  OptimizationPolicyUpdate,
 } from '../types/api';
 
 // ==========================================
@@ -579,6 +581,24 @@ export const companiesApi = {
 
   createMyCompanyTeam: async (body: CompanyTeamCreate): Promise<CompanyTeam> => {
     const res = await apiClient.post<CompanyTeam>('/api/v1/companies/me/teams', body);
+    return res.data;
+  },
+};
+
+// ==========================================
+// GREENSHIFT POLICY-AWARE OPTIMIZATION
+// ==========================================
+// Backend-owned company scheduling policy — never localStorage. Any
+// authenticated member of the company can read; only a Company Admin can
+// update (enforced server-side; see app/api/routers/settings.py).
+export const optimizationPolicyApi = {
+  getPolicy: async (): Promise<OptimizationPolicyResponse> => {
+    const res = await apiClient.get<OptimizationPolicyResponse>('/api/v1/settings/optimization-policy');
+    return res.data;
+  },
+
+  updatePolicy: async (update: OptimizationPolicyUpdate): Promise<OptimizationPolicyResponse> => {
+    const res = await apiClient.put<OptimizationPolicyResponse>('/api/v1/settings/optimization-policy', update);
     return res.data;
   },
 };

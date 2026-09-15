@@ -15,6 +15,21 @@ interface GreenShiftRecommendationProps {
  * The headline "GreenShift Recommendation" card — the backend scheduler's chosen
  * execution window, rendered exactly as returned (no frontend recalculation).
  */
+// Human-readable label for each backend OptimizationPolicy value — mirrors
+// app.decide.optimization_policy.OptimizationPolicy exactly (no separate
+// frontend policy enum). Falls back to the raw value for anything unknown
+// rather than hiding it.
+function policySubtitle(decision: any): string {
+  const policy = decision.scheduler_objective || decision.objective || 'CARBON_FIRST';
+  if (policy === 'CARBON_FIRST') return 'Optimization Policy: Carbon First (carbon → cost → earliest start)';
+  if (policy === 'COST_FIRST') return 'Optimization Policy: Cost First (cost → carbon → earliest start)';
+  if (policy === 'CARBON_CONSTRAINED') {
+    const pct = decision.carbon_tolerance_pct;
+    return `Optimization Policy: Balanced${pct !== undefined && pct !== null ? ` — ${pct}% carbon tolerance` : ' — Carbon Constrained'}`;
+  }
+  return `Optimization Policy: ${policy}`;
+}
+
 export const GreenShiftRecommendation: React.FC<GreenShiftRecommendationProps> = ({ decision, fallbackRegion, regionName, timezoneName }) => {
   if (!decision) return null;
 
@@ -29,7 +44,7 @@ export const GreenShiftRecommendation: React.FC<GreenShiftRecommendationProps> =
           <span>GreenShift Recommendation</span>
         </span>
       }
-      subtitle={`Objective: ${decision.scheduler_objective || decision.objective || 'CARBON_FIRST'} (carbon → cost → earliest start)${rank !== undefined ? ` · Rank #${rank}` : ''}`}
+      subtitle={`${policySubtitle(decision)}${rank !== undefined ? ` · Rank #${rank}` : ''}`}
       badge={<span className="badge badge-success">OPTIMAL WINDOW</span>}
     >
       {(decision.requested_earliest_start || decision.requested_deadline) && (

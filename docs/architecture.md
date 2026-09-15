@@ -18,7 +18,8 @@ External Inputs (Electricity Maps API, Tariff CSV)
        │
        ▼
 ┌──────────────┐
-│  2. DECIDE   │  Budget-Aware Greedy Scheduler
+│  2. DECIDE   │  Company Policy (Carbon First / Cost First / Carbon
+│              │  Constrained) + Budget-Aware Greedy Scheduler
 └──────┬───────┘
        │
        ▼
@@ -56,16 +57,41 @@ External Inputs (Electricity Maps API, Tariff CSV)
 
 ### AGENT 2 — DECIDE
 - **Purpose**: Core mathematical scheduling intelligence.
+- **Decision flow** (GreenShift Policy-Aware Optimization):
+  ```
+  Company Policy (CARBON_FIRST / COST_FIRST / CARBON_CONSTRAINED)
+          +
+  Workload Constraints (deadline, SLA, resources, own carbon budget)
+          +
+  Carbon / Cost / Grid Data
+          │
+          ▼
+  Hard Constraint Filtering  (authoritative — never affected by policy)
+          │
+          ▼
+  Policy-Specific Optimization  (app/decide/optimization_policy.py)
+          │
+          ▼
+  ML Demand-Forecaster Advisory Layer  (batch only — soft cost nudge, capped
+                                         5%, never overrides policy/constraints)
+          │
+          ▼
+  Selected Schedule  →  Human Approval Gate  →  DISPATCH (execution)
+  ```
 - **Scheduling Algorithm**: Deterministic constraint-first lexicographic optimization over candidate start slots $s \in [t_{\text{now}}, t_{\text{deadline}} - t_{\text{runtime}}]$.
 - **Constraint-First Hierarchy**:
-  1. **Hard Constraints**: Deadline, SLA, Region Eligibility, CPU/RAM/GPU cluster allocatable capacity, and Strict Carbon Budget ($\text{Carbon}(s) \le \text{Team Budget Remaining}$, without silent relaxation).
-  2. **Primary Objective**: Minimize Total Workload Carbon Emissions ($\text{kg CO}_2$).
-  3. **Secondary Objective**: Minimize Electricity Cost ($\$$ USD).
-  4. **Deterministic Tie-Breaker**: Earliest Start Time ($s$).
-- **Deterministic Sort**: `(carbon_emission_kg, electricity_cost, selected_start)`
+  1. **Hard Constraints**: Deadline, SLA, Region Eligibility, CPU/RAM/GPU cluster allocatable capacity, and Strict Carbon Budget ($\text{Carbon}(s) \le \text{Team Budget Remaining}$, without silent relaxation). Always evaluated first, identically regardless of company policy (below) — a policy can never make an infeasible candidate feasible or override a workload's own carbon budget.
+  2. **Policy-Specific Ranking** (`app/decide/optimization_policy.py`): which of the hard-constraint-feasible candidates wins is decided by the company's configured **GreenShift Policy-Aware Optimization** policy (`OptimizationPolicy`, backend-owned per tenant via `GET/PUT /api/v1/settings/optimization-policy` — never frontend `localStorage`):
+     - **CARBON_FIRST** (default — the scheduler's original, only behavior before this policy layer existed): minimize carbon, then cost, then earliest start.
+     - **COST_FIRST**: minimize cost, then carbon, then earliest start.
+     - **CARBON_CONSTRAINED**: find the minimum achievable carbon among the feasible candidates, admit every candidate within a configurable `carbon_tolerance_pct` of it, then minimize cost among those, then earliest start.
+     A tenant with no policy configured resolves to `CARBON_FIRST`, so this layer's introduction never changes an existing company's scheduling outcomes until they explicitly choose otherwise.
+  3. **Deterministic Tie-Breaker**: Earliest Start Time ($s$), always the final tie-breaker under every policy.
+- **Deterministic Sort** (CARBON_FIRST, the default): `(carbon_emission_kg, electricity_cost, selected_start)`
 - **Candidate Rejection Tracking**: Infeasible slots record specific failure reasons (`DEADLINE_VIOLATION`, `CARBON_BUDGET_EXCEEDED`, `INSUFFICIENT_CPU`, `INSUFFICIENT_MEMORY`, `INSUFFICIENT_GPU`, `REGION_INELIGIBLE`, `SLA_VIOLATION`, `CARBON_DATA_UNAVAILABLE`, `COST_DATA_UNAVAILABLE`).
-- **Baseline Computation**: Evaluates the immediate execution slot ($t_{\text{now}}$) as the baseline to quantify avoided carbon ($\text{kg CO}_2$) and cost savings ($\$$).
-- **Audit**: Emits `SCHEDULE_PROPOSED` and `JOB_SCHEDULED` events to Trust ledger.
+- **Baseline Computation**: Evaluates the immediate execution slot ($t_{\text{now}}$) as the baseline to quantify avoided carbon ($\text{kg CO}_2$) and cost savings ($\$$) — independent of company policy.
+- **Batch/Contention-Aware Scheduling** (`app/decide/batch_scheduler.py`): applies the same resolved company policy (per-tenant, since one batch run can span several companies) to rank both the capacity-unconstrained "preferred" slot and the actual capacity-feasible selection; the Layer 2 ML Demand Forecaster remains a strictly advisory soft cost nudge (capped at 5%) on top of whichever policy is active — it never bypasses hard constraints, the company policy, or a workload's carbon budget.
+- **Audit**: Emits `SCHEDULE_PROPOSED` and `JOB_SCHEDULED` events to Trust ledger; a company policy *change* (not a scheduling decision) emits its own `OPTIMIZATION_POLICY_CHANGED` event.
 - **State Transition**: Transitions job status to `PENDING_APPROVAL`.
 
 ### HUMAN APPROVAL GATE

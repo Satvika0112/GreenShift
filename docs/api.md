@@ -105,9 +105,45 @@ The GreenShift REST API is built with FastAPI and runs on port 8000. Interactive
 }
 ```
 
+`reason` is policy-aware — see §3.2 below. `objective`/`scheduler_objective` in the response report the policy actually applied (`CARBON_FIRST` / `COST_FIRST` / `CARBON_CONSTRAINED`); `carbon_tolerance_pct` is included and non-null only for `CARBON_CONSTRAINED`.
+
 ---
 
-## 3.1. Human Approval Gate Endpoints
+## 3.1. Settings — GreenShift Policy-Aware Optimization
+
+Backend-owned company scheduling policy (never frontend `localStorage`). Tenant is always derived from the authenticated caller — no endpoint here accepts a client-supplied `tenant_id`/`company_id`.
+
+### Get the caller's own company policy
+`GET /api/v1/settings/optimization-policy`
+
+Any authenticated user with a company (`COMPANY_ADMIN` or `COMPANY_USER`) may call this — read-only for `COMPANY_USER`. A Platform Admin (no `tenant_id` of their own) gets the same 400 "no associated company" response as `GET /api/v1/companies/me` — this is a self-service endpoint, not Platform Admin's cross-tenant surface.
+
+**Response** (no policy configured yet resolves to the honest default, not a fabricated "last changed"):
+```json
+{
+  "policy": "CARBON_FIRST",
+  "carbon_tolerance_pct": null,
+  "updated_by": null,
+  "updated_at": null
+}
+```
+
+### Update the caller's own company policy
+`PUT /api/v1/settings/optimization-policy`
+
+`COMPANY_ADMIN` only (`403` for `COMPANY_USER`; Platform Admin gets the same 400 as the GET above). Records an `OPTIMIZATION_POLICY_CHANGED` audit event (previous/new policy, previous/new tolerance, the authenticated actor) through the existing Trust/Audit mechanism.
+
+**Request**:
+```json
+{ "policy": "CARBON_CONSTRAINED", "carbon_tolerance_pct": 5 }
+```
+`policy` must be exactly one of `CARBON_FIRST` / `COST_FIRST` / `CARBON_CONSTRAINED` (`422` otherwise — never silently substituted). `carbon_tolerance_pct` is required (and validated to `[0, 100]`) when `policy` is `CARBON_CONSTRAINED`, and rejected (`422`) for any other policy.
+
+**Response**: same shape as the GET above, reflecting the just-applied change.
+
+---
+
+## 3.2. Human Approval Gate Endpoints
 
 GreenShift enforces a Human Approval Gate before any Kubernetes dispatch. Jobs in `PENDING_APPROVAL` status must be approved by an authorized user.
 

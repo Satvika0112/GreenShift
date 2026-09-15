@@ -582,6 +582,7 @@ def get_pending_approvals(
                 tariff_plan=sd.tariff_plan,
                 scheduler_objective=getattr(sd, "scheduler_objective", "CARBON_FIRST") or "CARBON_FIRST",
                 objective=getattr(sd, "scheduler_objective", "CARBON_FIRST") or "CARBON_FIRST",
+                carbon_tolerance_pct=getattr(sd, "carbon_tolerance_pct", None),
                 reason=sd.reason,
                 job_type=j.job_type,
                 priority=j.priority,

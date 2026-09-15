@@ -550,6 +550,30 @@ def record_user_deactivated(
     )
 
 
+def record_optimization_policy_changed(
+    db: Session,
+    previous_policy: Optional[str],
+    new_policy: str,
+    previous_carbon_tolerance_pct: Optional[float] = None,
+    new_carbon_tolerance_pct: Optional[float] = None,
+    tenant_id: Optional[str] = None,
+    actor: Optional[Any] = None,
+    request_id: Optional[str] = None,
+) -> None:
+    """Record an OPTIMIZATION_POLICY_CHANGED audit event when a Company
+    Admin changes their company's scheduling optimization policy."""
+    payload = {
+        "previous_policy": previous_policy,
+        "new_policy": new_policy,
+        "previous_carbon_tolerance_pct": previous_carbon_tolerance_pct,
+        "new_carbon_tolerance_pct": new_carbon_tolerance_pct,
+    }
+    append_event(
+        db, EventType.OPTIMIZATION_POLICY_CHANGED, payload=payload,
+        actor=actor, tenant_id=tenant_id, request_id=request_id, source_service="decide",
+    )
+
+
 def run_trust_loop() -> None:
     """
     Long-running background process for the TRUST agent.

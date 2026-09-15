@@ -384,3 +384,35 @@ Applied via `alembic/versions/009_consolidate_user_roles.py` (normalizes data, t
 - The Streamlit dashboard (`app/dashboard/`) was updated in lockstep: role selectors, permission-matrix tables, and the demo-login personas now show only the three canonical roles.
 - Legacy-role-specific tests that tested now-retired distinctions (e.g. `TEAM_LEAD`'s team-only dispatch restriction, `VIEWER`'s inability to submit workloads) were rewritten to test the 3-role model's actual boundaries rather than deleted outright, per the mapping above.
 - Scheduler ranking, carbon/tariff calculation, Kubernetes dispatch mechanics, the audit hash chain, and notification delivery were not touched.
+
+---
+
+## ADR-014: GreenShift Policy-Aware Optimization
+
+**Status:** ACCEPTED
+**Date:** 2026-09-15
+
+### Context
+
+The scheduler's carbon-first lexicographic ranking (carbon → cost → earliest start) was the *only* optimization behavior — not configurable per company. Settings' "Preferred Scheduling Objective in UI" control (`gs_pref_objective`, `localStorage`) looked like it changed this, but its own on-page copy already disclosed the truth: *"They do not alter backend server-side scheduling policies, deadlines, or constraints."* It only ever changed a client-side label.
+
+Different companies legitimately want different trade-offs between carbon and electricity cost. That choice needs to be (a) real — it must actually reach DECIDE — and (b) backend-owned, tenant-scoped, and audited, not a client-side preference a browser could fake or lose.
+
+### Decision
+
+Introduced a canonical `OptimizationPolicy` enum (`app/decide/optimization_policy.py`) with exactly three values — `CARBON_FIRST` (default, byte-identical to the scheduler's prior only behavior), `COST_FIRST`, and `CARBON_CONSTRAINED` (minimize cost among candidates within a configurable `carbon_tolerance_pct` of the minimum achievable carbon). This module is the single source of truth for the enum, its validation, and the `rank_feasible_candidates()`/`build_policy_reason()` functions both `app.decide.scheduler` (single-job) and `app.decide.batch_scheduler` (contention-aware batch) import — neither redefines its own ranking logic.
+
+Hard constraints (deadline, SLA, region, CPU/RAM/GPU, a workload's own carbon budget, carbon/cost telemetry availability) are evaluated identically regardless of policy, before ranking ever runs — a policy can only decide which already-feasible candidate wins, never make an infeasible one feasible, and never override a workload's own carbon budget.
+
+The policy itself is stored server-side in a new `optimization_policies` table (one active row per tenant — `alembic/versions/015_add_optimization_policies.py`), behind `GET/PUT /api/v1/settings/optimization-policy` (`app/settings/optimization_policy_service.py`, `app/api/routers/settings.py`). RBAC/tenant-derivation reuses the exact existing pattern from `/companies/me` (`app.companies.service.require_own_company` / `require_company_admin_of_own_company`) rather than introducing a second authorization mechanism: any authenticated company member can read; only a Company Admin can write; Platform Admin has no "own company" here, same as `/companies/me`. `app.decide.service.schedule_and_store` and `app.decide.batch_scheduler.schedule_batch` both resolve the effective policy server-side via `resolve_effective_policy(db, tenant_id)` — the frontend never supplies a policy value to DECIDE. A policy *change* is audited through the existing Trust/Audit mechanism (`OPTIMIZATION_POLICY_CHANGED`, `app.trust.service.record_optimization_policy_changed`) — the hash-chain algorithm itself (`app.trust.ledger`) was not touched.
+
+`ScheduleDecisionORM`/`ScheduleDecision` gained one new column, `carbon_tolerance_pct` (nullable, only meaningful for `CARBON_CONSTRAINED`) — the existing `scheduler_objective` column/field (already defaulting to `"CARBON_FIRST"`) was reused to store the applied policy rather than adding a redundant column, and the existing `reason` field continues to carry the explanation text rather than a separate explanation system. Settings' `gs_pref_objective` `localStorage` key and its dropdown were removed outright — not deprecated alongside — and replaced with a "Scheduling Optimization Policy" card backed by the new endpoints (`GreenShiftRecommendation`'s existing "Objective: …" subtitle line was made policy-aware in place, rather than adding a duplicate display component).
+
+### Consequences
+
+- `CARBON_FIRST`'s decisions and explanation text are unchanged — regression-tested by comparing `schedule_job(..., policy=None)` (every pre-existing caller) against `schedule_job(..., policy=OptimizationPolicy.CARBON_FIRST)` on identical inputs. `tests/test_scheduler_explainability.py`'s pre-existing `"Lowest-carbon feasible window"` assertion still holds — that exact phrase was deliberately kept for `CARBON_FIRST` rather than adopting different phrasing, since a test already locks it in.
+- A company that never configures a policy is unaffected: `resolve_effective_policy` resolves to `CARBON_FIRST` with no tolerance whenever no row exists (or `tenant_id` is `None`, e.g. this dataset's tenant-less benchmark jobs).
+- Batch scheduling resolves the policy **per job's own tenant** (cached per tenant within a batch run), since one batch can span multiple companies; the Layer 2 ML Demand Forecaster's soft cost nudge (capped 5%) is layered on top of whichever policy is active and never bypasses it, hard constraints, or a workload's carbon budget — this pass deliberately does not add ML-generated tolerance recommendations.
+- Fixed an unrelated pre-existing bug surfaced while extending `scripts/run_560_experiment.py` for the A/B/C benchmark below: its terminal/markdown/CSV output referenced `FleetImpactReport.total_*_cost_inr` fields that no longer exist (removed by an earlier, separate Currency Consistency Hardening pass to `app/analytics/fleet_impact.py` that this script was never updated to match) and would divide a non-INR job's USD cost by an INR FX rate as a fallback — both fixed to use the real `total_cost_saved_usd`/`cost_saved_by_currency` fields, consistent with the same hardening already applied elsewhere.
+- Pareto/multi-objective optimization was **not** implemented as an operational policy — it remains a possible future analytics-only feature, not a fourth `OptimizationPolicy` value.
+- No team- or workload-level policy overrides were added (out of scope per the stated initial scope of one active company-level default policy); no new Platform-Admin cross-tenant policy-management endpoint was added (Platform Admin has no "own company" for this self-service surface, matching `/companies/me`'s existing convention — a cross-tenant admin surface would be a separate, deliberate addition, not implied by this pass).

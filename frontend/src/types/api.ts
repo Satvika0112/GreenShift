@@ -113,6 +113,8 @@ export interface ScheduleDecision {
   budget_remaining?: number | null;
   objective?: string;
   scheduler_objective?: string;
+  // Only meaningful when scheduler_objective === 'CARBON_CONSTRAINED'.
+  carbon_tolerance_pct?: number | null;
   candidates_evaluated: number;
   feasible_candidates_count: number;
   rejection_summary?: Record<string, number>;
@@ -164,6 +166,7 @@ export interface PendingApprovalItem {
   tariff_plan?: string | null;
   scheduler_objective?: string;
   objective?: string;
+  carbon_tolerance_pct?: number | null;
   reason?: string | null;
   candidates_evaluated?: number;
   feasible_candidates_count?: number;
@@ -733,4 +736,32 @@ export interface CompanyUserCreate {
   username?: string;
   role?: 'COMPANY_ADMIN' | 'COMPANY_USER';
   team_id?: string;
+}
+
+// ==========================================
+// GREENSHIFT POLICY-AWARE OPTIMIZATION
+// ==========================================
+
+// The one canonical set of policy values — mirrors
+// app.decide.optimization_policy.OptimizationPolicy exactly. Never
+// redefine this union elsewhere in the frontend.
+export type OptimizationPolicy = 'CARBON_FIRST' | 'COST_FIRST' | 'CARBON_CONSTRAINED';
+
+// GET/PUT /api/v1/settings/optimization-policy response — the
+// authenticated caller's own company's active scheduling policy. This is
+// the backend source of truth; it is never read from or written to
+// localStorage.
+export interface OptimizationPolicyResponse {
+  policy: OptimizationPolicy;
+  carbon_tolerance_pct?: number | null;
+  updated_by?: string | null;
+  updated_at?: string | null;
+}
+
+// PUT /api/v1/settings/optimization-policy request body.
+// `carbon_tolerance_pct` is required by the backend when
+// policy === 'CARBON_CONSTRAINED' and rejected otherwise.
+export interface OptimizationPolicyUpdate {
+  policy: OptimizationPolicy;
+  carbon_tolerance_pct?: number | null;
 }

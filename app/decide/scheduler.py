@@ -37,6 +37,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from app.decide.impact_calculator import calculate_impact
+from app.decide.optimization_policy import (
+    CARBON_EPSILON,
+    COST_EPSILON,
+    DEFAULT_CARBON_TOLERANCE_PCT,
+    OptimizationPolicy,
+    build_policy_reason,
+    min_carbon_kg as _min_carbon_kg,
+    rank_feasible_candidates,
+    validate_carbon_tolerance_pct,
+    validate_policy,
+)
 from app.dispatch.k8s_state_collector import (
     collect_cluster_state,
     _parse_cpu_string,
@@ -68,8 +79,10 @@ from app.shared.models import (
 logger = logging.getLogger(__name__)
 
 SLOT_RESOLUTION_MINUTES = 60
-CARBON_EPSILON = 1e-6  # Precision threshold for carbon emissions comparison
-COST_EPSILON = 1e-6    # Precision threshold for electricity cost comparison
+# CARBON_EPSILON / COST_EPSILON now live in app.decide.optimization_policy
+# (imported above) — this is a re-export so existing `from
+# app.decide.scheduler import CARBON_EPSILON` callers (e.g.
+# app.decide.batch_scheduler) keep working unchanged.
 
 
 class CandidateRejectionReason:
@@ -276,15 +289,21 @@ def schedule_job(
     cpu_request: str = "500m",
     memory_request: str = "512Mi",
     gpu_request: int = 0,
+    policy: Optional[OptimizationPolicy] = None,
+    carbon_tolerance_pct: Optional[float] = None,
 ) -> ScheduleDecision:
     """
-    Core deterministic constraint-first, carbon-first scheduling engine.
+    Core deterministic constraint-first, policy-aware scheduling engine.
 
-    Lexicographic optimization ranking:
-      1. Hard constraints (Deadline, SLA, Region, CPU/RAM/GPU, Carbon Budget, Carbon Telemetry)
-      2. Minimum total workload carbon emissions (kg CO2)
-      3. Minimum electricity cost (USD)
-      4. Earliest start time (deterministic final tie-breaker)
+    Hard constraints (Deadline, SLA, Region, CPU/RAM/GPU, Carbon Budget,
+    Carbon Telemetry) are always evaluated first and are never affected by
+    `policy` — see app.decide.optimization_policy for the ranking algorithms
+    applied to whatever candidates survive them.
+
+    `policy` defaults to CARBON_FIRST (app.decide.optimization_policy.DEFAULT_POLICY)
+    when omitted — the scheduler's original, only behavior before this
+    parameter existed — so every existing caller that does not pass `policy`
+    keeps its exact prior behavior unchanged.
     """
     import time
     t0 = time.perf_counter()
@@ -308,6 +327,8 @@ def schedule_job(
             cpu_request=cpu_request,
             memory_request=memory_request,
             gpu_request=gpu_request,
+            policy=policy,
+            carbon_tolerance_pct=carbon_tolerance_pct,
         )
         record_scheduler_success(time.perf_counter() - t0)
         return decision
@@ -334,7 +355,25 @@ def _execute_schedule_job(
     cpu_request: str = "500m",
     memory_request: str = "512Mi",
     gpu_request: int = 0,
+    policy: Optional[OptimizationPolicy] = None,
+    carbon_tolerance_pct: Optional[float] = None,
 ) -> ScheduleDecision:
+    # Company optimization policy is validated once here and applied only to
+    # ranking (step 7 below) — it never affects hard-constraint evaluation
+    # above. `policy=None` (no company policy configured yet, or an internal
+    # caller that predates this parameter) resolves to the scheduler's
+    # original CARBON_FIRST-only behavior, unchanged.
+    effective_policy = validate_policy(policy) if policy is not None else OptimizationPolicy.CARBON_FIRST
+    # Resolved to the actual numeric percentage applied (falling back to the
+    # documented default only for CARBON_CONSTRAINED) so the stored decision
+    # and its explanation always reflect a concrete number, never a bare
+    # None the caller has to re-resolve later.
+    resolved_carbon_tolerance_pct: Optional[float] = None
+    if effective_policy == OptimizationPolicy.CARBON_CONSTRAINED:
+        resolved_carbon_tolerance_pct = validate_carbon_tolerance_pct(
+            carbon_tolerance_pct if carbon_tolerance_pct is not None else DEFAULT_CARBON_TOLERANCE_PCT
+        )
+
     now = datetime.now(timezone.utc)
 
     # 1. Hard Constraint: Region Eligibility
@@ -497,16 +536,16 @@ def _execute_schedule_job(
             f"Job {job_id}: No feasible execution window found within deadline {deadline}. Rejection reasons: {', '.join(all_reasons)}"
         )
 
-    # 7. Lexicographic Ranking Policy (CARBON-FIRST):
-    # Primary:    Minimize total workload carbon emissions (kg CO2)
-    # Secondary:  Minimize electricity cost ($ USD)
-    # Tie-breaker: Earliest start time (datetime)
-    feasible_candidates.sort(
-        key=lambda c: (
-            round((c.carbon_emission_kg or 0.0) / CARBON_EPSILON) * CARBON_EPSILON,
-            round((c.electricity_cost or 0.0) / COST_EPSILON) * COST_EPSILON,
-            c.start_time,
-        )
+    # 7. Policy-Specific Ranking (app.decide.optimization_policy):
+    # Hard constraints above already narrowed evaluations down to
+    # feasible_candidates — ranking only decides which of THOSE wins.
+    # CARBON_FIRST (the default): minimize carbon, then cost, then earliest
+    # start — identical to the scheduler's original, only ranking before
+    # this policy layer existed. COST_FIRST / CARBON_CONSTRAINED: see
+    # app.decide.optimization_policy.rank_feasible_candidates.
+    min_carbon_among_feasible = _min_carbon_kg(feasible_candidates)
+    feasible_candidates = rank_feasible_candidates(
+        feasible_candidates, effective_policy, resolved_carbon_tolerance_pct,
     )
     best = feasible_candidates[0]
 
@@ -558,7 +597,7 @@ def _execute_schedule_job(
         "electricity_cost": round(best_cost, 6),
         "rank": 1,
         "score": round(1.0 / (1.0 + best_carbon), 4),
-        "reason": "Optimal carbon-first window meeting all SLA and resource constraints",
+        "reason": f"Optimal {effective_policy.value} window meeting all SLA and resource constraints",
         "carbon_data_source": "FALLBACK_ESTIMATED" if best.is_fallback_carbon else "LIVE_OR_CACHED",
     }
 
@@ -571,7 +610,7 @@ def _execute_schedule_job(
             rejection_summary[r_code] = rejection_summary.get(r_code, 0) + 1
     rejection_reasons = sorted(list(rejection_summary.keys()))
 
-    scheduler_objective = "CARBON_FIRST"
+    scheduler_objective = effective_policy.value
     deterministic_ranking = 1
 
     if not is_deferrable:
@@ -580,10 +619,13 @@ def _execute_schedule_job(
             f"(Carbon: {best_carbon:.4f} kg CO2, Cost: ${best_cost:.4f})"
         )
     else:
-        reason = (
-            f"Lowest-carbon feasible window ({best_carbon:.4f} kg CO2). "
-            f"Electricity cost (${best_cost:.4f}) was used as secondary tie-breaker, "
-            f"and earliest start time ({best_start.isoformat()}) as deterministic final tie-breaker."
+        reason = build_policy_reason(
+            effective_policy,
+            carbon_kg=best_carbon,
+            cost_usd=best_cost,
+            start_time=best_start,
+            carbon_tolerance_pct=resolved_carbon_tolerance_pct,
+            min_carbon_kg=min_carbon_among_feasible,
         )
     if best.is_fallback_carbon:
         reason += (
@@ -660,6 +702,7 @@ def _execute_schedule_job(
         budget_remaining=round(budget_remaining, 6) if budget_remaining is not None else None,
         objective=scheduler_objective,
         scheduler_objective=scheduler_objective,
+        carbon_tolerance_pct=resolved_carbon_tolerance_pct,
         candidates_evaluated=candidates_evaluated,
         feasible_candidates_count=feasible_candidates_count,
         rejection_summary=rejection_summary,

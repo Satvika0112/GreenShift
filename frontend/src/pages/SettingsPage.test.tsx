@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SettingsPage } from './SettingsPage';
-import { sustainabilityApi, monitoringApi, notificationsApi, companiesApi } from '../api/endpoints';
-import { User, NotificationPreferences, CompanyProfile } from '../types/api';
+import { sustainabilityApi, monitoringApi, notificationsApi, companiesApi, optimizationPolicyApi } from '../api/endpoints';
+import { User, NotificationPreferences, CompanyProfile, OptimizationPolicyResponse } from '../types/api';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('../api/endpoints', () => ({
@@ -20,6 +20,10 @@ vi.mock('../api/endpoints', () => ({
   companiesApi: {
     getMyCompany: vi.fn(),
     updateMyCompany: vi.fn(),
+  },
+  optimizationPolicyApi: {
+    getPolicy: vi.fn(),
+    updatePolicy: vi.fn(),
   },
 }));
 
@@ -89,6 +93,13 @@ const companyProfile: CompanyProfile = {
   workload_count: 12,
 };
 
+const carbonFirstPolicy: OptimizationPolicyResponse = {
+  policy: 'CARBON_FIRST',
+  carbon_tolerance_pct: null,
+  updated_by: null,
+  updated_at: null,
+};
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -114,6 +125,8 @@ describe('SettingsPage', () => {
     (notificationsApi.updatePreferences as any).mockResolvedValue({ ...defaultPreferences });
     (companiesApi.getMyCompany as any).mockResolvedValue({ ...companyProfile });
     (companiesApi.updateMyCompany as any).mockResolvedValue({ ...companyProfile });
+    (optimizationPolicyApi.getPolicy as any).mockResolvedValue({ ...carbonFirstPolicy });
+    (optimizationPolicyApi.updatePolicy as any).mockResolvedValue({ ...carbonFirstPolicy });
   });
 
   it('renders the real authenticated identity fields, not placeholder text', async () => {
@@ -199,31 +212,37 @@ describe('SettingsPage', () => {
     expect(document.body.innerHTML.toLowerCase()).not.toContain('smtp_username');
   });
 
-  it('persists client preferences to local storage on save', async () => {
+  it('persists the poll interval preference to local storage on save', async () => {
     const user = userEvent.setup();
     renderPage();
     await waitFor(() => expect(screen.getByText(companyUser.username)).toBeInTheDocument());
 
-    const objectiveSelect = document.querySelector('select.select') as HTMLSelectElement;
-    await user.selectOptions(objectiveSelect, 'cost');
+    // fireEvent.change (not userEvent.clear+type) — jsdom's <input
+    // type="number"> doesn't support real text selection, so
+    // userEvent's keystroke-simulated typing appends onto the existing
+    // value instead of replacing it; a direct change event sets it cleanly.
+    const pollInput = document.getElementById('telemetry-poll-interval') as HTMLInputElement;
+    fireEvent.change(pollInput, { target: { value: '30' } });
+    expect(pollInput.value).toBe('30');
 
     await user.click(screen.getByText('Save Preferences'));
 
     await waitFor(() => {
       expect(screen.getByText(/UI control preferences saved/)).toBeInTheDocument();
     });
-    expect(localStorage.getItem('gs_pref_objective')).toBe('cost');
+    expect(localStorage.getItem('gs_pref_poll_interval')).toBe('30');
+    // The old client-only "preferred objective" preference has been fully
+    // replaced by the backend-owned optimization policy below — it must
+    // never be written to localStorage again.
+    expect(localStorage.getItem('gs_pref_objective')).toBeNull();
   });
 
-  it('loads a previously saved preference from local storage on mount', async () => {
-    localStorage.setItem('gs_pref_objective', 'balanced');
+  it('loads a previously saved poll interval from local storage on mount', async () => {
     localStorage.setItem('gs_pref_poll_interval', '30');
     renderPage();
 
     await waitFor(() => expect(screen.getByText(companyUser.username)).toBeInTheDocument());
-    const objectiveSelect = document.querySelector('select.select') as HTMLSelectElement;
-    expect(objectiveSelect.value).toBe('balanced');
-    const pollInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const pollInput = document.getElementById('telemetry-poll-interval') as HTMLInputElement;
     expect(pollInput.value).toBe('30');
   });
 
@@ -347,6 +366,99 @@ describe('SettingsPage', () => {
       mockUser = companyUser;
       renderPage();
       await waitFor(() => expect(screen.getByText("Couldn't load company profile.")).toBeInTheDocument());
+    });
+  });
+
+  describe('Scheduling Optimization Policy', () => {
+    it('loads the backend policy — never from local storage', async () => {
+      mockUser = companyUser;
+      mockIsCompanyAdmin = false;
+      (optimizationPolicyApi.getPolicy as any).mockResolvedValue({
+        policy: 'COST_FIRST', carbon_tolerance_pct: null, updated_by: 'company_admin', updated_at: '2026-09-01T00:00:00Z',
+      });
+      renderPage();
+
+      await waitFor(() => expect(optimizationPolicyApi.getPolicy).toHaveBeenCalled());
+      const costRadio = await screen.findByRole('radio', { name: /cost first/i });
+      expect((costRadio as HTMLInputElement).checked).toBe(true);
+    });
+
+    it('is read-only for a Company User, with the change button hidden', async () => {
+      mockUser = companyUser;
+      mockIsCompanyAdmin = false;
+      renderPage();
+
+      const carbonRadio = await screen.findByRole('radio', { name: /^carbon first/i });
+      expect((carbonRadio as HTMLInputElement).disabled).toBe(true);
+      expect(screen.getByText(/only a Company Admin can change the scheduling optimization policy/i)).toBeInTheDocument();
+      expect(screen.queryByText('Save Optimization Policy')).not.toBeInTheDocument();
+    });
+
+    it('allows a Company Admin to change and save the policy', async () => {
+      mockUser = companyAdminUser;
+      mockIsCompanyAdmin = true;
+      (optimizationPolicyApi.updatePolicy as any).mockResolvedValue({
+        policy: 'COST_FIRST', carbon_tolerance_pct: null, updated_by: 'company_admin', updated_at: '2026-09-15T00:00:00Z',
+      });
+      renderPage();
+
+      const costRadio = await screen.findByRole('radio', { name: /cost first/i });
+      const user = userEvent.setup();
+      await user.click(costRadio);
+      await user.click(screen.getByText('Save Optimization Policy'));
+
+      await waitFor(() => {
+        expect(optimizationPolicyApi.updatePolicy).toHaveBeenCalledWith({ policy: 'COST_FIRST' });
+      });
+      await waitFor(() => expect(screen.getByText('Scheduling optimization policy saved.')).toBeInTheDocument());
+    });
+
+    it('reveals the carbon tolerance input only for Carbon Constrained and includes it on save', async () => {
+      mockUser = companyAdminUser;
+      mockIsCompanyAdmin = true;
+      (optimizationPolicyApi.updatePolicy as any).mockResolvedValue({
+        policy: 'CARBON_CONSTRAINED', carbon_tolerance_pct: 10, updated_by: 'company_admin', updated_at: '2026-09-15T00:00:00Z',
+      });
+      renderPage();
+
+      await screen.findByRole('radio', { name: /^carbon first/i });
+      expect(screen.queryByLabelText('Carbon Tolerance (%)')).not.toBeInTheDocument();
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('radio', { name: /balanced/i }));
+
+      const toleranceInput = await screen.findByLabelText('Carbon Tolerance (%)');
+      await user.clear(toleranceInput);
+      await user.type(toleranceInput, '10');
+
+      await user.click(screen.getByText('Save Optimization Policy'));
+      await waitFor(() => {
+        expect(optimizationPolicyApi.updatePolicy).toHaveBeenCalledWith({ policy: 'CARBON_CONSTRAINED', carbon_tolerance_pct: 10 });
+      });
+    });
+
+    it('shows an error state with retry when the policy fails to load', async () => {
+      (optimizationPolicyApi.getPolicy as any).mockRejectedValue(new Error('network error'));
+      renderPage();
+      await waitFor(() => expect(screen.getByText("Couldn't load the scheduling optimization policy.")).toBeInTheDocument());
+      expect(screen.getByText('Retry')).toBeInTheDocument();
+    });
+
+    it('shows a friendly error and does not silently succeed when saving fails', async () => {
+      mockUser = companyAdminUser;
+      mockIsCompanyAdmin = true;
+      (optimizationPolicyApi.updatePolicy as any).mockRejectedValue({
+        response: { data: { detail: 'carbon_tolerance_pct is required when policy is CARBON_CONSTRAINED' } },
+      });
+      renderPage();
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('radio', { name: /balanced/i }));
+      await user.click(screen.getByText('Save Optimization Policy'));
+
+      await waitFor(() => {
+        expect(screen.getByText('carbon_tolerance_pct is required when policy is CARBON_CONSTRAINED')).toBeInTheDocument();
+      });
     });
   });
 });

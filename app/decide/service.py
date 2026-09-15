@@ -19,6 +19,7 @@ from app.observability.metrics import (
     scheduler_duration_seconds,
     scheduler_carbon_avoided_kg,
 )
+from app.settings.optimization_policy_service import resolve_effective_policy
 from app.shared.database import SessionLocal
 from app.shared.models import (
     JobORM,
@@ -58,6 +59,13 @@ def schedule_and_store(
     carbon_curve = get_carbon_data(job.region, now, deadline, db=db)
     tariff_curve = get_tariff_data(job.region, now, deadline, job_type=job.job_type)
 
+    # Resolve the company's (tenant's) scheduling optimization policy —
+    # always server-side, never accepted from the job payload/frontend. A
+    # tenant with no policy configured yet resolves to CARBON_FIRST with no
+    # tolerance, the scheduler's original behavior (see
+    # app.settings.optimization_policy_service.resolve_effective_policy).
+    effective_policy, carbon_tolerance_pct = resolve_effective_policy(db, job.tenant_id)
+
     # Run scheduler with full dataset parameters
     start_time = time.monotonic()
     try:
@@ -78,6 +86,8 @@ def schedule_and_store(
             tariff_plan         = getattr(job, "tariff_plan", None),
             cpu_request         = getattr(job, "cpu_request", "500m"),
             memory_request      = getattr(job, "memory_request", "512Mi"),
+            policy              = effective_policy,
+            carbon_tolerance_pct = carbon_tolerance_pct,
         )
         elapsed = time.monotonic() - start_time
         scheduler_jobs_total.labels(region=job.region, status="success").inc()
@@ -152,6 +162,7 @@ def schedule_and_store(
         existing_sd.feasible_candidates_count = decision.feasible_candidates_count
         existing_sd.rejection_summary         = decision.rejection_summary
         existing_sd.scheduler_objective       = decision.scheduler_objective
+        existing_sd.carbon_tolerance_pct      = decision.carbon_tolerance_pct
         existing_sd.deterministic_rank        = decision.deterministic_rank
         existing_sd.scheduling_method         = decision.scheduling_method or "single_greedy"
         existing_sd.slot_utilization_pct      = decision.slot_utilization_pct
@@ -191,6 +202,7 @@ def schedule_and_store(
             feasible_candidates_count = decision.feasible_candidates_count,
             rejection_summary         = decision.rejection_summary,
             scheduler_objective       = decision.scheduler_objective,
+            carbon_tolerance_pct      = decision.carbon_tolerance_pct,
             deterministic_rank        = decision.deterministic_rank,
             scheduling_method         = decision.scheduling_method or "single_greedy",
             slot_utilization_pct      = decision.slot_utilization_pct,
@@ -417,6 +429,7 @@ def schedule_batch_and_store(
                 existing_sd.feasible_candidates_count = decision.feasible_candidates_count
                 existing_sd.rejection_summary         = decision.rejection_summary
                 existing_sd.scheduler_objective       = decision.scheduler_objective
+                existing_sd.carbon_tolerance_pct      = decision.carbon_tolerance_pct
                 existing_sd.deterministic_rank        = decision.deterministic_rank
                 existing_sd.scheduling_method         = decision.scheduling_method or "batch_capacity_only"
                 existing_sd.slot_utilization_pct      = decision.slot_utilization_pct
@@ -455,6 +468,7 @@ def schedule_batch_and_store(
                     feasible_candidates_count = decision.feasible_candidates_count,
                     rejection_summary         = decision.rejection_summary,
                     scheduler_objective       = decision.scheduler_objective,
+                    carbon_tolerance_pct      = decision.carbon_tolerance_pct,
                     deterministic_rank        = decision.deterministic_rank,
                     scheduling_method         = decision.scheduling_method or "batch_capacity_only",
                     slot_utilization_pct      = decision.slot_utilization_pct,

@@ -297,3 +297,11 @@ try:
     app.include_router(companies_router.router, prefix="", tags=["Companies"])
 except ImportError:
     logger.warning("Companies router not yet implemented")
+
+# Settings (GreenShift Policy-Aware Optimization: company scheduling policy)
+try:
+    from app.api.routers import settings as settings_router
+    app.include_router(settings_router.router, prefix="/api/v1", tags=["Settings"])
+    app.include_router(settings_router.router, prefix="", tags=["Settings"])
+except ImportError:
+    logger.warning("Settings router not yet implemented")
