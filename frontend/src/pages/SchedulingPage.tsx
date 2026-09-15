@@ -244,7 +244,7 @@ export const SchedulingPage: React.FC = () => {
             <span>Schedule window computed and stored in database.</span>
           </div>
           <button className="btn btn-secondary btn-sm" onClick={() => navigate('/approvals')}>
-            Go to Approvals Queue
+            Go to Review Queue
           </button>
         </div>
       )}

@@ -60,19 +60,6 @@ async def lifespan(app: FastAPI):
     validate_security_config(settings)
     init_db()
 
-    # BRSR metric registry — real reference data (like the region registry),
-    # not environment-specific demo data, so this seeds in every environment.
-    try:
-        from app.shared.database import SessionLocal
-        from app.brsr.service import seed_metric_registry
-        db = SessionLocal()
-        try:
-            seed_metric_registry(db)
-        finally:
-            db.close()
-    except Exception as exc:
-        logger.warning(f"BRSR metric registry seeding failed: {exc}")
-
     # Development/test convenience accounts only. Never seeded in production —
     # these are well-known, publicly documented credentials (see
     # app.shared.auth.seed_default_users) and must never exist outside local
@@ -256,7 +243,7 @@ try:
 except ImportError:
     logger.warning("Approval router not yet implemented")
 
-# BRSR Report + Data Sources
+# Sustainability Report + Data Sources
 try:
     from app.api.routers import report as report_router
     app.include_router(report_router.router, prefix="/api/v1", tags=["Report"])
@@ -302,14 +289,6 @@ try:
     app.include_router(notifications_router.router, prefix="", tags=["Notifications"])
 except ImportError:
     logger.warning("Notifications router not yet implemented")
-
-# BRSR (Business Responsibility and Sustainability Reporting)
-try:
-    from app.api.routers import brsr as brsr_router
-    app.include_router(brsr_router.router, prefix="/api/v1", tags=["BRSR"])
-    app.include_router(brsr_router.router, prefix="", tags=["BRSR"])
-except ImportError:
-    logger.warning("BRSR router not yet implemented")
 
 # Companies (Company / Organization onboarding)
 try:

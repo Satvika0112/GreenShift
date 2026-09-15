@@ -6,8 +6,7 @@ already correctly excludes COMPANY_ADMIN from team-scoping via its own
 is_team_restricted() helper — not a bug as of this writing). That function
 is shared by 6 other routers outside Trust/Audit ownership, so it is not
 modified; Trust/Audit instead owns its own correctly-scoped authorization
-here, matching the pattern app.brsr.service already uses for its own
-require_view_access/require_edit_access.
+here.
 
 RBAC matrix enforced throughout this module:
   PLATFORM_ADMIN — global visibility; only role that may verify the global

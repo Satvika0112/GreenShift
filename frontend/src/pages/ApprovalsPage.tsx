@@ -85,7 +85,7 @@ export const ApprovalsPage: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       <PageHeader
-        title="Approvals"
+        title="Review"
         subtitle="Review and authorize recommended workload schedules before execution."
         badge={<span className="badge badge-warning">{pendingCountLabel}</span>}
         actions={
@@ -105,7 +105,7 @@ export const ApprovalsPage: React.FC = () => {
         </InlineBanner>
       )}
 
-      <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }} role="tablist" aria-label="Approvals">
+      <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }} role="tablist" aria-label="Review">
         <button
           role="tab"
           aria-selected={activeTab === 'pending'}

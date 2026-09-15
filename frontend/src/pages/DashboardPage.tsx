@@ -173,7 +173,7 @@ export const DashboardPage: React.FC = () => {
       : 'Your workloads, scheduling recommendations, and carbon-aware execution status.';
 
   const primaryAction = isCompanyAdmin
-    ? { label: 'Review Approvals', icon: CheckCircle2, onClick: () => navigate('/approvals') }
+    ? { label: 'Review', icon: CheckCircle2, onClick: () => navigate('/approvals') }
     : isPlatformAdmin
       ? { label: 'Review Regions', icon: Globe, onClick: () => navigate('/regions') }
       : { label: 'Submit Workload', icon: PlusCircle, onClick: () => navigate('/submit') };

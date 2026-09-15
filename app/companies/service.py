@@ -234,8 +234,7 @@ def require_own_company(user: UserORM) -> str:
 
 def require_company_admin_of_own_company(user: UserORM) -> str:
     """Only a COMPANY_ADMIN of the company being modified may mutate it.
-    Platform Admin is explicitly, unconditionally excluded here — matching
-    app.brsr.service.require_edit_access's identical guard — rather than
+    Platform Admin is explicitly, unconditionally excluded here — rather than
     using the broader is_company_admin() (which also returns True for
     Platform Admin), since a Platform Admin account could in principle have
     a tenant_id set and would otherwise be able to mutate that company's
@@ -334,8 +333,7 @@ def create_own_company_user(
     # Defense in depth: CompanyUserCreateRequest.role defaults to COMPANY_USER
     # and has no tenant_id/company_id field at all, but a direct/internal
     # caller could still pass PLATFORM_ADMIN — reject it explicitly here too,
-    # the same "never trust, re-validate at the service boundary" pattern
-    # already used in app.brsr.service.update_metric_value.
+    # the "never trust, re-validate at the service boundary" pattern.
     if body.role == UserRole.PLATFORM_ADMIN:
         raise CompanyPermissionError("Cannot create a PLATFORM_ADMIN user via company user management")
 

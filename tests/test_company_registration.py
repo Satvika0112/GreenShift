@@ -376,9 +376,7 @@ class TestPlatformAdminCannotInheritCompanyAdminMutationRights:
     Platform Admin account that happens to have a tenant_id set (not
     structurally prevented anywhere) would otherwise have been able to
     mutate that company's profile/users/teams through the "own company"
-    surface. Fixed to explicitly, unconditionally exclude Platform Admin,
-    matching the identical, already-correct guard in
-    app.brsr.service.require_edit_access."""
+    surface. Fixed to explicitly, unconditionally exclude Platform Admin."""
 
     def test_platform_admin_with_a_tenant_id_still_cannot_edit_company_profile(self, client):
         with SessionLocal() as db:

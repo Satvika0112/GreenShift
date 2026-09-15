@@ -19,7 +19,6 @@ import {
   Leaf,
   ChevronRight,
   Shield,
-  FileText,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -63,7 +62,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { to: '/scheduling', label: 'Scheduling Engine', icon: Cpu },
         {
           to: '/approvals',
-          label: 'Approvals',
+          label: 'Review',
           icon: CheckCircle2,
           badge: pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined,
           badgeVariant: 'warning',
@@ -82,7 +81,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'GOVERNANCE & TRUST',
       items: [
         { to: '/impact', label: 'Impact Reports', icon: TrendingUp },
-        { to: '/brsr', label: 'BRSR Reporting', icon: FileText },
         { to: '/audit', label: 'Audit & Trust Chain', icon: ShieldCheck },
         { to: '/alerts', label: 'Notifications', icon: AlertTriangle },
       ],

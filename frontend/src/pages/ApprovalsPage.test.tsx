@@ -84,7 +84,7 @@ describe('ApprovalsPage', () => {
   describe('page identity', () => {
     it('renders the title and subtitle, with the old governance wording removed', () => {
       renderPage();
-      expect(screen.getByRole('heading', { name: 'Approvals' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Review' })).toBeInTheDocument();
       expect(screen.getByText('Review and authorize recommended workload schedules before execution.')).toBeInTheDocument();
       expect(screen.queryByText(/Human-in-the-Loop Governance/i)).not.toBeInTheDocument();
     });

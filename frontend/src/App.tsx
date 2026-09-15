@@ -26,9 +26,6 @@ const AlertsPage = lazy(() => import('./pages/AlertsPage').then((m) => ({ defaul
 const SystemHealthPage = lazy(() => import('./pages/SystemHealthPage').then((m) => ({ default: m.SystemHealthPage })));
 const UsersAccessPage = lazy(() => import('./pages/UsersAccessPage').then((m) => ({ default: m.UsersAccessPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
-const BrsrOverviewPage = lazy(() => import('./pages/brsr/BrsrOverviewPage').then((m) => ({ default: m.BrsrOverviewPage })));
-const BrsrCompanyProfilePage = lazy(() => import('./pages/brsr/BrsrCompanyProfilePage').then((m) => ({ default: m.BrsrCompanyProfilePage })));
-const BrsrReportDetailPage = lazy(() => import('./pages/brsr/BrsrReportDetailPage').then((m) => ({ default: m.BrsrReportDetailPage })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -83,9 +80,6 @@ export const App: React.FC = () => {
                   <Route path="/impact" element={<ImpactReportsPage />} />
                   <Route path="/audit" element={<AuditTrustPage />} />
                   <Route path="/alerts" element={<AlertsPage />} />
-                  <Route path="/brsr" element={<BrsrOverviewPage />} />
-                  <Route path="/brsr/company-profile" element={<BrsrCompanyProfilePage />} />
-                  <Route path="/brsr/reports/:id" element={<BrsrReportDetailPage />} />
                   {/* Settings: reachable by every authenticated role; the page itself
                       shows role-aware sections (see SettingsPage). */}
                   <Route path="/settings" element={<SettingsPage />} />

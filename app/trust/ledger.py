@@ -164,7 +164,7 @@ def append_event(
         team_id:        Explicit team scope — falls back to actor.team_id when omitted.
         request_id:     The inbound request's correlation ID (request.state.request_id),
                          when this event originates from an HTTP request.
-        source_service: Short label for the originating module (e.g. "brsr", "dispatch").
+        source_service: Short label for the originating module (e.g. "scheduler", "dispatch").
 
     Returns:
         The newly created AuditEventORM record.

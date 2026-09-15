@@ -156,7 +156,7 @@ function renderDashboard(path = '/') {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/submit" element={<div data-testid="landing-submit">Submit</div>} />
         <Route path="/scheduling" element={<div data-testid="landing-scheduling">Scheduling</div>} />
-        <Route path="/approvals" element={<div data-testid="landing-approvals">Approvals</div>} />
+        <Route path="/approvals" element={<div data-testid="landing-approvals">Review</div>} />
         <Route path="/monitoring" element={<div data-testid="landing-monitoring">Monitoring</div>} />
         <Route path="/impact" element={<div data-testid="landing-impact">Impact</div>} />
         <Route path="/audit" element={<div data-testid="landing-audit">Audit</div>} />
@@ -365,11 +365,11 @@ describe('DashboardPage', () => {
       expect(screen.getByTestId('landing-submit')).toBeInTheDocument();
     });
 
-    it('Company Admin: primary action reviews approvals', async () => {
+    it('Company Admin: primary action opens Review', async () => {
       const user = userEvent.setup();
       mockUser = companyAdmin;
       renderDashboard();
-      await user.click(screen.getByRole('button', { name: /review approvals/i }));
+      await user.click(screen.getByRole('button', { name: /^review$/i }));
       expect(screen.getByTestId('landing-approvals')).toBeInTheDocument();
     });
 
