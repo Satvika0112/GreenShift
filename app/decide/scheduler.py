@@ -616,7 +616,7 @@ def _execute_schedule_job(
     if not is_deferrable:
         reason = (
             f"Non-deferrable workload scheduled at earliest feasible start window "
-            f"(Carbon: {best_carbon:.4f} kg CO2, Cost: ${best_cost:.4f})"
+            f"(Carbon: {best_carbon:.4f} kg CO2, Cost: {best_cost:.4f} USD, internal comparison basis)"
         )
     else:
         reason = build_policy_reason(

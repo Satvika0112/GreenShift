@@ -403,6 +403,47 @@ class TestSchedulerPolicyIntegration:
             )
 
 
+class TestReasonTextCurrencyLabeling:
+    """Regression: decision.reason's cost figure is always the scheduler's
+    internal USD comparison basis (never the job's native currency), but it
+    used to render with a bare "$" prefix — indistinguishable from a real
+    USD amount and displayed on-screen (WhyThisWindow.tsx) right next to
+    native-currency (e.g. INR/AUD) figures from the same decision. For an
+    IN-TG (INR) job this looked like a currency mismatch/bug. The reason
+    text must now spell out "USD" explicitly and never contain a bare "$",
+    for every policy and for the non-deferrable path."""
+
+    @pytest.mark.parametrize(
+        "policy,kwargs",
+        [
+            (OptimizationPolicy.CARBON_FIRST, {}),
+            (OptimizationPolicy.COST_FIRST, {}),
+            (OptimizationPolicy.CARBON_CONSTRAINED, {"carbon_tolerance_pct": 100.0}),
+        ],
+    )
+    def test_no_bare_dollar_sign_in_reason_for_inr_region(self, now, policy, kwargs):
+        earliest, carbon_curve, tariff_curve = _two_slot_curves(now)
+        decision = schedule_job(
+            job_id=f"JOB-POLICY-CUR-{policy.value}", team_id="ml", deadline=earliest + timedelta(hours=3),
+            runtime_minutes=60, power_kw=10.0, region="IN-TG",
+            carbon_curve=carbon_curve, tariff_curve=tariff_curve, earliest_start_time=earliest,
+            policy=policy, **kwargs,
+        )
+        assert "$" not in decision.reason
+        assert "USD" in decision.reason
+
+    def test_no_bare_dollar_sign_in_non_deferrable_reason(self, now):
+        earliest, carbon_curve, tariff_curve = _two_slot_curves(now)
+        decision = schedule_job(
+            job_id="JOB-POLICY-CUR-NONDEF", team_id="ml", deadline=earliest + timedelta(hours=3),
+            runtime_minutes=60, power_kw=10.0, region="IN-TG",
+            carbon_curve=carbon_curve, tariff_curve=tariff_curve, earliest_start_time=earliest,
+            deferrable=False,
+        )
+        assert "$" not in decision.reason
+        assert "USD" in decision.reason
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Common hard constraints — must hold regardless of policy
 # ─────────────────────────────────────────────────────────────────────────────

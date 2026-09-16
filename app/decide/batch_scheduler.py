@@ -387,14 +387,14 @@ def schedule_batch(
                 f"Contention-aware batch schedule ({policy_label} policy): Preferred slot "
                 f"{preferred_start.isoformat()} reached capacity; job spilled to next optimal "
                 f"feasible slot ({slot_util:.1f}% slot util). Carbon: {chosen.carbon_emission_kg:.4f} kg CO2, "
-                f"Cost: ${chosen.electricity_cost:.4f}."
+                f"Cost: {chosen.electricity_cost:.4f} USD (internal comparison basis)."
             )
         elif not is_deferrable:
             reason = f"Non-deferrable workload allocated at earliest slot ({slot_util:.1f}% slot util)."
         else:
             reason = (
                 f"Contention-aware {policy_label} slot selected ({chosen.carbon_emission_kg:.4f} kg CO2, "
-                f"${chosen.electricity_cost:.4f}, {slot_util:.1f}% slot util)."
+                f"{chosen.electricity_cost:.4f} USD internal comparison basis, {slot_util:.1f}% slot util)."
             )
             if effective_policy == OptimizationPolicy.CARBON_CONSTRAINED:
                 min_c = _min_carbon_kg(capacity_feasible, carbon_of=lambda c: c.carbon_emission_kg)

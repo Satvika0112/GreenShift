@@ -255,24 +255,24 @@ def build_policy_reason(
     if policy == OptimizationPolicy.CARBON_FIRST:
         return (
             f"Lowest-carbon feasible window ({carbon_kg:.4f} kg CO2). "
-            f"Electricity cost (${cost_usd:.4f}) was used as secondary tie-breaker, "
-            f"and earliest start time ({start_iso}) as deterministic final tie-breaker."
+            f"Electricity cost ({cost_usd:.4f} USD, internal comparison basis) was used as secondary "
+            f"tie-breaker, and earliest start time ({start_iso}) as deterministic final tie-breaker."
         )
 
     if policy == OptimizationPolicy.COST_FIRST:
         return (
-            f"Selected the feasible window with minimum electricity cost (${cost_usd:.4f}). "
-            f"Carbon emissions ({carbon_kg:.4f} kg CO2) were used as a secondary criterion, "
-            f"and earliest start time ({start_iso}) as deterministic final tie-breaker."
+            f"Selected the feasible window with minimum electricity cost ({cost_usd:.4f} USD, "
+            f"internal comparison basis). Carbon emissions ({carbon_kg:.4f} kg CO2) were used as a "
+            f"secondary criterion, and earliest start time ({start_iso}) as deterministic final tie-breaker."
         )
 
     if policy == OptimizationPolicy.CARBON_CONSTRAINED:
         pct = carbon_tolerance_pct if carbon_tolerance_pct is not None else DEFAULT_CARBON_TOLERANCE_PCT
         min_part = f"{min_carbon_kg:.4f} kg CO2" if min_carbon_kg is not None else "the minimum achievable carbon"
         return (
-            f"Selected the lowest-cost feasible window (${cost_usd:.4f}) within {pct:g}% "
-            f"of the minimum achievable carbon emissions ({min_part}) — selected window carbon: "
-            f"{carbon_kg:.4f} kg CO2. Earliest start time ({start_iso}) was the deterministic "
+            f"Selected the lowest-cost feasible window ({cost_usd:.4f} USD, internal comparison basis) "
+            f"within {pct:g}% of the minimum achievable carbon emissions ({min_part}) — selected window "
+            f"carbon: {carbon_kg:.4f} kg CO2. Earliest start time ({start_iso}) was the deterministic "
             f"final tie-breaker."
         )
 
