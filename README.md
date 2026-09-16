@@ -179,7 +179,7 @@ GreenShift also distinguishes **estimated** impact (from the schedule decision, 
 
 ```mermaid
 flowchart TD
-    FE["React Control Plane<br/>(frontend/)"] --> API["FastAPI API<br/>(app/api)"]
+    FE["React Control Plane<br/>(frontend/)"] --> API["FastAPI API<br/>Auth · RBAC · Tenant Context<br/>(app/api, app/shared)"]
     API --> ING["Ingest & Workload Service<br/>(app/ingest)"]
     API --> DEC["Decision Engine<br/>(app/decide)"]
     DEC --> CAR["Carbon Data"]
@@ -190,20 +190,24 @@ flowchart TD
     SD --> APR["Review / Approval<br/>(app/approval)"]
     APR --> DIS["Dispatch<br/>(app/dispatch)"]
     DIS --> K8S["Kubernetes Job Execution"]
+    K8S --> MON["Monitoring<br/>health · metrics<br/>(app/observability)"]
     K8S --> TRU["Trust / Audit Ledger<br/>(app/trust)"]
     API --> TRU
+    API --> DB[("Database")]
 ```
 
 | Layer | Responsibility |
 |---|---|
 | **React Control Plane** | Authenticated SPA for submitting workloads, reviewing recommendations, approving/declining, and viewing impact, audit, and settings. |
-| **FastAPI API** | Single HTTP entrypoint; JWT auth, RBAC, tenant scoping, and rate limiting are enforced here for every request. |
+| **FastAPI API — Auth / RBAC / Tenant Context** | Single HTTP entrypoint; JWT authentication, role-based authorization, tenant/team scoping, and rate limiting are enforced here for every request. |
 | **Ingest & Workload Service** | Registers workloads, resolves region configuration, and sources carbon/tariff telemetry. |
 | **Decision Engine** | Generates and filters candidate windows and applies the tenant's optimization policy. |
 | **Impact Analysis** | Computes baseline-vs-optimized and estimated-vs-actual metrics. |
 | **Review / Approval** | Human governance gate between recommendation and dispatch. |
 | **Dispatch** | Creates Kubernetes `batch/v1` Jobs only for approved, time-eligible workloads; supports multiple concurrent dispatcher workers via `SELECT ... FOR UPDATE SKIP LOCKED` leasing. |
+| **Monitoring** | Health (`/health`) and Prometheus metrics (`/metrics`) endpoints, plus dedicated System Health and Job Monitoring views in the control plane. |
 | **Trust / Audit** | Appends a SHA-256 hash-chained event for every significant action across the lifecycle. |
+| **Database** | PostgreSQL (production) or SQLite (development), accessed via SQLAlchemy/Alembic-managed models. |
 
 ---
 
@@ -330,6 +334,8 @@ GreenShift was evaluated across its three optimization policies using the projec
 | SLA compliance | 526/526 (100%) | 528/528 (100%) | 528/528 (100%) |
 
 **Interpretation:** `CARBON_FIRST` avoided the most carbon; `COST_FIRST` found real, tangible savings from India's Time-of-Day tariff structure while sacrificing very little carbon reduction; `CARBON_CONSTRAINED` landed in between by design. All three policies maintained 100% SLA compliance — the policy layer only reorders already-feasible candidates, it never affects deadline compliance. This experiment demonstrates that GreenShift's scheduler **adapts to the configured policy** on the same dataset; it is not a claim that any one policy is universally superior — that choice depends on an organization's own priorities.
+
+> Results are workload- and configuration-dependent and demonstrate the behavior of the implemented scheduling policies under the evaluated workload set, not a universal performance guarantee.
 
 A separate, full 560-workload run under the default `CARBON_FIRST` policy (`results/experiment_summary.json`) avoided 174.65 kg CO₂ against a 3,881.42 kg CO₂ baseline (4.0% mean reduction, 21.1% at the 90th percentile), with 548 of 560 workloads meeting their SLA deadline (97.9%). Because `CARBON_FIRST` optimizes for carbon rather than cost, aggregate electricity cost was slightly higher than baseline in this run ($927.26 vs. $870.60) — consistent with the A/B/C comparison above, where `COST_FIRST` is the policy that actively reduces cost.
 
